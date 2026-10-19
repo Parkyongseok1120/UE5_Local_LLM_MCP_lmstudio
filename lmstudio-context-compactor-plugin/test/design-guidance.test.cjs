@@ -113,6 +113,46 @@ test("allowance and shared budget omit documents without shrinking evidence or t
   assert.equal(priority.telemetry.attempts, 0);
 });
 
+test("topic-backed admission may use space up to high water; generic material keeps low water", async () => {
+  const probe = fixture();
+  const water = probe.manager.broker.watermarks((await probe.assemble(probe.history)).measurement, 0, true, 2048);
+  assert.ok(water.effectiveHighWaterTokens - water.effectiveLowWaterTokens > 2000);
+  const between = water.effectiveLowWaterTokens + 500;
+  const at = (base, added, maxTokens) => fixture({ maxTokens,
+    charge: text => text.includes("[Optional design reference]") ? base + added : base });
+  const generic = await at(between, 600).add();
+  assert.deepEqual([generic.telemetry.reason, generic.telemetry.attempts, generic.telemetry.admissionWater],
+    ["existing_input_priority", 0, "low"]);
+  const f = at(between, 600);
+  const before = f.history.toString();
+  const backed = await f.add(undefined, { admissionWater: "high" });
+  assert.deepEqual([backed.telemetry.reason, backed.telemetry.addedTokens, backed.telemetry.admissionWater], ["included", 600, "high"]);
+  assert.match(backed.assembled.history.toString(), /\[Optional design reference\][\s\S]*CURRENT_OBJECTIVE/);
+  assert.equal(backed.assembled.measurement.outputReserve, f.config.maxOutputReserve);
+  assert.equal(f.history.toString(), before);
+  // The admitted reference sits in the leading system message, ahead of every
+  // history message, so later rounds that admit it again keep the same prefix.
+  const next = Chat.from([{ role: "system", content: "USER_SYSTEM" },
+    { role: "user", content: "CURRENT_OBJECTIVE\nActual compiler error and source evidence." },
+    { role: "assistant", content: "ROUND_ONE_ANSWER" }, { role: "user", content: "FOLLOW_UP" }]);
+  const later = await f.manager.addOptionalReferences(await f.assemble(next), candidates("multiplayer"),
+    text => f.assemble(next, { instructions: ["REQUIRED_SCOPE", text] }), { ...f.options, admissionWater: "high" });
+  assert.equal(later.telemetry.reason, "included");
+  const system = result => result.assembled.history.getMessagesArray()[0];
+  assert.ok(system(backed).isSystemPrompt());
+  assert.equal(system(later).getText(), system(backed).getText());
+  // Over high water, over the allowance, or a base already at high water: the measured base stays.
+  for (const [base, added, maxTokens, reason, attempts] of [
+    [water.effectiveHighWaterTokens - 100, 600, 8192, "budget_omitted", 1],
+    [between, 1500, 1000, "budget_omitted", 1],
+    [water.effectiveHighWaterTokens, 10, 8192, "existing_input_priority", 0],
+  ]) {
+    const omitted = await at(base, added, maxTokens).add(candidates("core"), { admissionWater: "high" });
+    assert.deepEqual([omitted.telemetry.reason, omitted.telemetry.attempts, omitted.telemetry.selectedIds], [reason, attempts, []]);
+    assert.equal(omitted.assembled.measurement.inputTokens, base);
+  }
+});
+
 test("optional reference failure or inexact measurement keeps the already measured input", async () => {
   const f = fixture({ charge: text => {
     if (text.includes("[Optional design reference]")) throw new Error("tokenizer unavailable");
@@ -143,4 +183,47 @@ test("disabled allowance performs no additional measurement", async () => {
   const result = await fixture().add(candidates("core"), { maxAddedTokens: 0 });
   assert.equal(result.telemetry.reason, "disabled");
   assert.equal(result.telemetry.attempts, 0);
+});
+
+test("documents delivery omits unknown/other-major sections and annotates same-major facts", () => {
+  const { bundledGuidanceSections } = require("../dist/generated-design-guidance");
+  const facts = version => ({ engineVersion: version, packages: {}, networkPackagesAmbiguous: false });
+  const unreal = version => selectDesignGuidance("lifecycle", scope("unreal"), undefined, facts(version)).find(d => d.id === "unreal");
+  const lifetime = bundledGuidanceSections.find(s => s.id === "unreal/lifetime");
+  const timer = bundledGuidanceSections.find(s => s.id === "unreal/timer");
+  const same = unreal("5.3.1");
+  assert.ok(same.text.includes(lifetime.text));
+  assert.ok(same.text.includes(timer.text));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.8]"));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7]"));
+  for (const version of [undefined, "4.27.2"]) {
+    const doc = unreal(version);
+    assert.ok(!doc.text.includes(lifetime.text));
+    assert.ok(!doc.text.includes(timer.text));
+    assert.ok(doc.text.includes("[omitted unreal/lifetime:"));
+    assert.ok(designGuidanceCandidates([doc])[0].omissionReasons.length > 0);
+  }
+  const unityFacts = { engineVersion: "6000.3.1f1", packages: { "com.unity.netcode.gameobjects": "2.7.1" }, networkPackagesAmbiguous: false };
+  const doc = selectDesignGuidance("multiplayer", scope("unity"), undefined, unityFacts).find(d => d.id === "unity-networking");
+  const ngo = bundledGuidanceSections.find(s => s.id === "unity-networking/ngo");
+  const entities = bundledGuidanceSections.find(s => s.id === "unity-networking/entities");
+  assert.ok(doc.text.includes(ngo.text));
+  assert.ok(!doc.text.includes(entities.text));
+  assert.ok(doc.text.includes("[unvalidated for com.unity.netcode.gameobjects 2.7.1; validated on 2.7.0]"));
+  assert.equal(same.revision, bundledDesignGuidance.find(d => d.id === "unreal").revision);
+});
+
+test("versionTier derives the major or package family from the validated list", () => {
+  const { versionTier } = require("../dist/design-guidance");
+  assert.equal(versionTier("5.8.2", ["5.8"]), "validated");
+  assert.equal(versionTier("5.3", ["5.8"]), "same_major_unvalidated");
+  assert.equal(versionTier("4.27.2", ["5.8"]), "other_major");
+  assert.equal(versionTier("6000.3.1f1", ["6000.0"]), "same_major_unvalidated");
+  assert.equal(versionTier("6000.0.44f1", ["6000.0"]), "validated");
+  assert.equal(versionTier("2022.3.1f1", ["6000.0"]), "other_major");
+  assert.equal(versionTier(undefined, ["5.8"]), "unknown");
+  assert.equal(versionTier("2.7.0-preview", ["2.7.0"], "package"), "unknown");
+  assert.equal(versionTier("2.7.1", ["2.7.0"], "package"), "same_major_unvalidated");
+  assert.equal(versionTier("2.8.0", ["2.7.0"], "package"), "other_major");
+  assert.equal(versionTier("1.14.2", ["1.14"], "package"), "validated");
 });

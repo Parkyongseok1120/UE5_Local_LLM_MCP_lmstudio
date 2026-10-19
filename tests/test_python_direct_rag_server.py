@@ -259,7 +259,7 @@ def test_direct_refresh_uses_factual_sync_without_legacy_search_or_controller(
     shared = tmp_path / "shared.json"
     project = tmp_path / "Demo" / "Demo.uproject"
     project.parent.mkdir()
-    project.write_text("{}", encoding="utf-8")
+    project.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     shared.write_text(json.dumps({"activeProject": str(project)}), encoding="utf-8")
     code = f"""
 import json, os, sys
@@ -274,7 +274,7 @@ def sync(**kwargs):
 active_project_sync.sync_active_project = sync
 sync_editor_metadata.refresh_editor_metadata = lambda **kwargs: {{'ok': True, 'project': kwargs.get('project_name')}}
 from rag_refresh import refresh_active_project
-result = refresh_active_project(workspace=Path.cwd())
+result = refresh_active_project(workspace=Path.cwd(), index_path=Path({str(tmp_path / 'data' / 'unreal58' / 'rag.sqlite')!r}))
 forbidden = ['on_active_project_changed', 'warm_symbol_cache', 'rag_search', 'rag_semantic', 'token_budget', 'read_query_history', 'state_root', 'editor_export_runner']
 print(json.dumps({{'ok': result.get('ok'), 'scope': result.get('scope'), 'editorLaunchAllowed': result.get('editorLaunchAllowed'), 'syncedProject': observed.get('project'), 'loaded': [name for name in forbidden if name in sys.modules]}}))
 """

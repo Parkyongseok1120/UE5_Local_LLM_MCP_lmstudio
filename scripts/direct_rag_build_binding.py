@@ -42,8 +42,12 @@ def resolve_build_binding(
             "error": f"Build project is not one exact existing .uproject: {descriptor}",
         }
     from direct_rag_project_engine import project_engine_version
+    from direct_rag_request_binding import resolve_request_engine_binding
 
     binding = project_engine_version(descriptor, workspace)
+    checked = resolve_request_engine_binding([descriptor], workspace, lambda *_: binding)
+    if not checked.get("ok"):
+        return {**checked, "projectFile": str(descriptor)}
     return {**binding, "projectFile": str(descriptor)}
 
 

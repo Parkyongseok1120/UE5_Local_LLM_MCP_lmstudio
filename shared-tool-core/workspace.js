@@ -3,7 +3,7 @@
 const path = require("node:path");
 const { VersionControl } = require("./git");
 const { hash, fail } = require("./files");
-const { canonicalAbsolutePathIdentity } = require("../lmstudio-unreal-agent-mcp/src/filesystem-path-identity");
+const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const string = { type: "string", minLength: 1, maxLength: 4096 };
 const workspacePath = { ...string,
   description: "Path relative to the workspace root." };

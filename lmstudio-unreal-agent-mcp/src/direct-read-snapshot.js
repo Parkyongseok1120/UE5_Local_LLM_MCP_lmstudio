@@ -12,6 +12,8 @@ function unavailableReadSnapshot(resolution, code, message, options = {}) {
 }
 
 function registerReadSnapshot(fileSnapshots, resolution, read, requestContext = {}) {
+  // Engine source is read-only evidence: it never receives an edit receipt.
+  if (resolution.resolvedRootType === "installed_engine") return {};
   if (!resolution.activeProject || !read?.hash || !read?.stat) return {};
   const snapshot = fileSnapshots.register({
     projectPath: resolution.activeProject,

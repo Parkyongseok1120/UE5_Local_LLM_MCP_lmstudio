@@ -15,9 +15,23 @@ function createProjectCapabilities(context) {
     env,
     getActive,
     options,
+    resolveEngine,
     runtimeOwner,
     workspaceRoot,
   } = context;
+
+  // Whether engine:// can be read for this project, observed now; never a
+  // version or path constant. Failure is reported, not hidden.
+  async function engineSourceAccess(activeProject) {
+    if (!activeProject || typeof resolveEngine !== "function") return { available: false, reason: "no active project" };
+    try {
+      const engine = await resolveEngine(activeProject);
+      return { available: true, uriPrefix: "engine://Engine/Source/", readOnly: true,
+        identity: { status: engine.identity?.status, version: engine.identity?.version || null } };
+    } catch (error) {
+      return { available: false, reason: String(error?.message || error).slice(0, 240) };
+    }
+  }
 
   async function getWorkspaceInfo(args) {
     const activeProject = getActive();
@@ -28,6 +42,7 @@ function createProjectCapabilities(context) {
       configPath,
       activeProject,
       project: activeProject ? buildProjectBrowsePaths(activeProject, workspaceRoot) : null,
+      engineSource: await engineSourceAccess(activeProject),
       safety: {
         writesEnabled: envFlag(env, "ALLOW_WRITE", false),
         commandsEnabled: envFlag(env, "ALLOW_COMMANDS", false),
@@ -50,7 +65,8 @@ function createProjectCapabilities(context) {
   async function getActiveProject() {
     const activeProject = getActive();
     return activeProject
-      ? success({ executionMode: runtimeOwner, activeProject, ...buildProjectBrowsePaths(activeProject, workspaceRoot) })
+      ? success({ executionMode: runtimeOwner, activeProject, ...buildProjectBrowsePaths(activeProject, workspaceRoot),
+        engineSource: await engineSourceAccess(activeProject) })
       : success({ executionMode: runtimeOwner, activeProject: null, selected: false });
   }
 

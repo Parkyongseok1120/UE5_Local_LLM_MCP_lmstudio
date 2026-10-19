@@ -9,6 +9,7 @@ const { clip } = require("./continuity-text.js");
 const {
   coalesceFileObservations,
   fileObservation,
+  mutationSnapshotState,
   pathApiFor,
   projectDescriptor,
   projectRoot,
@@ -125,7 +126,7 @@ function retainedFileFact(file, fallbackOperation = "observed") {
   if (file.lastObservedAt !== undefined || file.snapshotCapturedAt !== undefined) {
     fact.lastObservedAt = file.lastObservedAt || file.snapshotCapturedAt;
   }
-  fact.mutationSnapshotState = "fresh_read_required";
+  fact.mutationSnapshotState = mutationSnapshotState(fact, fact.canonicalProject);
   return sanitizeStructuredDurableValue(fact);
 }
 
@@ -162,7 +163,7 @@ function scopeToolOutcome(parsed, fallbackProject = "", options = {}) {
       scoped.canonicalPath = retainedObservation.canonicalPath;
       if (scoped.operation || scoped.sha256 || scoped.previousSha256
         || scoped.errorCode === "FILE_VERSION_CONFLICT") {
-        scoped.mutationSnapshotState = "fresh_read_required";
+        scoped.mutationSnapshotState = mutationSnapshotState(scoped, descriptor);
       }
     }
   }
@@ -271,6 +272,9 @@ function historicalEvidenceObservation(source) {
     sourceIdentity: identity,
     sourceIdentityDigest: source.sourceIdentityDigest,
     sourceFacts: source.sourceFacts,
+    sourceCoverageAtRead: source.sourceCoverageAtRead,
+    projectionCoverage: source.projectionCoverage,
+    notice: typeof source.notice === "string" ? source.notice.slice(0, 400) : undefined,
     sourceRangeUnit: source.sourceRangeUnit,
     archiveRangeUnit: source.rangeUnit,
     representation: source.representation,
@@ -371,6 +375,8 @@ function parseToolResult(content) {
       "startLine", "endLine", "returnedLineCount", "nextStartLine", "totalLines", "filesScanned", "findingCount",
       "coverage", "filesRead", "filesSkipped", "readErrorCount", "skippedByReason", "discoveryErrorCount", "excludedEntries",
       "validationOk", "blocksBuild", "exitCode", "likelyErrors", "fullLogPath",
+      // A structure-only validation must stay structure-only after compaction.
+      "validationScope", "factualEvidenceVerified", "wholeTaskVerified",
       "upToDate", "actionsExecuted", "proofLevel", "failedCount", "succeededCount",
       "claimCount", "errorCount", "warningCount", "errorShapeCount", "warningShapeCount",
       "omittedErrorShapeCount", "omittedWarningShapeCount", "schemaVersion",
@@ -405,7 +411,7 @@ function parseToolResult(content) {
       out.lastObservedAt = source.lastObservedAt || source.snapshotCapturedAt || source.observedAt;
     }
     if (out.path && (out.operation || out.sha256 || out.previousSha256 || out.canonicalPath)) {
-      out.mutationSnapshotState = "fresh_read_required";
+      out.mutationSnapshotState = mutationSnapshotState(out, projectDescriptor(out));
     }
     if (Array.isArray(source.files)) {
       out.files = source.files

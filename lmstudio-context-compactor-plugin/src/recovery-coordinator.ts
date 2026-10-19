@@ -106,6 +106,24 @@ export function readOnlyRecoveryProfile(history: Chat, visibleTools: Array<Remot
     : { eligible: false, reason: "no_registered_read_only_tools", tools: [] };
 }
 
+/** The raw text that was not executed usually had the right tool and the wrong
+ * argument shape. Restate each named tool's published top-level arguments so the
+ * fresh structured request is built from the schema, not from the dropped text. */
+export function schemaReminderInstruction(names: ReadonlyArray<string>, tools: ReadonlyArray<RemoteToolLike>): string {
+  const lines: Array<string> = [];
+  for (const name of [...new Set(names)].slice(0, 6)) {
+    const schema = tools.find(tool => tool.name === name)?.parametersJsonSchema;
+    if (!schema || typeof schema !== "object") continue;
+    const record = schema as { required?: unknown; properties?: unknown };
+    const required = Array.isArray(record.required) ? record.required.filter((item): item is string => typeof item === "string") : [];
+    const properties = record.properties && typeof record.properties === "object"
+      ? Object.keys(record.properties as Record<string, unknown>) : [];
+    lines.push(`${name}: required [${required.slice(0, 8).join(", ") || "none"}]; arguments [${properties.slice(0, 12).join(", ")}]`);
+  }
+  return lines.length
+    ? `Schema reminder (pass one JSON object using only these top-level argument names): ${lines.join("; ")}.` : "";
+}
+
 export function catalogueCorrectionInstruction(
   classification: RawToolIntentClassification,
   tools: Array<RemoteToolLike>,
@@ -219,11 +237,13 @@ export function planReadRecovery(historyBeforeRound: Chat, workingHistory: Chat,
   const retryTools = includeArchiveReader(
     gitRecoveryProfile.eligible ? gitRecoveryProfile.tools : exactRawTools,
   );
-  const retryInstruction = rawIntent.unknownNames.length > 0
+  const baseInstruction = rawIntent.unknownNames.length > 0
     ? catalogueCorrectionInstruction(rawIntent, retryTools)
     : archiveOnlyRecoveryAllowed
       ? archiveOnlyRecoveryInstruction(retryTools)
       : FRESH_TOOL_PLANNING_RETRY_INSTRUCTION;
+  const schemaReminder = schemaReminderInstruction(rawIntent.knownReadOnlyNames, [...modelTools, ...retryTools]);
+  const retryInstruction = schemaReminder ? `${baseInstruction} ${schemaReminder}` : baseInstruction;
 
   return { catalogueCorrectionAllowed, archiveOnlyRecoveryAllowed, retryTools, retryInstruction };
 }

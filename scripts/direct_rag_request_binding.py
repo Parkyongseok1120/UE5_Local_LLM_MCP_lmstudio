@@ -21,6 +21,22 @@ def resolve_request_engine_binding(
     failed = next((item for item in facts if item.get("ok") is not True), None)
     if failed is not None:
         return failed
+    unknown = next((item for item in facts if item.get("engineVersionStatus") == "unknown"
+                    or item.get("engineVersionSource") == "folder_name_inferred"), None)
+    if unknown is not None:
+        # A directory name can help locate an index, but it cannot establish
+        # which engine the project uses. Do not silently drop the reader's
+        # unknown provenance when matching a shard and reporting its version.
+        return {
+            "ok": False,
+            "errorCode": "PROJECT_ENGINE_VERSION_UNRESOLVED",
+            "error": "The project engine version is unverified; observe Build.version or declare an EngineAssociation before selecting an engine-bound RAG index.",
+            "engineVersionStatus": "unknown",
+            "engineVersionSource": unknown.get("engineVersionSource"),
+            "inferredEngineVersion": unknown.get("engineVersion"),
+            "engineRoot": unknown.get("engineRoot"),
+            "project": unknown.get("project"),
+        }
     bindings = {
         (
             str(item["engineVersion"]),

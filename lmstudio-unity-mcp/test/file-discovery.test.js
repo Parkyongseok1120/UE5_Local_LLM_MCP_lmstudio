@@ -164,3 +164,25 @@ test("parallel path searches validate the search root without re-resolving every
   assert.equal(named.total, 11);
   assert.equal(resolveCalls, 2);
 });
+
+test("search reports skipped files and never presents no match as absence", async t => {
+  const f = fixture(t);
+  f.put("Assets/Code/Text.cs", "class Needle {}");
+  f.put("Assets/Code/Binary.cs", Buffer.from([0xff, 0xfe, 0x00, 0x00, 0x80]));
+  const result = await f.call("search_files", { path: "Assets/Code", query: "Needle", content: true });
+  assert.ok(result.items.some(item => item.path === "Assets/Code/Text.cs" && item.line === 1));
+  assert.equal(result.absenceVerified, false);
+  assert.equal(result.skippedFiles, 1);
+  assert.equal(result.skippedByReason.unreadableOrNonText, 1);
+  assert.deepEqual(result.searchScope, { path: "Assets/Code", mode: "path_and_utf8_content", extensions: null, filesScanned: 2, complete: true });
+  const none = await f.call("search_files", { path: "Assets/Code", query: "NoSuchSymbol", content: true });
+  assert.equal(none.total, 0);
+  assert.equal(none.absenceVerified, false);
+  assert.equal(none.searchScope.complete, true);
+  const pathOnly = await f.call("search_files", { path: "Assets/Code", query: "Text" });
+  assert.equal(pathOnly.searchScope.mode, "path_only");
+  assert.equal(pathOnly.skippedFiles, 0);
+  const listing = await f.call("list_directory", { path: "Assets/Code" });
+  assert.equal(listing.absenceVerified, false);
+  assert.equal(listing.omittedByPathPolicy, 0);
+});

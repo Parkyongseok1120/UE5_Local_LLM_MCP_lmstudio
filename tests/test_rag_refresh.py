@@ -108,7 +108,7 @@ def test_project_source_refresh_is_direct_and_reports_progress(monkeypatch, tmp_
     import active_project_sync
 
     project = tmp_path / "Demo.uproject"
-    project.write_text("{}", encoding="utf-8")
+    project.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     _patch_cache_dependencies(monkeypatch)
     observed: list[dict] = []
     messages: list[str] = []
@@ -122,6 +122,7 @@ def test_project_source_refresh_is_direct_and_reports_progress(monkeypatch, tmp_
         scope="project_source",
         workspace=tmp_path,
         project=project,
+        index_path=tmp_path / "data" / "unreal58" / "rag.sqlite",
         progress=messages.append,
     )
 
@@ -141,7 +142,7 @@ def test_editor_refresh_without_permission_only_ingests_existing_exports(
     import sync_editor_metadata
 
     project = tmp_path / "Demo.uproject"
-    project.write_text("{}", encoding="utf-8")
+    project.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     _patch_cache_dependencies(monkeypatch)
     _patch_editor_dependencies(monkeypatch, tmp_path)
     calls = {"sync": 0, "refresh": 0}
@@ -162,6 +163,7 @@ def test_editor_refresh_without_permission_only_ingests_existing_exports(
         scope="editor_metadata",
         workspace=tmp_path,
         project=project,
+        index_path=tmp_path / "data" / "unreal58" / "rag.sqlite",
     )
 
     assert payload["ok"] is True
@@ -176,7 +178,7 @@ def test_editor_refresh_launches_only_after_explicit_permission(
     import sync_editor_metadata
 
     project = tmp_path / "Demo.uproject"
-    project.write_text("{}", encoding="utf-8")
+    project.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     _patch_cache_dependencies(monkeypatch)
     _patch_editor_dependencies(monkeypatch, tmp_path)
     calls = {"sync": 0, "refresh": 0}
@@ -195,6 +197,7 @@ def test_editor_refresh_launches_only_after_explicit_permission(
         scope="editor_metadata",
         workspace=tmp_path,
         project=project,
+        index_path=tmp_path / "data" / "unreal58" / "rag.sqlite",
         allow_editor_launch=True,
     )
 
@@ -356,7 +359,7 @@ def test_common_refresh_projection_removes_nested_tool_directives(
     tmp_path: Path,
 ) -> None:
     project = tmp_path / "Demo.uproject"
-    project.write_text("{}", encoding="utf-8")
+    project.write_text(json.dumps({"EngineAssociation": "5.8"}), encoding="utf-8")
     _patch_cache_dependencies(monkeypatch)
     monkeypatch.setattr(
         rag_refresh,
@@ -378,6 +381,7 @@ def test_common_refresh_projection_removes_nested_tool_directives(
         scope="editor_metadata",
         workspace=tmp_path,
         project=project,
+        index_path=tmp_path / "data" / "unreal58" / "rag.sqlite",
     )
     serialized = json.dumps(payload, ensure_ascii=False)
 

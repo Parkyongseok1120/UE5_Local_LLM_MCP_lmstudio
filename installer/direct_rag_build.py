@@ -45,7 +45,7 @@ def create_direct_rag_build_plan(
         engine_root=engine_root,
         root=root,
         dry_run=dry_run,
-        project_binding=project_engine_version,
+        project_binding=lambda project, workspace: project_engine_version(project, workspace, engine_root=engine_root),
         engine_version=engine_root_version,
         bindings_match=engine_bindings_match,
         discover_projects=find_projects,

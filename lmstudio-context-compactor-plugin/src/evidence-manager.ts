@@ -1,12 +1,14 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
   ChatMessage,
   type ToolCallRequest
 } from "@lmstudio/sdk";
 import { inputAvailability, toolMemory, workingContextModule } from "./context-ports";
-import { telemetryFingerprint } from "./evidence-telemetry";
+import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
+export { repeatRequestKey };
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
-import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot } from "./reference-context";
+import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics } from "./tool-result-semantics.js";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
@@ -72,10 +74,14 @@ export class EvidenceManager {
     const observations = saved.filter(o => o && typeof o.id === "string" && typeof o.fingerprint === "string"
       && Number.isSafeInteger(o.batch) && Array.isArray(o.items) && o.items.length <= 16
       && o.items.every((i: any) => i && typeof i.project === "string" && i.origin?.executionId && i.origin?.toolCallId
-        && ["mcp/unreal-agent", "mcp/unreal-rag", "mcp/unity-tools"].includes(i.origin?.provider)));
+        && ENGINE_PROVIDERS.includes(i.origin?.provider)));
     this.referenceState.observations = observations.map(o => ({ ...o, historical: true }));
     this.referenceState.batch = Math.max(0, ...observations.map(o => o.batch));
     this.referenceState.seen = new Set(observations.map(o => o.id));
+  }
+  /** Only when no persisted window restored reference observations. */
+  seedPriorEngineIdentity(history: Chat, scope: ToolScope, executionId: string) {
+    seedPriorEngineIdentity(this.referenceState, history.getMessagesArray(), this.tools, scope, executionId);
   }
   referenceSnapshot(history: Chat) { return referenceSnapshot(this.referenceState, history); }
   observeRoundReferences(history: Chat, returned: readonly ChatMessage[], scope: ToolScope, executionId: string,
@@ -132,10 +138,10 @@ export class EvidenceManager {
       for (const [ri, result] of message.getToolCallResults().entries()) {
         const request = pairs.matches.get(`${mi}:${ri}`);
         const tools = this.tools.filter(t => t.name === request?.name);
-        if (!request?.id || tools.length !== 1 || !(tools[0].pluginIdentifier === "mcp/unreal-agent"
-          && ["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"].includes(request.name)
-          || tools[0].pluginIdentifier === "mcp/unity-tools"
-          && ["patch_file", "create_file", "structured_data_patch", "read_file"].includes(request.name))) continue;
+        if (!request?.id || tools.length !== 1 || !(tools[0].pluginIdentifier === ENGINE_PROFILES.unreal.fileProvider
+          && ENGINE_PROFILES.unreal.changeEvidenceTools.includes(request.name)
+          || tools[0].pluginIdentifier === ENGINE_PROFILES.unity.fileProvider
+          && ENGINE_PROFILES.unity.changeEvidenceTools.includes(request.name))) continue;
         if (this.changeOrigins.size >= 2048) { this.changeOrigins.clear(); this.changesDisabled = true; break; }
         const key = changePairKey(request, result.content);
         this.changeOrigins.set(key, this.changeOrigins.has(key)
@@ -165,6 +171,24 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
 }
 };
   }
+}
+
+/** repeatReceipts of successful results still verbatim in this input (not
+ * projected or archived). An identical read may send one; the server answers
+ * "no new information" only while the source is unchanged. */
+export function presentRepeatReceipts(history: Chat): Map<string, string> {
+  const present = new Map<string, string>();
+  const index = workingContextModule.exchangeIndex(history);
+  history.getMessagesArray().forEach((message, mi) => {
+    message.getToolCallResults().forEach((result, ri) => {
+      const request = index.matches.get(`${mi}:${ri}`);
+      const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
+      if (!request || !value || value.ok === false || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
+      if (["archived_tool_result_projection", "historical_evidence_index", "historical_evidence_range"].includes(String(value.kind || ""))) return;
+      present.set(repeatRequestKey(request.name, request.arguments || {}), value.repeatReceipt);
+    });
+  });
+  return present;
 }
 
 export function completedRequestFingerprints(history: Chat): Set<string> {

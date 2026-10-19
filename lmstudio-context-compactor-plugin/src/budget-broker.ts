@@ -190,7 +190,8 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const reserved = batch.reserve(id, Math.ceil(allocation * multiplier) + envelopeTokens, minimumTokens);
   if (!reserved) return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
     limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
-    denialReason: batch.denialReason(id, minimumTokens) || "invalid_reservation" };
+    denialReason: batch.denialReason(id, minimumTokens) || "invalid_reservation",
+    allowance: { availableTokens: batch.available, minimumTokens, capacityTokens: batch.capacity } };
   const boundedValue = Math.min(allocation, Math.floor((reserved - envelopeTokens) / multiplier));
   return {
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,
@@ -245,3 +246,23 @@ export function resolveGenerationBudget(options: {
   };
 }
 
+/** What a denied read tells the model: why, that delivered results are kept,
+ * and the one next step. A denial means even the contract minimum does not
+ * fit this batch, so no smaller limit is offered for the same batch. The
+ * numbers are byte-derived allowances, not exact model tokens. */
+export function readBudgetDenialMessage(reason: string,
+  allowance?: { availableTokens: number; minimumTokens: number; capacityTokens: number }) {
+  const head = `Shared read-result budget unavailable (${reason}).`;
+  const kept = "Results already returned in this round are kept.";
+  const room = allowance ? ` About ${allowance.availableTokens} of ${allowance.capacityTokens} estimated tokens remain; this read needs at least ${allowance.minimumTokens}.` : "";
+  if (reason === "held_reservations_insufficient") {
+    return `${head} Parallel reads in this batch hold the allowance.${room} ${kept} Request this read again by itself in the next round.`;
+  }
+  if (reason === "remaining_capacity_insufficient") {
+    return `${head} The model input has no room for another result.${room} ${kept} Use them first; request this read alone in a later round.`;
+  }
+  if (reason === "returned_result_overrun") {
+    return `${head} A returned result exceeded its reservation, so the input is remeasured before more reads. ${kept} Use them first.`;
+  }
+  return `${head} ${kept} Split the read batch; use delivered results before requesting more.`;
+}

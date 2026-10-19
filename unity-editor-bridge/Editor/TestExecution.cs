@@ -53,5 +53,9 @@ namespace EvidenceFirst.UnityBridge
         }
         public static JObject Release(string id) { Load(id); File.Delete(PathFor(id)); return new JObject { ["status"] = "released", ["operationId"] = id }; }
         public static string Session => Bridge.Session;
+        // Discovered tests are valid for one compiled state of the project.
+        public static string CompilationId => Observations.CompilationId;
+        public static JObject PageRows(System.Collections.Generic.List<JObject> rows, JObject args, string revision) => Objects.Page(rows, args, revision);
+        public static string Revision(string value) => Bridge.Digest(value);
     }
 }

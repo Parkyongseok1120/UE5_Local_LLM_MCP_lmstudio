@@ -65,6 +65,11 @@ from unreal_static_safety import (
     validate_sync_load_in_gameplay,
     validate_unchecked_cast_result,
 )
+from unreal_static_threading import (
+    merge_overlapping_cleanup_findings,
+    validate_subsystem_contracts,
+    validate_thread_contracts,
+)
 
 
 def _append_validator_internal_error(
@@ -174,7 +179,7 @@ def _run_per_file_validators(
         findings.extend(validate_uht_macros_in_conditional_blocks(path, text, root))
         findings.extend(validate_uproperty_category_without_exposure(path, text, root))
         findings.extend(validate_static_mutable_container_members(path, text, root))
-        findings.extend(validate_unreal_lifecycle_overrides(path, text, root))
+        findings.extend(validate_unreal_lifecycle_overrides(path, text, root, bases))
         findings.extend(validate_blueprint_native_event_declarations(path, text, root))
         findings.extend(validate_private_blueprint_access(path, text, root))
         findings.extend(validate_raw_uobject_members(path, text, root))
@@ -209,7 +214,8 @@ def _run_per_file_validators(
         findings.extend(validate_delegate_broadcast_consistency(path, text, root, delegate_arity_map))
         findings.extend(validate_missing_super_lifecycle_call(path, text, root))
         findings.extend(validate_delegate_bind_without_unbind(path, text, root))
-        findings.extend(validate_timer_set_without_clear(path, text, root))
+        timer_findings = validate_timer_set_without_clear(path, text, root)
+        findings.extend(timer_findings)
         findings.extend(validate_interrupt_param_ignored(path, text, root))
         findings.extend(validate_unchecked_cast_result(path, text, root))
         findings.extend(validate_raw_new_delete_uobject(path, text, root))
@@ -217,6 +223,9 @@ def _run_per_file_validators(
         findings.extend(validate_sync_load_in_gameplay(path, text, root))
         findings.extend(validate_hardcoded_asset_path(path, text, root))
         findings.extend(validate_fvector_float_precision(path, text, root))
+        findings.extend(validate_thread_contracts(path, text, root, bases))
+        findings.extend(merge_overlapping_cleanup_findings(
+            validate_subsystem_contracts(path, text, root, bases), timer_findings))
 
 __all__ = [
     "_append_validator_internal_error",

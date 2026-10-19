@@ -163,9 +163,11 @@ def test_node_direct_stdio_catalog_read_and_repeat_are_task_free(tmp_path: Path)
         assert names == set(MANIFEST["agentEssential"])
         assert all("taskAuthorization" not in json.dumps(tool) for tool in definitions)
 
+        # Source is never read whole implicitly; an explicit window is the read.
         arguments = {
             "path": "project://Source/Demo/Private/DemoActor.cpp",
             "project": str(uproject),
+            "offsetBytes": 0,
         }
         first = payload_of(
             client.request(
@@ -233,6 +235,7 @@ def test_node_strict_stdio_is_separate_and_does_not_gate_reads(tmp_path: Path) -
                     "arguments": {
                         "path": "project://Source/Demo/Private/DemoActor.cpp",
                         "project": str(uproject),
+                        "offsetBytes": 0,
                     },
                 },
                 3,

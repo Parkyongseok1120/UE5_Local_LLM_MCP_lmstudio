@@ -6,6 +6,7 @@ const path = require("node:path");
 const {
   assertMutationActive,
   calculateReplacement,
+  calculateReplacements,
   createExclusive,
   replaceWithCAS,
   sha256Text,
@@ -18,6 +19,7 @@ const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
 const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
+const { locateOldText, regionSuggestion } = require("./edit-region-locator");
 const {
   registerCurrentVersion,
   resolveVersionEvidence,
@@ -29,59 +31,7 @@ const {
   statOrNull,
 } = require("./direct-runtime-shared");
 
-const WRITE_FILE_FIELDS = new Set(["path", "project", "content", "createDirs"]);
-const REPLACE_FILE_FIELDS = new Set([
-  "path",
-  "project",
-  "oldText",
-  "newText",
-  "expectedOccurrences",
-  "expectedHash",
-  "fileVersionReceipt",
-]);
-
-function mutationArgumentError(args, allowedFields, label) {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return `${label} arguments must be an object.`;
-  }
-  const unsupported = Object.keys(args).find((key) => !allowedFields.has(key));
-  return unsupported ? `${label} contains unsupported field: ${unsupported}` : "";
-}
-
-function requiredStringError(args, field, { allowEmpty = false } = {}) {
-  if (typeof args[field] !== "string") return `${field} must be a string.`;
-  if (!allowEmpty && !args[field].trim()) return `${field} must be a non-empty string.`;
-  return "";
-}
-
-function optionalStringError(args, field) {
-  return args[field] === undefined || typeof args[field] === "string"
-    ? ""
-    : `${field} must be a string when provided.`;
-}
-
-function writeFileArgumentError(args) {
-  return mutationArgumentError(args, WRITE_FILE_FIELDS, "write_file")
-    || requiredStringError(args, "path")
-    || requiredStringError(args, "content", { allowEmpty: true })
-    || optionalStringError(args, "project")
-    || (args.createDirs === undefined || typeof args.createDirs === "boolean"
-      ? ""
-      : "createDirs must be a boolean when provided.");
-}
-
-function replaceFileArgumentError(args) {
-  return mutationArgumentError(args, REPLACE_FILE_FIELDS, "replace_in_file")
-    || requiredStringError(args, "path")
-    || requiredStringError(args, "oldText")
-    || requiredStringError(args, "newText", { allowEmpty: true })
-    || optionalStringError(args, "project")
-    || optionalStringError(args, "expectedHash")
-    || optionalStringError(args, "fileVersionReceipt")
-    || (Number.isInteger(args.expectedOccurrences) && args.expectedOccurrences === 1
-      ? ""
-      : "expectedOccurrences must be the integer 1 for a focused replacement.");
-}
+const { replaceFileArgumentError, writeFileArgumentError } = require("./direct-mutation-arguments");
 
 function frozenMutationTarget(resolution) {
   const identity = (value) => canonicalAbsolutePathIdentity(
@@ -216,57 +166,57 @@ function createFileMutationCapabilities(context) {
         retryMode: "different_arguments",
       });
     }
-    const oldText = args.oldText;
-    const newText = args.newText;
-    if (oldText.length > limits.maxPatchOldTextChars
-      || newText.length > limits.maxPatchNewTextChars
-      || oldText.length + newText.length > limits.maxPatchChars
-      || textLineCount(newText) > limits.maxPatchLines) {
+    const edits = args.edits;
+    const regions = edits || [{ oldText: args.oldText, newText: args.newText }];
+    const oldText = regions[0].oldText;
+    const tooLarge = regions.findIndex(({ oldText: before, newText: after }) => before.length > limits.maxPatchOldTextChars
+      || after.length > limits.maxPatchNewTextChars
+      || before.length + after.length > limits.maxPatchChars
+      || textLineCount(after) > limits.maxPatchLines);
+    const totalLines = regions.reduce((sum, region) => sum + textLineCount(region.newText), 0);
+    const totalBytes = regions.reduce((sum, region) => sum + Buffer.byteLength(region.oldText) + Buffer.byteLength(region.newText), 0);
+    if (tooLarge >= 0 || (edits && (totalLines > limits.maxBundleChangedLines || totalBytes > limits.maxBundleMutationBytes))) {
       return failure(
         "PATCH_TOO_LARGE",
-        `Patch exceeds the focused-region limits: oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters, or ${limits.maxPatchLines} newText lines. Apply one exact region, then use the returned fileVersionReceipt in the next prediction round.`,
-        { retryAllowed: true },
+        `Each region is limited to oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters and ${limits.maxPatchLines} newText lines; edits[] together to ${limits.maxBundleChangedLines} newText lines. Split the change and chain the returned fileVersionReceipt.`,
+        { retryAllowed: true, ...(tooLarge >= 0 && edits ? { details: { editIndex: tooLarge } } : {}) },
       );
     }
     assertMutationActive(requestContext.signal);
     const resolution = await mutationResolution(args.path, args.project);
     const targetIdentity = frozenMutationTarget(resolution);
     const version = resolveVersionEvidence(context, resolution, args, requestContext);
+    // A failed or unproven edit names the lines around its own target, read
+    // from the current file; the version proof still comes only from that read.
+    const aimed = (content, target = oldText) => regionSuggestion(args, locateOldText(content, target), projectScopedSuggestionArgs);
     if (!version.ok) {
-      return versionEvidenceFailure(version, {
-        suggestion: {
-          tool: "read_file_range",
-          args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 300 }),
-        },
-      });
+      const current = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+      const located = current.ok ? aimed(current.content) : {};
+      return versionEvidenceFailure(version, { ...located,
+        details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}) } });
     }
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
     if (read.hash.toLowerCase() !== version.expectedHash) {
-      return versionConflict(version, read.hash, {
-        suggestion: {
-          tool: "read_file_range",
-          args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 300 }),
-        },
-      });
+      return versionConflict(version, read.hash, aimed(read.content));
     }
-    const prospective = calculateReplacement({
-      priorContent: read.buffer,
-      oldText,
-      newText,
-      expectedOccurrences: args.expectedOccurrences,
-    });
+    const prospective = edits
+      ? calculateReplacements({ priorContent: read.buffer, edits })
+      : calculateReplacement({
+        priorContent: read.buffer,
+        oldText,
+        newText: args.newText,
+        expectedOccurrences: args.expectedOccurrences,
+      });
     if (!prospective.ok) {
+      const failed = edits ? edits[prospective.editIndex] || edits[0] : regions[0];
+      const located = aimed(read.content, failed.oldText);
       return failure(
-        /occurrence mismatch/iu.test(prospective.error) ? "OCCURRENCE_MISMATCH" : "OLD_TEXT_NOT_FOUND",
+        prospective.errorCode
+          || (/occurrence mismatch/iu.test(prospective.error) ? "OCCURRENCE_MISMATCH" : "OLD_TEXT_NOT_FOUND"),
         prospective.error,
-        {
-          retryAllowed: true,
-          suggestion: {
-            tool: "read_file_range",
-            args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 300 }),
-          },
-        },
+        { retryAllowed: true, ...located,
+          details: { ...located.details, currentSha256: read.hash, ...(edits ? { editIndex: prospective.editIndex } : {}) } },
       );
     }
     const semanticAdvisory = mutationSemanticAdvisory(
@@ -286,7 +236,8 @@ function createFileMutationCapabilities(context) {
           targetPath: refreshed.absolutePath,
           priorContent: read.buffer,
           oldText,
-          newText,
+          newText: args.newText,
+          edits,
           expectedOccurrences: args.expectedOccurrences,
           readHash: version.expectedHash,
         });
@@ -328,7 +279,11 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    }), committedChange(read.buffer, locked.result.updated, locked.result.preHash, nextHash), context.payloadFits);
+    }), edits
+      ? { schemaVersion: 1, previousSha256: locked.result.preHash, sha256: nextHash,
+        status: locked.result.preHash === nextHash ? "no_change" : "changed",
+        coverage: "complete_changed_regions", hunks: locked.result.regions }
+      : committedChange(read.buffer, locked.result.updated, locked.result.preHash, nextHash), context.payloadFits);
   }
 
   return { replace_in_file: replaceInFile, write_file: writeFile };

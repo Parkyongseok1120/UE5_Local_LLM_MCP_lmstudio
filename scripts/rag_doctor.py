@@ -131,6 +131,72 @@ def check(label: str, ok: bool, detail: str = "") -> dict:
     return entry
 
 
+def _workspace_root_checks(mcp_config: Path, shared_config: Path) -> list[dict]:
+    """The installed unreal-agent WORKSPACE_ROOT, judged by the installer's own guard."""
+    from workspace_root_guard import workspace_root_findings
+
+    try:
+        mcp = json.loads(mcp_config.read_text(encoding="utf-8-sig"))
+        env = ((mcp.get("mcpServers") or {}).get("unreal-agent") or {}).get("env") or {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    workspace = str(env.get("WORKSPACE_ROOT") or "").strip()
+    if not workspace:
+        return []
+    active = None
+    try:
+        active = str(json.loads(shared_config.read_text(encoding="utf-8-sig")).get("activeProject") or "").strip() or None
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    findings = workspace_root_findings(Path(workspace), Path(active) if active else None,
+                                       Path(__file__).resolve().parents[1])
+    if not findings:
+        return [check("workspace_root", True, workspace)]
+    return [warn(f"workspace_root_{f['code']}", f["message"]) for f in findings]
+
+
+def _unity_checks(mcp_config: Path, node: Path | None, runner=None) -> list[dict]:
+    """The configured unity-tools server, diagnosed by the installer's own check.
+
+    Nothing is reported when Unity is not configured. A closed Editor is a
+    warning with its next step, never a failure of the installation.
+    """
+    try:
+        mcp = json.loads(mcp_config.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if "unity-tools" not in (mcp.get("mcpServers") or {}):
+        return []
+    if node is None:
+        return [warn("unity_mcp", "node not found; cannot run scripts/check_unity_install.js")]
+    script = Path(__file__).resolve().parent / "check_unity_install.js"
+    run = runner or (lambda command: subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
+                                                     errors="replace", timeout=60, check=False))
+    try:
+        result = run([str(node), str(script), str(mcp_config)])
+        report = json.loads(result.stdout or "{}") if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        return [warn("unity_mcp", str(exc)[:300])]
+    if not report:
+        return [warn("unity_mcp", (result.stderr or "check failed").strip()[:300])]
+    checks = [check("unity_mcp", True, f"{report.get('tools')} tools")]
+    if report.get("connection") == "connected":
+        checks.append(check("unity_editor_connection", True,
+                            f"Unity {report.get('editorVersion')}, Bridge {(report.get('bridge') or {}).get('version')}"))
+    else:
+        checks.append(warn("unity_editor_connection",
+                           f"{report.get('reasonCode') or report.get('connection')}: {report.get('nextStep', '')}".strip()))
+    if report.get("worker") == "configured":
+        checks.append(check("unity_symbol_worker", True, "configured"))
+    else:
+        checks.append(check("unity_symbol_worker", False, str(report.get("workerRemedy") or "missing")))
+    server = report.get("serverPermissions") or {}
+    checks.append(check("unity_server_permissions", True,
+                        f"write={'on' if server.get('write') else 'off'}, commands={'on' if server.get('commands') else 'off'}"
+                        " (install flags --unity-allow-write / --unity-allow-commands)"))
+    return checks
+
+
 def warn(label: str, detail: str = "") -> dict:
     entry = {"label": label, "status": "WARN", "detail": detail}
     line = f"[WARN] {label}"
@@ -401,6 +467,8 @@ def main() -> int:
         checks.append(warn("mcp_unreal_agent", agent_detail))
     else:
         checks.append(check("mcp_unreal_agent", agent_ok, agent_detail))
+    checks.extend(_workspace_root_checks(mcp_config, shared_config))
+    checks.extend(_unity_checks(mcp_config, node))
 
     cline_ok = False
     cline_detail = "not configured"

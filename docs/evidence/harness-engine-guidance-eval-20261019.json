@@ -1,0 +1,1655 @@
+{
+ "schema": "harness-accuracy-eval/v1",
+ "date": "2026-10-19",
+ "plan": "docs/Harness_Behavior_Latency_Final_Plan_20261019.md §9.6",
+ "runner": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs --reps 3 (--resume, rest 10 min per rep)",
+ "fixture": "lmstudio-context-compactor-plugin/scripts/ue-accuracy-fixture.cjs",
+ "model": "swift-1.5-qwen3.8-27b (qwen35, Q4_K_S, context 84224, parallel 4)",
+ "base": "Develop bc5e92b + uncommitted prior-turn engine identity seeding and data-free contract candidate",
+ "groups": {
+  "off": "designGuidanceMaxTokens 0",
+  "auto": "designGuidanceMode auto"
+ },
+ "note": "One configuration, three repetitions (seeds 7000+rep*100+caseIndex, temperature 0). Rep 1 was stopped at a run boundary after 10 runs and resumed with --resume on the same build; no run was repeated.",
+ "summary": {
+  "off": [
+   {
+    "normalFalsePositives": 1,
+    "normalCount": 6,
+    "defectsDetected": 5,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 11,
+    "maxScore": 13,
+    "pass": false
+   },
+   {
+    "normalFalsePositives": 1,
+    "normalCount": 6,
+    "defectsDetected": 5,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 11,
+    "maxScore": 13,
+    "pass": false
+   },
+   {
+    "normalFalsePositives": 1,
+    "normalCount": 6,
+    "defectsDetected": 4,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 10,
+    "maxScore": 13,
+    "pass": false
+   }
+  ],
+  "auto": [
+   {
+    "normalFalsePositives": 2,
+    "normalCount": 6,
+    "defectsDetected": 5,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 10,
+    "maxScore": 13,
+    "pass": false
+   },
+   {
+    "normalFalsePositives": 1,
+    "normalCount": 6,
+    "defectsDetected": 6,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 12,
+    "maxScore": 13,
+    "pass": false
+   },
+   {
+    "normalFalsePositives": 0,
+    "normalCount": 6,
+    "defectsDetected": 6,
+    "defectCount": 6,
+    "pair7P1Maintained": 0,
+    "pair7Count": 1,
+    "score": 13,
+    "maxScore": 13,
+    "pass": true
+   }
+  ]
+ },
+ "engineDefaultsDelivered": {
+  "autoRuns": 39,
+  "withEngineDefaults": 36,
+  "withoutCases": [
+   "P6-D (topic core/debugging; multiplayer not selected)"
+  ]
+ },
+ "runs": [
+  {
+   "rep": 1,
+   "caseId": "P1-N",
+   "group": "off",
+   "seed": 7100,
+   "label": "defect",
+   "severity": "P2",
+   "score": 0,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 104171,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P1-N",
+   "group": "auto",
+   "seed": 7100,
+   "label": "defect",
+   "severity": "P1",
+   "score": 0,
+   "rounds": 5,
+   "toolCalls": 7,
+   "elapsedMs": 95845,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P1-D",
+   "group": "auto",
+   "seed": 7101,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 77362,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P1-D",
+   "group": "off",
+   "seed": 7101,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 5,
+   "elapsedMs": 80592,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P2-N",
+   "group": "off",
+   "seed": 7102,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 83143,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P2-N",
+   "group": "auto",
+   "seed": 7102,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 4,
+   "elapsedMs": 75215,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P2-D",
+   "group": "auto",
+   "seed": 7103,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 3,
+   "elapsedMs": 56052,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P2-D",
+   "group": "off",
+   "seed": 7103,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 4,
+   "elapsedMs": 58855,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P3-N",
+   "group": "off",
+   "seed": 7104,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 68162,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P3-N",
+   "group": "auto",
+   "seed": 7104,
+   "label": "defect",
+   "severity": "P1",
+   "score": 0,
+   "rounds": 5,
+   "toolCalls": 9,
+   "elapsedMs": 171738,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P3-D",
+   "group": "auto",
+   "seed": 7105,
+   "label": "not_defect",
+   "severity": null,
+   "score": 0,
+   "rounds": 5,
+   "toolCalls": 10,
+   "elapsedMs": 157370,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P3-D",
+   "group": "off",
+   "seed": 7105,
+   "label": "not_defect",
+   "severity": null,
+   "score": 0,
+   "rounds": 4,
+   "toolCalls": 9,
+   "elapsedMs": 132097,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P4-N",
+   "group": "off",
+   "seed": 7106,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 68850,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P4-N",
+   "group": "auto",
+   "seed": 7106,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 34403,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P4-D",
+   "group": "auto",
+   "seed": 7107,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 67938,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P4-D",
+   "group": "off",
+   "seed": 7107,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 48983,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P5-N",
+   "group": "off",
+   "seed": 7108,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 44313,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P5-N",
+   "group": "auto",
+   "seed": 7108,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 6,
+   "toolCalls": 9,
+   "elapsedMs": 91841,
+   "guidanceIncludedRounds": 6,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P5-D",
+   "group": "auto",
+   "seed": 7109,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 6,
+   "elapsedMs": 155442,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P5-D",
+   "group": "off",
+   "seed": 7109,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 60631,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P6-N",
+   "group": "off",
+   "seed": 7110,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 52443,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P6-N",
+   "group": "auto",
+   "seed": 7110,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 7,
+   "elapsedMs": 84016,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P6-D",
+   "group": "auto",
+   "seed": 7111,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 64316,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal/api",
+    "debugging/definitions"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/debugging"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P6-D",
+   "group": "off",
+   "seed": 7111,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 82980,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P7",
+   "group": "off",
+   "seed": 7112,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 9,
+   "elapsedMs": 113228,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 1,
+   "caseId": "P7",
+   "group": "auto",
+   "seed": 7112,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 7,
+   "toolCalls": 10,
+   "elapsedMs": 102177,
+   "guidanceIncludedRounds": 7,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P1-N",
+   "group": "auto",
+   "seed": 7200,
+   "label": "defect",
+   "severity": "P1",
+   "score": 0,
+   "rounds": 5,
+   "toolCalls": 8,
+   "elapsedMs": 85266,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P1-N",
+   "group": "off",
+   "seed": 7200,
+   "label": "defect",
+   "severity": "P2",
+   "score": 0,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 103162,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P1-D",
+   "group": "off",
+   "seed": 7201,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 5,
+   "elapsedMs": 89234,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P1-D",
+   "group": "auto",
+   "seed": 7201,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 53970,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P2-N",
+   "group": "auto",
+   "seed": 7202,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 3,
+   "elapsedMs": 42184,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P2-N",
+   "group": "off",
+   "seed": 7202,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 81280,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P2-D",
+   "group": "off",
+   "seed": 7203,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 4,
+   "elapsedMs": 57321,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P2-D",
+   "group": "auto",
+   "seed": 7203,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 54698,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P3-N",
+   "group": "auto",
+   "seed": 7204,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 113426,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P3-N",
+   "group": "off",
+   "seed": 7204,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 68373,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P3-D",
+   "group": "off",
+   "seed": 7205,
+   "label": "not_defect",
+   "severity": null,
+   "score": 0,
+   "rounds": 4,
+   "toolCalls": 9,
+   "elapsedMs": 99058,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P3-D",
+   "group": "auto",
+   "seed": 7205,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 5,
+   "elapsedMs": 75358,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P4-N",
+   "group": "auto",
+   "seed": 7206,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 41764,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P4-N",
+   "group": "off",
+   "seed": 7206,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 68340,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P4-D",
+   "group": "off",
+   "seed": 7207,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 46720,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P4-D",
+   "group": "auto",
+   "seed": 7207,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 50544,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P5-N",
+   "group": "auto",
+   "seed": 7208,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 7,
+   "elapsedMs": 102171,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P5-N",
+   "group": "off",
+   "seed": 7208,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 6,
+   "elapsedMs": 70573,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P5-D",
+   "group": "off",
+   "seed": 7209,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 59399,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P5-D",
+   "group": "auto",
+   "seed": 7209,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 85971,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P6-N",
+   "group": "auto",
+   "seed": 7210,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 9,
+   "elapsedMs": 64450,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P6-N",
+   "group": "off",
+   "seed": 7210,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 67316,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P6-D",
+   "group": "off",
+   "seed": 7211,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 84267,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P6-D",
+   "group": "auto",
+   "seed": 7211,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 54046,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal/api",
+    "debugging/definitions"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/debugging"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P7",
+   "group": "auto",
+   "seed": 7212,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 6,
+   "toolCalls": 10,
+   "elapsedMs": 86994,
+   "guidanceIncludedRounds": 6,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 2,
+   "caseId": "P7",
+   "group": "off",
+   "seed": 7212,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 9,
+   "elapsedMs": 121358,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P1-N",
+   "group": "off",
+   "seed": 7300,
+   "label": "defect",
+   "severity": "P1",
+   "score": 0,
+   "rounds": 11,
+   "toolCalls": 11,
+   "elapsedMs": 213639,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P1-N",
+   "group": "auto",
+   "seed": 7300,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 6,
+   "toolCalls": 8,
+   "elapsedMs": 239726,
+   "guidanceIncludedRounds": 6,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P1-D",
+   "group": "auto",
+   "seed": 7301,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 67354,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P1-D",
+   "group": "off",
+   "seed": 7301,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 7,
+   "elapsedMs": 173603,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P2-N",
+   "group": "off",
+   "seed": 7302,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 4,
+   "elapsedMs": 50911,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P2-N",
+   "group": "auto",
+   "seed": 7302,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 6,
+   "elapsedMs": 87658,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P2-D",
+   "group": "auto",
+   "seed": 7303,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 3,
+   "elapsedMs": 42885,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P2-D",
+   "group": "off",
+   "seed": 7303,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 4,
+   "elapsedMs": 44877,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P3-N",
+   "group": "off",
+   "seed": 7304,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 73252,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P3-N",
+   "group": "auto",
+   "seed": 7304,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 81740,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P3-D",
+   "group": "auto",
+   "seed": 7305,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 8,
+   "elapsedMs": 220404,
+   "guidanceIncludedRounds": 5,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P3-D",
+   "group": "off",
+   "seed": 7305,
+   "label": "not_defect",
+   "severity": null,
+   "score": 0,
+   "rounds": 3,
+   "toolCalls": 5,
+   "elapsedMs": 52398,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P4-N",
+   "group": "off",
+   "seed": 7306,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 44992,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P4-N",
+   "group": "auto",
+   "seed": 7306,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 35648,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P4-D",
+   "group": "auto",
+   "seed": 7307,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 57231,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P4-D",
+   "group": "off",
+   "seed": 7307,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 58299,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P5-N",
+   "group": "off",
+   "seed": 7308,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 6,
+   "elapsedMs": 43540,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P5-N",
+   "group": "auto",
+   "seed": 7308,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 65067,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P5-D",
+   "group": "auto",
+   "seed": 7309,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 5,
+   "elapsedMs": 78756,
+   "guidanceIncludedRounds": 3,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P5-D",
+   "group": "off",
+   "seed": 7309,
+   "label": "needs_runtime_proof",
+   "severity": null,
+   "score": 0,
+   "rounds": 9,
+   "toolCalls": 9,
+   "elapsedMs": 214232,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P6-N",
+   "group": "off",
+   "seed": 7310,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 3,
+   "toolCalls": 4,
+   "elapsedMs": 76664,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P6-N",
+   "group": "auto",
+   "seed": 7310,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 11,
+   "toolCalls": 8,
+   "elapsedMs": 203904,
+   "guidanceIncludedRounds": 11,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P6-D",
+   "group": "auto",
+   "seed": 7311,
+   "label": "defect",
+   "severity": "P2",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 51502,
+   "guidanceIncludedRounds": 4,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal/api",
+    "debugging/definitions"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/debugging"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P6-D",
+   "group": "off",
+   "seed": 7311,
+   "label": "defect",
+   "severity": "P1",
+   "score": 1,
+   "rounds": 4,
+   "toolCalls": 5,
+   "elapsedMs": 66748,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P7",
+   "group": "off",
+   "seed": 7312,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 5,
+   "toolCalls": 9,
+   "elapsedMs": 119769,
+   "guidanceIncludedRounds": 0,
+   "guidanceSelectedIds": [],
+   "guidanceTopics": [
+    "/"
+   ]
+  },
+  {
+   "rep": 3,
+   "caseId": "P7",
+   "group": "auto",
+   "seed": 7312,
+   "label": "not_defect",
+   "severity": null,
+   "score": 1,
+   "rounds": 7,
+   "toolCalls": 10,
+   "elapsedMs": 71334,
+   "guidanceIncludedRounds": 7,
+   "guidanceSelectedIds": [
+    "core/proof",
+    "unreal/verification",
+    "unreal-networking/authority",
+    "unreal-networking/engine-defaults"
+   ],
+   "guidanceTopics": [
+    "core/",
+    "core/multiplayer"
+   ]
+  }
+ ]
+}

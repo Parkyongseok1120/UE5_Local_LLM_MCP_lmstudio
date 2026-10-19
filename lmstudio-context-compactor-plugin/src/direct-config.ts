@@ -102,7 +102,7 @@ export const directConfigSchematics = createConfigSchematics()
   .field("outputRecoveryMaxTokens", "numeric", { displayName: "Continuation output limit", subtitle: "Maximum predicted tokens for one tool-free report continuation; 0 uses the general output reserve." }, NUMERIC_FIELDS.outputRecoveryMaxTokens.default)
   .field("reasoningRecoveryMode", "select", {
     displayName: "Reasoning-limit recovery",
-    subtitle: "If a normal generation uses its output cap entirely before an answer or tool request, retry once with the same permitted tools and output cap. No report-rewrite timeout is applied. Missing saved values default to On; bounded audit and observe-only are excluded.",
+    subtitle: "If a normal generation uses its output cap entirely before an answer or tool request, retry once with the same permitted tools and up to twice the output cap (limited by the measured context headroom, never below the cap). No report-rewrite timeout is applied. Missing saved values default to On; bounded audit and observe-only are excluded.",
     options: [
       { value: "on", displayName: "On (one focused retry)" },
       { value: "off", displayName: "Off" },

@@ -183,6 +183,9 @@ def test_contract_shaped_neutral_architecture_packet_validates_on_first_call() -
     assert result["validationScope"] == "packet_structure_and_record_consistency"
     assert result["factualEvidenceVerified"] is False
     assert result["wholeTaskVerified"] is False
+    assert result["summary"] == "structure_valid; facts_not_verified"
+    rejected, _ = module.call_tool("evidence_first_validate", {"packet": {}})
+    assert rejected["summary"] == "structure_invalid; facts_not_verified"
 
 
 def test_small_packet_policy_is_shared_and_does_not_certify_audit_completion() -> None:

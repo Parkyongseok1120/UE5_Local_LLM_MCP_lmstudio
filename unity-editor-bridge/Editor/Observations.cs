@@ -14,6 +14,11 @@ namespace EvidenceFirst.UnityBridge
     internal static class Observations
     {
         internal static string CompilationId => SessionState.GetString("EvidenceFirst.CompilationId", "");
+        internal static string CompilationOutcome => SessionState.GetString("EvidenceFirst.CompilationOutcome", "unknown");
+        internal static string LastCompilationFinishedAt => SessionState.GetString("EvidenceFirst.CompilationFinishedAt", "");
+        internal static int CompilationSequence => SessionState.GetInt("EvidenceFirst.CompilationSequence", 0);
+        static JArray CompilationHistory() { try { return JArray.Parse(SessionState.GetString("EvidenceFirst.CompilationHistory", "[]")); } catch { return new JArray(); } }
+        internal static JObject FirstCompilationAfter(int sequence) => CompilationHistory().OfType<JObject>().FirstOrDefault(row => (int?)row["sequence"] > sequence);
         static readonly ConcurrentQueue<JObject> Pending = new ConcurrentQueue<JObject>();
         static readonly List<JObject> Events = new List<JObject>();
         static long sequence;
@@ -68,6 +73,10 @@ namespace EvidenceFirst.UnityBridge
             SessionState.SetString("EvidenceFirst.CompilationId", Guid.NewGuid().ToString("N"));
             SessionState.SetBool("EvidenceFirst.CompileHadErrors", false);
             SessionState.SetString("EvidenceFirst.CompilationOutcome", "compiling");
+            int sequence = CompilationSequence + 1; SessionState.SetInt("EvidenceFirst.CompilationSequence", sequence);
+            var history = CompilationHistory(); history.Add(new JObject { ["sequence"] = sequence, ["id"] = CompilationId, ["outcome"] = "compiling" });
+            while (history.Count > 64) history.RemoveAt(0);
+            SessionState.SetString("EvidenceFirst.CompilationHistory", history.ToString(Formatting.None));
         }
         static void AssemblyFinished(string assemblyPath, CompilerMessage[] messages)
         {
@@ -85,6 +94,10 @@ namespace EvidenceFirst.UnityBridge
         static void CompilationFinished(object context)
         {
             SessionState.SetString("EvidenceFirst.CompilationOutcome", SessionState.GetBool("EvidenceFirst.CompileHadErrors", false) ? "failed" : "completed_without_observed_errors");
+            SessionState.SetString("EvidenceFirst.CompilationFinishedAt", DateTime.UtcNow.ToString("O"));
+            var history = CompilationHistory(); var row = history.OfType<JObject>().FirstOrDefault(item => (string)item["id"] == CompilationId);
+            if (row != null) { row["outcome"] = CompilationOutcome; row["finishedAt"] = LastCompilationFinishedAt; }
+            SessionState.SetString("EvidenceFirst.CompilationHistory", history.ToString(Formatting.None));
             PersistCompiler();
         }
         static void PersistCompiler()

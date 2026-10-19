@@ -190,8 +190,11 @@ FORBIDDEN_PACKAGE_MARKERS = re.compile(
 )
 
 REQUIRED_RUNTIME_FILES = (
+    "scripts/direct_rag_chunk_read.py",
     "scripts/direct_rag_engine_local.py",
+    "scripts/engine_definition_evidence.py",
     "scripts/engine_header_evidence.py",
+    "scripts/engine_identity.py",
     "scripts/project_name_resolver.py",
     "lmstudio-unreal-agent-mcp/src/resolve-project-name-cli.js",
     "installer/unity_install.py",
@@ -264,14 +267,27 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unity-mcp/package.json",
     "lmstudio-unity-mcp/pnpm-lock.yaml",
     "lmstudio-unity-mcp/src/server.js",
+    "lmstudio-unity-mcp/src/static-validate.js",
     "lmstudio-unity-mcp/src/project.js",
     "lmstudio-unity-mcp/src/catalog.js",
     "lmstudio-unity-mcp/src/bridge-client.js",
     "lmstudio-unity-mcp/src/version-control.js",
     "shared-tool-core/files.js",
+    "shared-tool-core/failure-guidance.js",
+    "shared-tool-core/repeat-cache.js",
+    "shared-tool-core/finding-model.js",
     "shared-tool-core/git.js",
     "shared-tool-core/workspace.js",
     "shared-tool-core/data.js",
+    "shared-tool-core/line-numbering.js",
+    "shared-tool-core/direct-file-snapshot.js",
+    "shared-tool-core/write-locks.js",
+    "shared-tool-core/atomic-io.js",
+    "shared-tool-core/direct-change-evidence.js",
+    "shared-tool-core/filesystem-path-identity.js",
+    "shared-tool-core/python-executable.js",
+    "shared-tool-core/runtime-state-root.js",
+    "shared-tool-core/write-lock-reclaim-bridge.py",
     "unity-editor-bridge/package.json",
     "unity-editor-bridge/Editor/Bridge.cs",
     "unity-editor-bridge/Editor/ResponseMetadata.cs",
@@ -297,6 +313,7 @@ REQUIRED_RUNTIME_FILES = (
     "docs/Unity_Validation.md",
     "config/retrieval_profiles.json",
     "config/stable_tool_manifest.json",
+    "config/unreal_contracts.json",
     "installer/bootstrap_python.ps1",
     "installer/bootstrap_python.sh",
     "install-intel-mac.sh",
@@ -460,12 +477,14 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/unreal_static_scan.py",
     "scripts/unreal_static_reflection.py",
     "scripts/unreal_static_delegate.py",
+    "scripts/unreal_static_engine.py",
     "scripts/unreal_static_lifecycle.py",
     "scripts/unreal_static_build.py",
     "scripts/unreal_static_include.py",
     "scripts/unreal_static_network.py",
     "scripts/unreal_static_crossfile.py",
     "scripts/unreal_static_safety.py",
+    "scripts/unreal_static_threading.py",
     "scripts/unreal_static_registry.py",
     "scripts/unreal_static_runner.py",
     "scripts/cpp_parse_utils.py",
@@ -473,6 +492,11 @@ REQUIRED_RUNTIME_FILES = (
     "scripts/ue_cpp_signatures.py",
     "scripts/mutation_semantic_guard.py",
     "scripts/unreal_api_denylist.py",
+    "scripts/unreal_contracts.py",
+    "scripts/engine_contracts.py",
+    "config/unity_contracts.json",
+    "scripts/workspace_root_guard.py",
+    "scripts/trace_lmstudio_run.py",
     "scripts/unreal_source_extensions.py",
     "installer/direct_rag_build.py",
     "installer/direct_rag_build_model.py",
@@ -510,6 +534,8 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/direct-log-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js",
+    "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js",
+    "lmstudio-unreal-agent-mcp/src/edit-region-locator.js",
     "lmstudio-unreal-agent-mcp/src/direct-mutation-scope.js",
     "lmstudio-unreal-agent-mcp/src/direct-diagnostic-capabilities.js",
     "lmstudio-unreal-agent-mcp/src/direct-response.js",
@@ -538,6 +564,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/python-executable.js",
     "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js",
     "lmstudio-unreal-agent-mcp/src/read-path-resolver.js",
+    "lmstudio-unreal-agent-mcp/src/engine-source-access.js",
     "lmstudio-unreal-agent-mcp/src/runtime-state-root.js",
     "lmstudio-unreal-agent-mcp/src/safe-write.js",
     "lmstudio-unreal-agent-mcp/src/unreal-active-project.js",
@@ -577,6 +604,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",
     "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
     "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/resume-facts.ts",
     "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
     "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
     "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
@@ -601,6 +629,8 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/note-persistence.ts",
     "lmstudio-context-compactor-plugin/src/terminal-persistence.ts",
     "lmstudio-context-compactor-plugin/src/generated-tool-contract.ts",
+    "lmstudio-context-compactor-plugin/src/generated-unity-tool-contract.ts",
+    "lmstudio-context-compactor-plugin/scripts/build-unity-tool-contract.cjs",
     "lmstudio-context-compactor-plugin/scripts/build-tool-contract.cjs",
     "lmstudio-context-compactor-plugin/test/design-guidance.test.cjs",
     "docs/model-guidance/catalog.json",
@@ -632,6 +662,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/continuity-file-observations.js",
     "lmstudio-context-compactor-plugin/src/continuity-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-model-notes.js",
+    "lmstudio-context-compactor-plugin/src/engine-profiles.js",
     "lmstudio-context-compactor-plugin/src/continuity-objectives.js",
     "lmstudio-context-compactor-plugin/src/change-evidence-memory.js",
     "lmstudio-context-compactor-plugin/src/continuity-text.js",
@@ -686,6 +717,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Release_Notes_1_4_0_RC1.md",
         "docs/Release_Notes_1_4_0_RC2.md",
         "docs/Release_Notes_1_4_0_RC3.md",
+        "docs/Release_Notes_1_4_1.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
@@ -940,6 +972,8 @@ def _sha256(path: Path) -> str:
 
 
 def _write_launchers(staging: Path) -> None:
+    product_version = json.loads((staging / "installer" / "manifest.json").read_text(encoding="utf-8"))["productVersion"]
+    release_notes = f"docs/Release_Notes_{product_version.replace('.', '_')}.md"
     shutil.copy2(ROOT / "INSTALL.bat", staging / "INSTALL.bat")
     shutil.copy2(ROOT / "UPDATE.bat", staging / "UPDATE.bat")
     shutil.copy2(ROOT / "scripts" / "portable_rag.ps1", staging / "rag.ps1")
@@ -984,7 +1018,7 @@ def _write_launchers(staging: Path) -> None:
         '- Apple Silicon macOS: 실제 기기에서 FULL 설치, 실행 환경, 채팅 압축, LM Studio 플러그인 설치·고정, 언리얼 자동 탐색, 전체 검색 자료 생성과 MCP 기본 연결을 확인한 기록이 있습니다. 서명·공증 여부는 보장하지 않습니다.\n'
         '- Intel macOS: LM Studio·언리얼·채팅 압축 설치는 초기에 중단됩니다. CUSTOM의 Codex·공통 규칙·Cline만 설치하는 구성은 가능합니다.\n'
         '\n'
-        '확인 범위는 [1.4.0 정식 변경 사항](docs/Release_Notes_1_4_0.md)에 정리합니다.\n'
+        f'확인 범위는 [{product_version} 정식 변경 사항]({release_notes})에 정리합니다.\n'
         '\n'
         '## 검색 자료 관리\n'
         '\n'

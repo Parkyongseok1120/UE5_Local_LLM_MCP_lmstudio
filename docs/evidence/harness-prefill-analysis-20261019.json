@@ -1,0 +1,835 @@
+{
+  "schema": "one_off_harness_latency_analysis_v1",
+  "analysisDate": "2026-10-19",
+  "timezone": "Asia/Seoul",
+  "reviewHead": "12dddcc935d5635f5c3df1737f509c000462d3a2",
+  "scope": "Plan revision only; no product changes or new inference experiment",
+  "sources": {
+    "conversation_text": {
+      "attachmentId": "daa348b0-7b02-48b4-8739-2a7ddaf38526",
+      "bytes": 70499,
+      "lines": 818,
+      "sha256": "8cf66a16cf4895be8a3ff585c22d39ae266c9dd372799d0d0233f7c73948dd85",
+      "rawContentIncluded": false
+    },
+    "server_log": {
+      "attachmentId": "e4b9b7e2-502f-4dd0-a608-ff8cbad1b4b9",
+      "bytes": 99103,
+      "lines": 1051,
+      "sha256": "00246a478a507b58625adb5e84a0e6739584af6afafb08f6c647de3b38b1e5aa",
+      "rawContentIncluded": false
+    },
+    "structured_conversation": {
+      "basename": "1792345395452.conversation.json",
+      "bytes": 2002006,
+      "sha256": "ae5baca39247099a8ef8e0dad68c0ba1461f90728f2d0193efa53d29fd513ce9",
+      "selection": "currentlySelected version only; fallback last version",
+      "rawContentIncluded": false
+    }
+  },
+  "identity": {
+    "executionId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7",
+    "loadedBuildId": "ef-build-v2-43ca5b342556f69c5c7b41a1b807d734160578a934250a1eac9476d7a41b0ed5",
+    "installedBuildId": "ef-build-v2-43ca5b342556f69c5c7b41a1b807d734160578a934250a1eac9476d7a41b0ed5",
+    "loadedMatchesInstalled": true,
+    "runtimeSourceRevision": 125,
+    "modelIdentifier": "swift-1.5-qwen3.8-27b",
+    "fullToolCount": 38,
+    "contextManagementMode": "hybrid",
+    "configuredWorkingInputTargetTokens": 40000,
+    "configuredWorkingInputTriggerTokens": 56000,
+    "configuredMaxOutputReserve": 8192,
+    "configuredSafetyMarginTokens": 2048
+  },
+  "loadConfigurationEvidence": {
+    "contextLengthFromExecution": 84224,
+    "kvCacheQuantizationUserReport": {
+      "key": "Q8",
+      "value": "Q5_1",
+      "source": "User clarification in this conversation",
+      "effectiveBackendTypesVerified": false,
+      "note": "Keep literal Q8 label; exact backend enum and historical effective allocation require load log"
+    },
+    "earlierReadOnlyApiSnapshot": {
+      "scope": "Earlier successful GET during this analysis; not proof of all historical run settings",
+      "modelArchitecture": "qwen35",
+      "weightQuantization": "Q4_K_S",
+      "modelBytes": 17291120448,
+      "context_length": 84224,
+      "eval_batch_size": 2048,
+      "physical_batch_size": 512,
+      "parallel": 4,
+      "flash_attention": true,
+      "context_checkpoints": 32,
+      "speculative_draft_mtp": true,
+      "draft_max_tokens": 3,
+      "offload_kv_cache_to_gpu": true
+    },
+    "earlierHardwareSnapshot": {
+      "scope": "After the run; not sampled during prefill",
+      "gpu": "NVIDIA GeForce RTX 3090",
+      "vramTotalMiB": 24576,
+      "vramUsedMiB": 23457,
+      "gpuUtilizationPercent": 10
+    },
+    "followUpApiCheck": {
+      "result": "connection_refused",
+      "effect": "Server not started and model not reloaded"
+    },
+    "unknowns": [
+      "Installed inference runtime version and llama.cpp commit",
+      "Effective KV types in historical backend allocation",
+      "Actual offloaded layer count and historical VRAM or system-RAM pressure",
+      "Prompt cache RAM capacity, checkpoint placement, restore success and eviction causality"
+    ]
+  },
+  "metricDefinitions": {
+    "backendPromptMs": "Server print_timing prompt eval time, not SDK TTFT",
+    "backendPromptTokens": "Server prompt-evaluation counter; no automatic conversion of token-counter gaps into exact KV hits",
+    "sdkFirstTokenWaitMs": "Existing modelPrefillMs: first-token/fragment callback time minus act start; can include queue, transport and server preparation",
+    "sdkAfterFirstTokenElapsedMs": "Existing elapsed-minus-first-token proxy, not isolated GPU decode time",
+    "modelInputId": "Harness execution/round identity; backend task join is inferred",
+    "endpointCounts": "Measurement/config/template API endpoints, not prediction count"
+  },
+  "backendSummary": {
+    "completedTasks": 10,
+    "firstOuterTimestampKST": "2026-10-19 03:12:31",
+    "lastOuterTimestampKST": "2026-10-19 03:33:08",
+    "promptMs": 899485.19,
+    "generationMs": 310809.44,
+    "totalMs": 1210294.62,
+    "promptShareOfTimedModelWork": 0.7431952312569975,
+    "processedPromptTokens": 447693,
+    "generatedTokens": 13207,
+    "weightedPromptTokensPerSecond": 497.72136881986904,
+    "promptMsMedian": 90601.965,
+    "promptMsMin": 74186.13,
+    "promptMsMax": 102180.99,
+    "measurementEndpoints": {
+      "getLoadConfig": 59,
+      "applyPromptTemplate": 59
+    },
+    "cacheEvictionEvents": 5,
+    "explicitForcingFullReprocessingMessagePresent": false
+  },
+  "backendTasks": [
+    {
+      "taskId": 4759,
+      "launchSourceLine": 16,
+      "launchOuterTimestampKST": "2026-10-19 03:12:32",
+      "slotSelection": {
+        "sourceLine": 14,
+        "similarity": 0.736,
+        "keep": 0.789,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [],
+      "promptMs": 90242.31,
+      "promptTokens": 40991,
+      "promptSourceLine": 62,
+      "generationMs": 2884.88,
+      "generationTokens": 122,
+      "generationSourceLine": 63,
+      "totalMs": 93127.19,
+      "totalTokens": 41113,
+      "totalSourceLine": 64
+    },
+    {
+      "taskId": 4816,
+      "launchSourceLine": 93,
+      "launchOuterTimestampKST": "2026-10-19 03:14:06",
+      "slotSelection": {
+        "sourceLine": 91,
+        "similarity": 0.693,
+        "keep": 0.734,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [],
+      "promptMs": 100373.89,
+      "promptTokens": 44091,
+      "promptSourceLine": 189,
+      "generationMs": 70153.8,
+      "generationTokens": 2636,
+      "generationSourceLine": 190,
+      "totalMs": 170527.69,
+      "totalTokens": 46727,
+      "totalSourceLine": 191
+    },
+    {
+      "taskId": 5827,
+      "launchSourceLine": 228,
+      "launchOuterTimestampKST": "2026-10-19 03:16:58",
+      "slotSelection": {
+        "sourceLine": 226,
+        "similarity": 0.613,
+        "keep": 0.562,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [],
+      "promptMs": 84936.32,
+      "promptTokens": 42068,
+      "promptSourceLine": 280,
+      "generationMs": 11282.09,
+      "generationTokens": 516,
+      "generationSourceLine": 281,
+      "totalMs": 96218.41,
+      "totalTokens": 42584,
+      "totalSourceLine": 282
+    },
+    {
+      "taskId": 6019,
+      "launchSourceLine": 310,
+      "launchOuterTimestampKST": "2026-10-19 03:18:35",
+      "slotSelection": {
+        "sourceLine": 308,
+        "similarity": 0.686,
+        "keep": 0.716,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [],
+      "promptMs": 90961.62,
+      "promptTokens": 44825,
+      "promptSourceLine": 364,
+      "generationMs": 7599.98,
+      "generationTokens": 370,
+      "generationSourceLine": 365,
+      "totalMs": 98561.6,
+      "totalTokens": 45195,
+      "totalSourceLine": 366
+    },
+    {
+      "taskId": 6154,
+      "launchSourceLine": 403,
+      "launchOuterTimestampKST": "2026-10-19 03:20:15",
+      "slotSelection": {
+        "sourceLine": 401,
+        "similarity": 0.663,
+        "keep": 0.681,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [],
+      "promptMs": 94241.75,
+      "promptTokens": 46696,
+      "promptSourceLine": 459,
+      "generationMs": 7267.53,
+      "generationTokens": 314,
+      "generationSourceLine": 460,
+      "totalMs": 101509.27,
+      "totalTokens": 47010,
+      "totalSourceLine": 461
+    },
+    {
+      "taskId": 6281,
+      "launchSourceLine": 520,
+      "launchOuterTimestampKST": "2026-10-19 03:21:58",
+      "slotSelection": {
+        "sourceLine": 516,
+        "similarity": 0.212,
+        "keep": 0.152,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [
+        {
+          "sourceLine": 518,
+          "outerTimestampKST": "2026-10-19 03:21:58",
+          "removedEntryMiB": 2150.461
+        }
+      ],
+      "promptMs": 74186.13,
+      "promptTokens": 39959,
+      "promptSourceLine": 570,
+      "generationMs": 10510.41,
+      "generationTokens": 512,
+      "generationSourceLine": 571,
+      "totalMs": 84696.54,
+      "totalTokens": 40471,
+      "totalSourceLine": 572
+    },
+    {
+      "taskId": 6474,
+      "launchSourceLine": 603,
+      "launchOuterTimestampKST": "2026-10-19 03:23:24",
+      "slotSelection": {
+        "sourceLine": 599,
+        "similarity": 0.414,
+        "keep": 0.432,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [
+        {
+          "sourceLine": 601,
+          "outerTimestampKST": "2026-10-19 03:23:24",
+          "removedEntryMiB": 2211.553
+        }
+      ],
+      "promptMs": 80837.15,
+      "promptTokens": 42231,
+      "promptSourceLine": 649,
+      "generationMs": 2796.25,
+      "generationTokens": 145,
+      "generationSourceLine": 650,
+      "totalMs": 83633.4,
+      "totalTokens": 42376,
+      "totalSourceLine": 651
+    },
+    {
+      "taskId": 6539,
+      "launchSourceLine": 682,
+      "launchOuterTimestampKST": "2026-10-19 03:24:49",
+      "slotSelection": {
+        "sourceLine": 678,
+        "similarity": 0.415,
+        "keep": 0.44,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [
+        {
+          "sourceLine": 680,
+          "outerTimestampKST": "2026-10-19 03:24:48",
+          "removedEntryMiB": 2043.543
+        }
+      ],
+      "promptMs": 85678.59,
+      "promptTokens": 44885,
+      "promptSourceLine": 808,
+      "generationMs": 115943.73,
+      "generationTokens": 4805,
+      "generationSourceLine": 809,
+      "totalMs": 201622.32,
+      "totalTokens": 49690,
+      "totalSourceLine": 810
+    },
+    {
+      "taskId": 8278,
+      "launchSourceLine": 841,
+      "launchOuterTimestampKST": "2026-10-19 03:28:11",
+      "slotSelection": {
+        "sourceLine": 837,
+        "similarity": 0.375,
+        "keep": 0.376,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [
+        {
+          "sourceLine": 839,
+          "outerTimestampKST": "2026-10-19 03:28:11",
+          "removedEntryMiB": 2554.672
+        }
+      ],
+      "promptMs": 95846.44,
+      "promptTokens": 49927,
+      "promptSourceLine": 915,
+      "generationMs": 32907.36,
+      "generationTokens": 1875,
+      "generationSourceLine": 916,
+      "totalMs": 128753.8,
+      "totalTokens": 51802,
+      "totalSourceLine": 917
+    },
+    {
+      "taskId": 8823,
+      "launchSourceLine": 948,
+      "launchOuterTimestampKST": "2026-10-19 03:30:21",
+      "slotSelection": {
+        "sourceLine": 944,
+        "similarity": 0.36,
+        "keep": 0.362,
+        "meaning": "slot selection heuristics; not authoritative KV cache hit fractions"
+      },
+      "cacheEvictionsBeforeLaunch": [
+        {
+          "sourceLine": 946,
+          "outerTimestampKST": "2026-10-19 03:30:21",
+          "removedEntryMiB": 1904.567
+        }
+      ],
+      "promptMs": 102180.99,
+      "promptTokens": 52020,
+      "promptSourceLine": 1036,
+      "generationMs": 49463.41,
+      "generationTokens": 1912,
+      "generationSourceLine": 1037,
+      "totalMs": 151644.4,
+      "totalTokens": 53932,
+      "totalSourceLine": 1038
+    }
+  ],
+  "sdkSummary": {
+    "modelCalls": 12,
+    "promptTokens": 577557,
+    "predictedTokens": 14923,
+    "modelElapsedMs": 1432783,
+    "firstTokenWaitMs": 1068226,
+    "afterFirstTokenElapsedMs": 364557,
+    "executionElapsedMs": 1442634,
+    "executionMinusModelElapsedMs": 9851,
+    "summaryModelCalls": 0,
+    "summaryModelMs": 0,
+    "outcome": {
+      "executionOutcome": "completed",
+      "reason": "eosFound",
+      "reportPresent": true,
+      "reportDelivered": true,
+      "reportCompleted": true,
+      "objectiveSatisfied": null,
+      "taskCompleted": false
+    },
+    "outcomeMeaning": "Delivered report, not factual certification of findings"
+  },
+  "sdkRounds": [
+    {
+      "roundIndex": 0,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-1",
+      "sdkInputTokens": 38603,
+      "sdkPromptTokensCount": 38603,
+      "sdkPredictedTokensCount": 1538,
+      "sdkFirstTokenWaitMs": 84101,
+      "sdkAfterFirstTokenElapsedMs": 49210,
+      "sdkModelElapsedMs": 133311,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "073acbdaaff7fc699f109a1693951dff8e0aa8f87ea69343290b8636da2ac045",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 11881
+    },
+    {
+      "roundIndex": 1,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-2",
+      "sdkInputTokens": 46416,
+      "sdkPromptTokensCount": 46416,
+      "sdkPredictedTokensCount": 178,
+      "sdkFirstTokenWaitMs": 81766,
+      "sdkAfterFirstTokenElapsedMs": 4277,
+      "sdkModelElapsedMs": 86043,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "3730d1c911839e12d15f6f87025091d20a3cfda7c8d582ce02e4a04a0f4de342",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 19296
+    },
+    {
+      "roundIndex": 2,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-3",
+      "sdkInputTokens": 49960,
+      "sdkPromptTokensCount": 49960,
+      "sdkPredictedTokensCount": 122,
+      "sdkFirstTokenWaitMs": 90324,
+      "sdkAfterFirstTokenElapsedMs": 2917,
+      "sdkModelElapsedMs": 93241,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "3ab6e2c4c3a6b9a4ef96fd75b70421f719881208415a07a15d08d06ced1594dd",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 15147
+    },
+    {
+      "roundIndex": 3,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-4",
+      "sdkInputTokens": 53060,
+      "sdkPromptTokensCount": 53060,
+      "sdkPredictedTokensCount": 2636,
+      "sdkFirstTokenWaitMs": 100459,
+      "sdkAfterFirstTokenElapsedMs": 70178,
+      "sdkModelElapsedMs": 170637,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "20748b9ebe6f538080d433d537d7a23bb301e6648d0813adf384149d8e417522",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 14698
+    },
+    {
+      "roundIndex": 4,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-5",
+      "sdkInputTokens": 51037,
+      "sdkPromptTokensCount": 51037,
+      "sdkPredictedTokensCount": 516,
+      "sdkFirstTokenWaitMs": 85027,
+      "sdkAfterFirstTokenElapsedMs": 11306,
+      "sdkModelElapsedMs": 96333,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "d4fdd7c4c61c807a0703c03e08c15bbd233f0e42477b5f56a729872acd8aa1ee",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": true,
+      "mandatoryFloorTokens": 17156
+    },
+    {
+      "roundIndex": 5,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-6",
+      "sdkInputTokens": 53794,
+      "sdkPromptTokensCount": 53794,
+      "sdkPredictedTokensCount": 370,
+      "sdkFirstTokenWaitMs": 91076,
+      "sdkAfterFirstTokenElapsedMs": 7624,
+      "sdkModelElapsedMs": 98700,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "f869659aee4dda23d7cea42bd45bfbe945ea5a30d902aaf48cdd5ae4b02c6f59",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 14113
+    },
+    {
+      "roundIndex": 6,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-7",
+      "sdkInputTokens": 55665,
+      "sdkPromptTokensCount": 55665,
+      "sdkPredictedTokensCount": 314,
+      "sdkFirstTokenWaitMs": 94340,
+      "sdkAfterFirstTokenElapsedMs": 7288,
+      "sdkModelElapsedMs": 101628,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "ee3a3bccbd9976b16a38dafd38a6550876e92353476a67125b3c152e074e45c4",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": true,
+      "mandatoryFloorTokens": 14591
+    },
+    {
+      "roundIndex": 7,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-8",
+      "sdkInputTokens": 39959,
+      "sdkPromptTokensCount": 39959,
+      "sdkPredictedTokensCount": 512,
+      "sdkFirstTokenWaitMs": 74734,
+      "sdkAfterFirstTokenElapsedMs": 10533,
+      "sdkModelElapsedMs": 85267,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "53b81edf4f9fb25fff2d6ba912a338b779d8edc6e674f71c15e8bc5699427fe0",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": true,
+      "mandatoryFloorTokens": 14765
+    },
+    {
+      "roundIndex": 8,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-9",
+      "sdkInputTokens": 42231,
+      "sdkPromptTokensCount": 42231,
+      "sdkPredictedTokensCount": 145,
+      "sdkFirstTokenWaitMs": 81238,
+      "sdkAfterFirstTokenElapsedMs": 2819,
+      "sdkModelElapsedMs": 84057,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "15dcf35580e1f6c77503d3e0f7b52c4aa9790e9e6bb62c5dce2120ff90d92e8d",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 14515
+    },
+    {
+      "roundIndex": 9,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-10",
+      "sdkInputTokens": 44885,
+      "sdkPromptTokensCount": 44885,
+      "sdkPredictedTokensCount": 4805,
+      "sdkFirstTokenWaitMs": 86152,
+      "sdkAfterFirstTokenElapsedMs": 116012,
+      "sdkModelElapsedMs": 202164,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "40aa65f3a42bc8d98b6e8c9e055accaef293227aa99eb7a42576cda1d9014c58",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 14614
+    },
+    {
+      "roundIndex": 10,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-11",
+      "sdkInputTokens": 49927,
+      "sdkPromptTokensCount": 49927,
+      "sdkPredictedTokensCount": 1875,
+      "sdkFirstTokenWaitMs": 96348,
+      "sdkAfterFirstTokenElapsedMs": 32923,
+      "sdkModelElapsedMs": 129271,
+      "finishReason": "toolCalls",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "ead6460c7d76cc766fbf3be88a75037b3f5a03aa62431ba10af45e2a86d59f7e",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 17341
+    },
+    {
+      "roundIndex": 11,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-12",
+      "sdkInputTokens": 52020,
+      "sdkPromptTokensCount": 52020,
+      "sdkPredictedTokensCount": 1912,
+      "sdkFirstTokenWaitMs": 102661,
+      "sdkAfterFirstTokenElapsedMs": 49470,
+      "sdkModelElapsedMs": 152131,
+      "finishReason": "eosFound",
+      "callPurpose": "research",
+      "toolSchemaTokens": 6335,
+      "toolSchemaChars": 27300,
+      "toolSchemaFingerprint": "60e02108ace3430b9e877b140933d7d06785cb16d34a3591225a897421fad8c0",
+      "templatedInputFingerprint": "e2c258e832f2c1fa8baf8784888701368d7cbc088c8c93586c0a8477aca6cb61",
+      "actualCachedPrefixTokens": "unknown",
+      "inputAvailabilityMode": "observe",
+      "availabilityMetadataChars": 0,
+      "availabilityMetadataTokens": 0,
+      "assistantNoteState": "absent",
+      "projectionApplied": false,
+      "mandatoryFloorTokens": 14375
+    }
+  ],
+  "inferredBackendRoundJoins": [
+    {
+      "backendTaskId": 4759,
+      "sdkRoundIndex": 2,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-3",
+      "sdkInputTokens": 49960,
+      "backendProcessedPromptTokens": 40991,
+      "observedCounterGap": 8969,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 4816,
+      "sdkRoundIndex": 3,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-4",
+      "sdkInputTokens": 53060,
+      "backendProcessedPromptTokens": 44091,
+      "observedCounterGap": 8969,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 5827,
+      "sdkRoundIndex": 4,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-5",
+      "sdkInputTokens": 51037,
+      "backendProcessedPromptTokens": 42068,
+      "observedCounterGap": 8969,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 6019,
+      "sdkRoundIndex": 5,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-6",
+      "sdkInputTokens": 53794,
+      "backendProcessedPromptTokens": 44825,
+      "observedCounterGap": 8969,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 6154,
+      "sdkRoundIndex": 6,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-7",
+      "sdkInputTokens": 55665,
+      "backendProcessedPromptTokens": 46696,
+      "observedCounterGap": 8969,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 6281,
+      "sdkRoundIndex": 7,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-8",
+      "sdkInputTokens": 39959,
+      "backendProcessedPromptTokens": 39959,
+      "observedCounterGap": 0,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 6474,
+      "sdkRoundIndex": 8,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-9",
+      "sdkInputTokens": 42231,
+      "backendProcessedPromptTokens": 42231,
+      "observedCounterGap": 0,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 6539,
+      "sdkRoundIndex": 9,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-10",
+      "sdkInputTokens": 44885,
+      "backendProcessedPromptTokens": 44885,
+      "observedCounterGap": 0,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 8278,
+      "sdkRoundIndex": 10,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-11",
+      "sdkInputTokens": 49927,
+      "backendProcessedPromptTokens": 49927,
+      "observedCounterGap": 0,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    },
+    {
+      "backendTaskId": 8823,
+      "sdkRoundIndex": 11,
+      "modelInputId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:prediction-12",
+      "sdkInputTokens": 52020,
+      "backendProcessedPromptTokens": 52020,
+      "observedCounterGap": 0,
+      "actualCachedPrefixTokens": "unknown",
+      "joinStatus": "inferred_from_order_unique_output_token_counts_and_nearby_durations_not_shared_request_id"
+    }
+  ],
+  "analysis": {
+    "confirmed": [
+      "Ten completed backend tasks spent about 74.3% of reported model time on prompt evaluation",
+      "Large prompt evaluation repeats even for 122- or 145-token responses",
+      "Last five joined backend prompt counters equal full final SDK input counters; each is preceded by a prompt cache eviction warning",
+      "This execution used availability observe mode with zero injected availability metadata, stable tool schema, absent assistant note content, and zero summary-model calls"
+    ],
+    "candidatesNeedingControlledReplay": [
+      "Changing assistant data before the latest user message can change a prefix before the current tool loop",
+      "Projection/history/template changes may shorten reusable prefix",
+      "Hybrid/recurrent checkpoint and prompt-cache entry eviction behavior may limit reuse even with a long common prefix"
+    ],
+    "notEstablished": [
+      "Exact cache hit percentage",
+      "Prompt cache eviction as the sole cause or proof of GPU OOM",
+      "Any speed or quality benefit from different KV quantization",
+      "Availability inject metadata as a cause in this observe-mode execution",
+      "Current runtime affected by a particular upstream issue or fixed by an upgrade"
+    ],
+    "qualityGate": [
+      "Final report withdrew nonexistent engine Health/Die premise after user correction",
+      "Final report retained false universal premise that ordinary server-side Client RPC calls run only on server, and proposed unnecessary low-level/multicast workaround",
+      "Client RPC execution must be judged with specifiers, replication, owning connection, call site and local/remote cases; actual project delivery still needs runtime evidence",
+      "Shared empty RepNotify and synchronized state copies must not be called functional defects based only on names or number of copies; check callback consumers and writers"
+    ]
+  },
+  "sourceLocations": [
+    {
+      "path": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+      "lines": "215-274",
+      "observation": "Changing data inserted before latest user message; rendered call refs can exist even when assistant note is absent"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/context-manager.ts",
+      "lines": "365-404",
+      "observation": "Availability inject path differs from observed zero-metadata observe mode"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/round-loop.ts",
+      "lines": "146-159,279-282",
+      "observation": "First-token/fragment callback proxy used as promptProcessingMs"
+    },
+    {
+      "path": "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+      "lines": "738-746,937-964",
+      "observation": "Round and cumulative timing/usage observations already exist"
+    },
+    {
+      "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+      "lines": "5412-5614",
+      "observation": "Installed UE 5.7 source GetFunctionCallspace distinguishes owning remote, local player and absent connection cases; remote return at line 5610"
+    },
+    {
+      "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+      "lines": "3484-3487",
+      "observation": "InternalTakePointDamage returns Damage; no generic Actor Health or Die code here"
+    }
+  ],
+  "officialReferences": [
+    "https://lmstudio.ai/docs/typescript/api-reference/llm-load-model-config",
+    "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+    "https://github.com/ggml-org/llama.cpp/issues/20643",
+    "https://github.com/ggml-org/llama.cpp/issues/21831",
+    "https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-procedure-calls-in-unreal-engine?application_version=5.7",
+    "https://dev.epicgames.com/documentation/en-us/unreal-engine/replicate-actor-properties-in-unreal-engine?application_version=5.7"
+  ],
+  "limitations": [
+    "Raw conversation and prompts remain local and are not published in this derived artifact",
+    "Only ten of twelve model calls have backend timing summaries in the attachment",
+    "No shared SDK/backend request identity; joins are explicitly inferred",
+    "SDK final chat measurement is not proof of backend cached state",
+    "Loaded/installed plugin identity matches, so stale plugin installation is not the supported explanation",
+    "Historical hardware counters, cache capacity and effective KV allocation are not in these logs",
+    "One run without baseline/candidate A/B cannot prove causal speed improvements",
+    "Summed printed backend total is 0.01 ms below summed printed prompt plus generation, consistent with per-line rounding"
+  ]
+}

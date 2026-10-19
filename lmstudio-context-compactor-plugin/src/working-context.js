@@ -14,6 +14,7 @@ const { exchangeIndex } = require("./tool-exchange-index.js");
 const { retainInterruptedCalls } = require("./interrupted-calls.js");
 const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
+const { resultSemantics } = require("./tool-result-semantics.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -33,6 +34,12 @@ function deserialize(messages) { const chat = Chat.empty(); for (const m of mess
 const identityFields = ["repositoryIdentity", "workspaceIdentity", "projectIdentity", "canonicalProjectRoot",
   "canonicalProject", "path", "action", "comparison", "base", "head", "currentHead", "blobOid",
   "sourceMode", "sourceIdentity", "observedEngineIdentity", "evidenceSource"];
+
+function factsWithoutCoverage(facts) {
+  if (!facts || typeof facts !== "object" || facts.coverage === undefined) return facts;
+  const { coverage: _coverageAtRead, ...rest } = facts;
+  return rest;
+}
 
 function sourceIdentity(payload) {
   const identity = {};
@@ -77,6 +84,43 @@ function gitBodyView(payload) {
 
 function rawExposureKey(request, result, originalEnvelope) {
   return hash([request.name, request.arguments || {}, String(result.toolCallId || ""), originalEnvelope]);
+}
+
+// The working set being edited (Claude Code re-attaches the files it modified
+// most recently after compaction): the latest successful read of each file that
+// a successful mutation in this history touched stays verbatim, newest first,
+// within a small budget, so the next exact-oldText edit needs no re-read.
+const PINNED_MAX_FILES = 3;
+
+function pinnedWorkingSet(messages, index, metadata = {}) {
+  const budget = Math.max(0, Number(metadata.pinnedWorkingSetMaxChars ?? 6144));
+  const edited = new Set(), reads = new Map();
+  let sequence = 0;
+  const turnStart = messages.findLastIndex(message => message.getRole() === "user");
+  messages.forEach((message, messageIndex) => message.getToolCallResults().forEach((result, resultIndex) => {
+    if (messageIndex <= turnStart) return;
+    const request = index.matches.get(`${messageIndex}:${resultIndex}`);
+    if (!request) return;
+    const envelope = serializedResultContent(result.content);
+    const parsed = decodeToolResultRecord(envelope).value;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.ok === false) return;
+    const project = parsed.canonicalProject || parsed.activeProject || request.arguments?.project || "";
+    const paths = [parsed.path, ...(Array.isArray(parsed.files) ? parsed.files.map(file => file?.path) : [])]
+      .filter(value => typeof value === "string" && value)
+      .map(value => `${project}|${value.replace(/^project:\/\//, "").replace(/\\/g, "/")}`);
+    const effect = resultSemantics(parsed, parsed.operation ? "mcp/unreal-agent" : "mcp/unity-tools").effect;
+    if (["applied", "no_change"].includes(effect)) paths.forEach(value => edited.add(value));
+    else if (typeof parsed.content === "string" && paths[0] && Number.isInteger(parsed.startLine)
+      && Number.isInteger(parsed.endLine) && parsed.endLine - parsed.startLine < 120)
+      reads.set(paths[0], { key: `${messageIndex}:${resultIndex}`, size: envelope.length, sequence: sequence++ });
+  }));
+  const pinned = new Set();
+  let used = 0;
+  for (const [file, read] of [...reads].sort((a, b) => b[1].sequence - a[1].sequence)) {
+    if ((edited.size && !edited.has(file)) || pinned.size >= PINNED_MAX_FILES || used + read.size > budget) continue;
+    pinned.add(read.key); used += read.size;
+  }
+  return pinned;
 }
 
 function serializedResultContent(content) {
@@ -418,6 +462,7 @@ class WorkingContext {
     const projected = Chat.empty();
     let changed = false, archiveFailed = false, preservedFirstConsumer = false;
     const messages = history.getMessagesArray();
+    const pinned = pinnedWorkingSet(messages, index, metadata);
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
       const message = messages[messageIndex];
       const results = message.getToolCallResults();
@@ -425,6 +470,7 @@ class WorkingContext {
       const copies = results.map((result, resultIndex) => {
         const request = index.matches.get(`${messageIndex}:${resultIndex}`);
         if (!request || !isObservation(request)) return result;
+        if (pinned.has(`${messageIndex}:${resultIndex}`)) return result;
         const originalEnvelope = serializedResultContent(result.content);
         const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
@@ -461,7 +507,11 @@ class WorkingContext {
           sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
           sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
           provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
-          sourceFacts: facts, sourceRangeUnit: record.metadata.originRangeUnit,
+          // The coverage inside sourceFacts described the source at the time it was read; it
+          // says nothing about how much of the body this projection still carries.
+          sourceFacts: factsWithoutCoverage(facts),
+          ...(facts.coverage !== undefined ? { sourceCoverageAtRead: facts.coverage } : {}),
+          projectionCoverage: "partial", sourceRangeUnit: record.metadata.originRangeUnit,
           sourceRange: record.metadata.originRanges
             || (parsed.pageStart !== undefined || parsed.pageEnd !== undefined ? [parsed.pageStart, parsed.pageEnd] : null),
           sourceCollectionComplete: parsed.sourceResultComplete ?? "unknown",
@@ -509,6 +559,15 @@ class WorkingContext {
           projection.bodyComplete = projection.bodyOmittedChars === 0;
           projection.excerpt = boundedBody.slice(0, projectedEnd);
         }
+        const announcePartialBody = () => {
+          const total = bodyFirst ? boundedBody.length : semanticBody.length;
+          const shown = Math.min(projectedEnd, total);
+          projection.projectionCoverage = shown < total ? "partial" : "complete";
+          if (shown < total) {
+            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`;
+          } else delete projection.notice;
+        };
+        announcePartialBody();
         let projectedContent = JSON.stringify(projection);
         while (projectedContent.length >= originalEnvelope.length && projectedEnd > 0) {
           projectedEnd = Math.max(0, projectedEnd
@@ -525,6 +584,7 @@ class WorkingContext {
             projection.bodyComplete = projection.bodyOmittedChars === 0;
             projection.excerpt = boundedBody.slice(0, projectedEnd);
           }
+          announcePartialBody();
           projectedContent = JSON.stringify(projection);
         }
         if (projectedContent.length >= originalEnvelope.length) return result;

@@ -19,6 +19,26 @@ function fixture(t, edit = true) {
   const runtime = createRuntime({ UNITY_PROJECT_ROOT: root, ALLOW_WRITE: edit ? "1" : "0" });
   return { root, ...runtime, put: (p, value) => fs.writeFileSync(path.join(root, p), value), get: p => fs.readFileSync(path.join(root, p), "utf8") };
 }
+test("default file and transport budgets both admit a 40 KiB observation", async t => {
+  const f = fixture(t);
+  f.put("Assets/Large.cs", "x".repeat(40000));
+  const observed = await f.call("read_file", { path: "Assets/Large.cs", limit: 1 });
+  assert.equal(observed.errorCode, undefined);
+  assert.equal(observed.returnedLineCount, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(observed)) > 32768);
+  assert.ok(Buffer.byteLength(JSON.stringify(observed)) <= 65536);
+});
+
+test("shared file and lock owners load without an Unreal adapter installation", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-shared-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const shared = path.join(root, "shared-tool-core");
+  fs.cpSync(path.resolve(__dirname, "../../shared-tool-core"), shared, { recursive: true });
+  for (const name of ["files", "git", "workspace", "write-locks"]) {
+    const script = `require(${JSON.stringify(path.join(shared, name))})`;
+    execFileSync(process.execPath, ["-e", script], { cwd: root, windowsHide: true });
+  }
+});
 test("offline project detection and catalog does not expose Unreal or autonomous tools", async t => {
   const f = fixture(t);
   const status = await f.call("unity_status");
@@ -166,7 +186,7 @@ test("read_file reports exact ranges and reads Unity package and project setting
   const f = fixture(t);
   f.put("Assets/Code.cs", "one\ntwo\nthree\nfour\nfive");
 
-  const middle = await f.call("read_file", { path: "Assets/Code.cs", startLine: 2, limit: 2 });
+  const middle = await f.call("read_file", { path: "Assets/Code.cs", startLine: 2, limit: 2, lineNumbers: false });
   assert.equal(middle.text, "two\nthree");
   assert.equal(middle.startLine, 2);
   assert.equal(middle.endLine, 3);
@@ -174,9 +194,12 @@ test("read_file reports exact ranges and reads Unity package and project setting
   assert.equal(middle.totalLines, 5);
   assert.equal(middle.hasMore, true);
   assert.equal(middle.nextStartLine, 4);
-  assert.equal(middle.truncated, true);
+  // The requested lines 2-3 came back whole; the file merely continues.
+  assert.equal(middle.truncated, false);
+  assert.equal(middle.moreLinesInFile, true);
+  assert.deepEqual(middle.suggestion, { tool: "read_file", args: { path: "Assets/Code.cs", startLine: 4, limit: 2, lineNumbers: false } });
 
-  const tail = await f.call("read_file", { path: "Assets/Code.cs", startLine: 4, limit: 2 });
+  const tail = await f.call("read_file", { path: "Assets/Code.cs", startLine: 4, limit: 2, lineNumbers: false });
   assert.equal(tail.text, "four\nfive");
   assert.equal(tail.endLine, 5);
   assert.equal(tail.returnedLineCount, 2);
@@ -304,7 +327,7 @@ test("read_file fits complete line pages including the final workspace envelope"
   f.put('Assets/paged.txt',lines.join('\n'));
   let startLine=1, pages=0, observed=[], digest;
   do {
-    const value=await f.call('read_file',{path:'Assets/paged.txt',startLine,limit:80,byteBudget:2048});
+    const value=await f.call('read_file',{path:'Assets/paged.txt',startLine,limit:80,byteBudget:2048,lineNumbers:false});
     assert.equal(value.errorCode,undefined,JSON.stringify(value));
     assert.ok(Buffer.byteLength(JSON.stringify(value))<=2048);
     assert.equal(value.kind,'workspace_file_observation');
@@ -407,4 +430,33 @@ test("real MCP stdio initialize/list/call preserves structured offline evidence"
   assert(search.structuredContent.items.some(item => item.path === "Assets/Listed.cs"));
   const rejected = await client.callTool({ name: "create_file", arguments: { path: "Assets/Denied.cs", mustNotExist: true, content: "class Denied {}" } });
   assert.equal(rejected.isError, true); assert.equal(rejected.structuredContent.errorCode, "edit_disabled");
+});
+
+test("read_file numbers lines by default without changing the hash; numbered oldText is refused with a clear code", async t => {
+  const f = fixture(t);
+  const body = "alpha\nbeta\ngamma\ndelta";
+  f.put("Assets/Lines.cs", body);
+  const sha = require("node:crypto").createHash("sha256").update(body).digest("hex");
+  const numbered = await f.call("read_file", { path: "Assets/Lines.cs", startLine: 2, limit: 2 });
+  assert.equal(numbered.text, "2\tbeta\n3\tgamma");
+  assert.equal(numbered.lineNumbers, true);
+  assert.equal(numbered.lineNumbersAreDisplayOnly, true);
+  assert.equal(numbered.hash, sha);
+  const raw = await f.call("read_file", { path: "Assets/Lines.cs", startLine: 2, limit: 2, lineNumbers: false });
+  assert.equal(raw.text, "beta\ngamma");
+  assert.equal(raw.hash, sha);
+  const refused = await f.call("patch_file", { path: "Assets/Lines.cs", receipt: numbered.receipt,
+    edits: [{ oldText: "2\tbeta", newText: "BETA" }] });
+  assert.equal(refused.errorCode, "LINE_NUMBER_PREFIX_IN_PATCH");
+  assert.match(refused.message, /remove the numeric prefix/);
+  assert.equal(f.get("Assets/Lines.cs"), body);
+  const applied = await f.call("patch_file", { path: "Assets/Lines.cs", receipt: numbered.receipt,
+    edits: [{ oldText: "beta", newText: "BETA" }] });
+  assert.equal(applied.status, "applied");
+  assert.equal(f.get("Assets/Lines.cs"), "alpha\nBETA\ngamma\ndelta");
+  f.put("Assets/Table.txt", "7\talpha\n8\tbeta");
+  const table = await f.call("read_file", { path: "Assets/Table.txt", lineNumbers: false });
+  const tableEdit = await f.call("patch_file", { path: "Assets/Table.txt", receipt: table.receipt,
+    edits: [{ oldText: "7\talpha", newText: "7\tgamma" }] });
+  assert.equal(tableEdit.status, "applied");
 });

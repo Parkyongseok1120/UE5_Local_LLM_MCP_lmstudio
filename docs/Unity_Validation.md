@@ -1,8 +1,18 @@
 # Unity v1.4.0 beta 1 — validation record
 
-Date: 2026-09-15. Implementation target: Unity 2022.3+ common APIs. Actual Editor available for execution: Unity 6000.3.14f1, Intel macOS. Other Editor versions and Windows/Linux are not integration-tested.
+Initial record: 2026-09-15, Unity 6000.3.14f1 on Intel macOS. Implementation target: Unity 2022.3+ common APIs. Later checkpoints below identify their own platform and tested scope; the 2026-10-18 checkpoint adds Windows integration coverage. Other Editor versions and Linux remain unverified.
 
-## Latest: installer fixes, Prefab, approvals and Test Framework
+## 2026-10-18 resumption validation (Windows)
+
+The interrupted implementation was completed on the existing checkout without commits. Unity 6000.3.14f1 in an isolated generated project passed Bridge smoke (17 checks), RPC/reload (12 checks), and Test Framework list/run/cancel/result handling (9 checks). RPC checks include retained pending approvals with the original expiry, actual `reloading` discovery, compiler diagnostics, and stable correlation of an earlier compile operation after a later compilation. Runtime reports are in `artifacts/unity-ux-20261018/real-unity-check.json`.
+
+New offline tools include `unity_static_validate` (bounded lexical warnings only), paged file search/list responses, filename-only search, persisted symbol lookup and source reads. The Unity catalog declares tool effects and generates the compactor observation profile (`npm run unitycontract:check`). `config/unity_contracts.json` contains only the two facts supported by the installed CoreModule XML summaries; ordering, frame timing and additional lifecycle semantics were not inferred from incomplete documentation.
+
+Pending approval entries survive domain reload in the same Editor session. Previously approved entries return to pending for renewed review; exact arguments, target-state checks, original expiry and one-use consumption remain enforced. Temporary/runtime targets whose references expire still require a fresh request.
+
+The test-run schema requires bounds; omitted bounds in direct calls use `maxDurationMs=60000`, `maxTests=32` and disclose `defaultedBounds`. This does not broaden test selection or bypass server/Editor permissions. Install flags `--unity-allow-write` and `--unity-allow-commands` remain opt-in; Editor menu permissions are separate. After updating, reinstall and reload the MCP and compactor. Model recovery quality and a physical PC reboot were not tested by these deterministic suites.
+
+## Earlier: installer fixes, Prefab, approvals and Test Framework
 
 These requested primitives are implemented, not registration-only stubs. The older checkpoint records below describe their then-unavailable state, not the current capability table.
 

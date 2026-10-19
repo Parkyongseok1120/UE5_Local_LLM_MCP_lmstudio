@@ -220,6 +220,7 @@ export function composeModelHistory(
   enableNoteProtocol = Boolean(note),
   referenceData?: string,
   runtimeFacts: Array<string> = [],
+  shownBlocks?: ShownDataBlocks,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -234,6 +235,8 @@ export function composeModelHistory(
     return { history, overhead: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
+  // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
+  const refsText = enableNoteProtocol ? modelNotes.renderAvailableRefs(messages) : "";
   const instruction = config.reviewProgress ? modelNotes.NOTE_INSTRUCTION.replace(
     "No other keys. refs may contain",
     "The optional reviewClaims array uses [{path, sha256, reviewScope, statement, refs}]; reviewClaims require an observed file hash and tool-call refs and are assistant claims, never verified completion. No other keys. refs may contain") : modelNotes.NOTE_INSTRUCTION;
@@ -241,7 +244,10 @@ export function composeModelHistory(
     && config.maxCheckpointChars >= 2000 + instruction.length;
   const canIncludeNote = canIncludeInstruction
     && config.maxCheckpointChars >= 2000 + instruction.length + noteText.length;
-  const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0) + taskData.length;
+  const canIncludeRefs = canIncludeInstruction && Boolean(refsText)
+    && config.maxCheckpointChars >= 2000 + instruction.length + (canIncludeNote ? noteText.length : 0) + refsText.length;
+  const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0)
+    + (canIncludeRefs ? refsText.length : 0) + taskData.length;
   const composed = Chat.empty();
   const combinedSystemText = [
     ...messages.filter((message) => message.isSystemPrompt())
@@ -251,18 +257,78 @@ export function composeModelHistory(
   ].join("\n\n");
   if (combinedSystemText) composed.append("system", combinedSystemText);
   // Data that changes between rounds stays in assistant data slots (never in a
-  // user or system message), placed immediately before the latest user
-  // message: a note or task-progress update then leaves the cached prefix of
-  // earlier turns intact. Model input only; never persisted.
-  const runtimeParts = [...(canIncludeNote && noteText ? [noteText] : []), ...(referenceData ? [referenceData] : []),
+  // user or system message), placed before the latest user message or, once the
+  // current turn has complete tool exchanges, before the newest one. It is
+  // never last: chat templates render a trailing assistant message as an
+  // unfinished answer the model would continue. With shownBlocks (one execution's
+  // blocks already sent, keyed by their anchor) every earlier block stays where
+  // it was and only the parts not yet shown are added at the newest anchor, so
+  // each input extends the previous one: measured on a hybrid-attention model,
+  // moving or rewriting earlier data made the server reprocess every exchange.
+  // Without shownBlocks the full current data sits at the newest anchor.
+  // Model input only; never persisted.
+  const runtimeParts = [...(canIncludeNote && noteText ? [noteText] : []), ...(canIncludeRefs ? [refsText] : []),
+    ...(referenceData ? [referenceData] : []),
     ...(taskData ? [taskData] : []), ...facts];
   const latestUser = messages.reduce((found, message, index) => message.isUserMessage() ? index : found, -1);
-  if (latestUser < 0) for (const part of runtimeParts) composed.append("assistant", part);
+  const anchors = new Map<number, string>();
   messages.forEach((message, index) => {
-    if (index === latestUser) for (const part of runtimeParts) composed.append("assistant", part);
+    if (index === latestUser) anchors.set(index, "user");
+    else if (latestUser >= 0 && index > latestUser && message.getToolCallRequests().length)
+      anchors.set(index, `request:${String(message.getToolCallRequests()[0].id || index)}`);
+  });
+  const slot = runtimeSlotIndex(messages, latestUser);
+  const slotAnchor = anchors.get(slot);
+  const blocks = new Map<number, readonly string[]>();
+  let dataBlock: { anchor: string; parts: string[] } | undefined;
+  if (shownBlocks && slotAnchor) {
+    for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
+    if (!blocks.has(slot)) {
+      const parts = unshownParts(runtimeParts, [...blocks.values()].flat());
+      if (parts.length) { blocks.set(slot, parts); dataBlock = { anchor: slotAnchor, parts }; }
+    }
+  } else blocks.set(slot, runtimeParts);
+  if (slot < 0) for (const part of runtimeParts) composed.append("assistant", part);
+  messages.forEach((message, index) => {
+    for (const part of blocks.get(index) || []) composed.append("assistant", part);
     if (!message.isSystemPrompt()) composed.append(message);
   });
-  return { history: composed, overhead };
+  return { history: composed, overhead, ...(dataBlock ? { dataBlock } : {}) };
+}
+
+/** An execution's data blocks already sent to the model, keyed by anchor. */
+export type ShownDataBlocks = ReadonlyMap<string, readonly string[]>;
+
+/** Parts not already visible in an earlier block. A refs part keeps its header
+ * and only the rows not shown yet; other parts are kept unless shown verbatim. */
+function unshownParts(parts: ReadonlyArray<string>, shown: ReadonlyArray<string>) {
+  const shownLines = new Set(shown.flatMap(part => part.split("\n")));
+  return parts.flatMap(part => {
+    if (!part.startsWith("[Available tool-call refs]")) return shown.includes(part) ? [] : [part];
+    const [header, ...rows] = part.split("\n");
+    const fresh = rows.filter(row => !shownLines.has(row));
+    return fresh.length ? [[header, ...fresh].join("\n")] : [];
+  });
+}
+
+/** Where the per-round data slot goes: before the newest tool-request message
+ * of the latest user turn when every request in that turn has its result, so
+ * no request/result pair is split and the history still ends with results;
+ * otherwise the latest user message (or -1 before any user message). */
+function runtimeSlotIndex(messages: ReadonlyArray<ChatMessage>, latestUser: number) {
+  if (latestUser < 0) return -1;
+  const requested = new Set<string>(), answered = new Set<string>();
+  let newestRequest = -1;
+  messages.forEach((message, index) => {
+    if (index <= latestUser || message.isSystemPrompt()) return;
+    const requests = message.getToolCallRequests();
+    if (requests.length) newestRequest = index;
+    for (const request of requests) requested.add(String(request.id || ""));
+    for (const result of message.getToolCallResults()) answered.add(String(result.toolCallId || ""));
+  });
+  const complete = newestRequest >= 0 && [...requested].every(id => id && answered.has(id))
+    && messages.slice(newestRequest + 1).some(message => message.getToolCallResults().length > 0);
+  return complete ? newestRequest : latestUser;
 }
 
 export function modelHistoryMessage(message: ChatMessage): ChatMessage {
@@ -285,6 +351,8 @@ export type InputAssemblyOptions = {
   /** Execution-scoped exact-measurement cache owned by ContextManager. */
   measurementCache?: Map<string, ContextMeasurement>;
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
+  /** Execution-scoped data blocks already sent; read only here. */
+  shownDataBlocks?: ShownDataBlocks;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
@@ -322,7 +390,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.() || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -376,7 +444,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -389,7 +457,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -428,21 +496,29 @@ export class ContextManager {
   }
   /** Add optional material only after the existing evidence window is ready.
    * Admission reuses the exact assembler and shared broker; it never compacts
-   * evidence, changes output limits, or creates a second execution gate. */
+   * evidence, changes output limits, or creates a second execution gate.
+   * The material is ephemeral (never in the evidence history), so a selection
+   * backed by an explicit topic may use the space up to high water, where
+   * compaction of that evidence would begin; generic material keeps low water. */
   async addOptionalReferences(base: AssembledInput,
     candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string; referenceData?: string; dataIds?: readonly string[] }>,
     assemble: (instruction: string, referenceData?: string) => Promise<AssembledInput>,
-    options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void }) {
+    options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void;
+      admissionWater?: "low" | "high" }) {
     const requestedIds = candidates[0]?.ids || [];
     const requestedDataIds = candidates[0]?.dataIds || [];
+    const admissionWater = options.admissionWater === "high" ? "high" : "low";
+    const ceiling = (water: ReturnType<BudgetBroker["watermarks"]>) =>
+      admissionWater === "high" ? water.effectiveHighWaterTokens : water.effectiveLowWaterTokens;
     let reason = "no_candidates";
     let attempts = 0;
-    const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = []) => ({
-      assembled,
+    const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = [],
+      selectedInstruction?: string) => ({
+      assembled, selectedInstruction,
       telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
         requestedDataIds, selectedDataIds, omittedDataIds: requestedDataIds.filter(id => !selectedDataIds.includes(id)),
         reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
-        finalInputTokens: assembled.measurement.inputTokens },
+        finalInputTokens: assembled.measurement.inputTokens, admissionWater },
     });
     if (!candidates.length) return result(base);
     if (!Number.isFinite(options.maxAddedTokens) || options.maxAddedTokens <= 0) {
@@ -454,7 +530,7 @@ export class ContextManager {
       return result(base);
     }
     const baselineWater = this.broker.watermarks(base.measurement, 0, options.hasReadTools, options.minimumReadTokens);
-    if (base.measurement.inputTokens >= baselineWater.effectiveLowWaterTokens) {
+    if (base.measurement.inputTokens >= ceiling(baselineWater)) {
       reason = "existing_input_priority";
       return result(base);
     }
@@ -478,12 +554,12 @@ export class ContextManager {
       const addedTokens = Math.max(0, measured.inputTokens - base.measurement.inputTokens);
       const water = this.broker.watermarks(measured, 0, options.hasReadTools, options.minimumReadTokens);
       if (addedTokens > options.maxAddedTokens || measured.remainingTokens < 0
-        || measured.inputTokens > water.effectiveLowWaterTokens || !water.nextActionFit || water.preDispatchCompaction) {
+        || measured.inputTokens > ceiling(water) || !water.nextActionFit || water.preDispatchCompaction) {
         reason = "budget_omitted";
         continue;
       }
       reason = "included";
-      return result(input, candidate.ids, addedTokens, candidate.dataIds);
+      return result(input, candidate.ids, addedTokens, candidate.dataIds, candidate.instruction);
     }
     return result(base);
   }

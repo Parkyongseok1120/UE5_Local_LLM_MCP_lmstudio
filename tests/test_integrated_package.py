@@ -167,7 +167,7 @@ def test_builder_supports_package_import_used_by_release_ci() -> None:
 
 
 def _node_relative_require_closure(*entries: Path) -> set[str]:
-    pattern = re.compile(r'''require\(["'](\./[^"']+)["']\)''')
+    pattern = re.compile(r'''require\(["'](\.{1,2}/[^"']+)["']\)''')
     pending = [entry.resolve() for entry in entries]
     seen: set[Path] = set()
     while pending:
@@ -852,13 +852,15 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
         "unity_install.py",
     }
     packaged_installer_manifest = json.loads((output / "installer" / "manifest.json").read_text(encoding="utf-8"))
-    assert packaged_installer_manifest["productVersion"] == "1.4.0"
-    assert packaged_installer_manifest["version"] == "2.1.26"
+    source_installer_manifest = json.loads((ROOT / "installer" / "manifest.json").read_text(encoding="utf-8"))
+    assert packaged_installer_manifest == source_installer_manifest
     assert packaged_installer_manifest["portablePackage"]["releaseReady"] is True
+    release_notes = f"docs/Release_Notes_{source_installer_manifest['productVersion'].replace('.', '_')}.md"
+    assert (output / release_notes).is_file()
     assert (output / "docs" / "Release_Notes_1_4_0.md").is_file()
     assert (output / "docs" / "Release_Notes_1_4_0_RC2.md").is_file()
     assert (output / "docs" / "Release_Notes_1_4_0_RC3.md").is_file()
-    assert "docs/Release_Notes_1_4_0.md" in (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
+    assert release_notes in (output / "PORTABLE-INSTALL.md").read_text(encoding="utf-8")
     assert (output / "INSTALL.bat").read_bytes() == (ROOT / "INSTALL.bat").read_bytes()
     assert (output / "UPDATE.bat").read_bytes() == (ROOT / "UPDATE.bat").read_bytes()
     source_launcher = (ROOT / "install.sh").read_bytes()

@@ -21,6 +21,16 @@ const args = (mode, category, extra = {}) => ({ action: "run", mode, categories:
 async function run(mode, category, extra) { await idle(); const a = args(mode, category, extra); await call("unity_tests", a); return waitRun(a.operationId); }
 async function main() {
   await idle(); assert.equal((await call("unity_tests", { action: "status" })).availability, "active");
+  let listed;
+  for (let n=0;n<100;n++) { listed=await call("unity_tests",{action:"list",mode:"EditMode",limit:200}); if(listed.status!=="pending") break; await sleep(100); }
+  assert.equal(listed.discovery,"complete"); assert.ok(listed.items.length>0); assert.ok(listed.items.every(row=>row.name && Array.isArray(row.categories)));
+  results.push("actual Test Framework list returns runnable names and categories without running tests");
+  // This script only accepts the isolated harness fixture; persist its RPC changes explicitly.
+  const scenes = await call("unity_scene", {action:"list"});
+  for (const scene of scenes.items.filter(row=>row.loaded && row.dirty)) {
+    assert.ok(scene.path.startsWith("Assets/"));
+    await call("unity_scene",{action:"save",scenePath:scene.path,acknowledgeExistingDirty:true,operationId:id()});
+  }
   const safe = createRuntime({ UNITY_PROJECT_ROOT: root });
   assert.equal((await safe.call("unity_tests", args("EditMode", "EvidenceFirst.Pass"))).errorCode, "execute_disabled");
   assert.equal((await runtime.call("unity_approval", { action: "approve", approvalId: "forged" })).errorCode, "invalid_arguments");

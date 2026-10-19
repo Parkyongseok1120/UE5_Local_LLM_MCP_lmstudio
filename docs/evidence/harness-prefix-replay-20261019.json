@@ -1,0 +1,284 @@
+{
+ "schema": "harness-prefix-replay/v1",
+ "date": "2026-10-19",
+ "plan": "docs/Harness_Behavior_Latency_Final_Plan_20261019.md W-P1/W-P2",
+ "model": {
+  "identifier": "swift-1.5-qwen3.8-27b",
+  "architecture": "qwen35",
+  "weights": "Q4_K_S",
+  "contextLength": 84224,
+  "parallel": 4,
+  "flashAttention": true,
+  "contextCheckpoints": 32,
+  "mtp": true,
+  "kvCacheUserReport": "K=Q8 / V=Q5_1 (effective types not exposed by the API)"
+ },
+ "method": "Synthetic 7-round tool loop (120-line tool results, ~4.4k tokens each), maxTokens 8, temperature 0, unique session nonce per run, AB/BA order. Server prompt-eval counters joined to requests by order from the LM Studio server log (counts matched exactly). No raw prompt is stored.",
+ "variants": {
+  "A": "previous code: data before the latest user message",
+  "B": "first fix: data moved to before the newest exchange each round",
+  "P": "append-only history, no volatile data",
+  "Q": "append-only data blocks (hand-built)",
+  "C": "final code: composeModelHistory with execution-scoped shown blocks"
+ },
+ "results": {
+  "A_vs_B": {
+   "A": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 126864,
+      "serverPromptTokens": 126864,
+      "serverPromptMs": 136674.6,
+      "perRoundServerTokens": [
+       4835,
+       9268,
+       13701,
+       18130,
+       22553,
+       26976,
+       31401
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 126771,
+      "serverPromptTokens": 126771,
+      "serverPromptMs": 132293.3,
+      "perRoundServerTokens": [
+       4833,
+       9257,
+       13680,
+       18103,
+       22533,
+       26966,
+       31399
+      ]
+     },
+     {
+      "pair": 3,
+      "sdkPromptTokens": 126838,
+      "serverPromptTokens": 126838,
+      "serverPromptMs": 132256.4,
+      "perRoundServerTokens": [
+       4825,
+       9253,
+       13686,
+       18119,
+       22552,
+       26985,
+       31418
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 126838,
+    "medianServerPromptMs": 132293.3
+   },
+   "B": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 126783,
+      "serverPromptTokens": 125083,
+      "serverPromptMs": 130607.6,
+      "perRoundServerTokens": [
+       4825,
+       9248,
+       13336,
+       17769,
+       22202,
+       26635,
+       31068
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 126938,
+      "serverPromptTokens": 125238,
+      "serverPromptMs": 130778.5,
+      "perRoundServerTokens": [
+       4835,
+       9268,
+       13361,
+       17794,
+       22227,
+       26660,
+       31093
+      ]
+     },
+     {
+      "pair": 3,
+      "sdkPromptTokens": 126938,
+      "serverPromptTokens": 125238,
+      "serverPromptMs": 130700.2,
+      "perRoundServerTokens": [
+       4835,
+       9268,
+       13361,
+       17794,
+       22227,
+       26660,
+       31093
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 125238,
+    "medianServerPromptMs": 130700.2
+   }
+  },
+  "P_vs_Q": {
+   "P": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 124218,
+      "serverPromptTokens": 30987,
+      "serverPromptMs": 34366.4,
+      "perRoundServerTokens": [
+       4517,
+       4417,
+       4417,
+       4413,
+       4407,
+       4407,
+       4409
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 124125,
+      "serverPromptTokens": 30985,
+      "serverPromptMs": 34153.0,
+      "perRoundServerTokens": [
+       4515,
+       4408,
+       4407,
+       4407,
+       4414,
+       4417,
+       4417
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 30986.0,
+    "medianServerPromptMs": 34259.7
+   },
+   "Q": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 124991,
+      "serverPromptTokens": 31215,
+      "serverPromptMs": 34487.8,
+      "perRoundServerTokens": [
+       4530,
+       4440,
+       4445,
+       4450,
+       4450,
+       4450,
+       4450
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 125146,
+      "serverPromptTokens": 31240,
+      "serverPromptMs": 34543.0,
+      "perRoundServerTokens": [
+       4540,
+       4450,
+       4450,
+       4450,
+       4450,
+       4450,
+       4450
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 31227.5,
+    "medianServerPromptMs": 34515.4
+   }
+  },
+  "A_vs_C": {
+   "A": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 126864,
+      "serverPromptTokens": 126864,
+      "serverPromptMs": 132701.5,
+      "perRoundServerTokens": [
+       4835,
+       9268,
+       13701,
+       18130,
+       22553,
+       26976,
+       31401
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 126771,
+      "serverPromptTokens": 126771,
+      "serverPromptMs": 132425.9,
+      "perRoundServerTokens": [
+       4833,
+       9257,
+       13680,
+       18103,
+       22533,
+       26966,
+       31399
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 126817.5,
+    "medianServerPromptMs": 132563.7
+   },
+   "C": {
+    "runs": [
+     {
+      "pair": 1,
+      "sdkPromptTokens": 127665,
+      "serverPromptTokens": 31684,
+      "serverPromptMs": 35015.7,
+      "perRoundServerTokens": [
+       4825,
+       4469,
+       4474,
+       4479,
+       4479,
+       4479,
+       4479
+      ]
+     },
+     {
+      "pair": 2,
+      "sdkPromptTokens": 127820,
+      "serverPromptTokens": 31709,
+      "serverPromptMs": 35060.9,
+      "perRoundServerTokens": [
+       4835,
+       4479,
+       4479,
+       4479,
+       4479,
+       4479,
+       4479
+      ]
+     }
+    ],
+    "medianServerPromptTokens": 31696.5,
+    "medianServerPromptMs": 35038.3
+   }
+  }
+ },
+ "conclusion": "The server reused the prefix only when each input extended the previous one exactly. Moving or rewriting earlier data (A, B) reprocessed nearly the whole input every round; append-only layouts (P, Q, C) processed only the new exchange.",
+ "limits": [
+  "Synthetic replay, not an end-to-end audit",
+  "Single machine/runtime; runtime build not exposed",
+  "Real-loop reuse checked only qualitatively in eval smoke runs"
+ ]
+}

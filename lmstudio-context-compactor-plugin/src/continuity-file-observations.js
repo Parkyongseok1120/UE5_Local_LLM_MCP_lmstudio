@@ -23,6 +23,29 @@ function pathApiFor(value) {
   return /^[A-Za-z]:[\\/]|^\\\\/u.test(String(value || "")) ? path.win32 : path;
 }
 
+// The one owner of what a retained file observation lets the next edit do.
+// Unreal's server accepts expectedHash and itself re-checks the current hash and
+// the exact oldText, so a usable observed hash needs no fresh read first (like
+// Claude Code's exact old_string check). Unity edits need a live HMAC receipt,
+// and a conflict, deletion or unavailable read always needs a fresh read.
+const EXPECTED_HASH_EDIT_OK = "expectedHash_edit_ok";
+const FRESH_READ_REQUIRED = "fresh_read_required";
+
+function mutationSnapshotState(item, descriptor = projectDescriptor(item)) {
+  const state = normalizedObservationState(item || {}, "observed");
+  const hash = item?.sha256AtObservation || item?.sha256;
+  const usable = /^[A-Fa-f0-9]{64}$/u.test(String(hash || "")) && item?.ok !== false && !item?.errorCode
+    && !["deleted", "unavailable", "conflict_observed"].includes(state);
+  return usable && String(descriptor || "").toLowerCase().endsWith(".uproject") ? EXPECTED_HASH_EDIT_OK : FRESH_READ_REQUIRED;
+}
+
+// How a retained expectedHash_edit_ok observation is used; shown only when one is present.
+function editWithoutRereadNote(files) {
+  return (files || []).some(file => file?.mutationSnapshotState === EXPECTED_HASH_EDIT_OK)
+    ? "expectedHash_edit_ok: edit with expectedHash=sha256AtObservation and the exact oldText; the server re-checks both. Re-read only that range after FILE_VERSION_CONFLICT or OCCURRENCE_MISMATCH, or when the exact oldText is not in view."
+    : "";
+}
+
 function projectRoot(descriptor) {
   if (!descriptor) return "";
   return String(descriptor).toLowerCase().endsWith(".uproject")
@@ -140,7 +163,7 @@ function fileObservation(item, fallbackProject = "", fallbackOperation = "observ
     totalLinesAtObservation: observedLineRanges.length ? totalLinesAtObservation || undefined : undefined,
     readCoverageState: lineCoverageState(observedLineRanges, totalLinesAtObservation),
     sourceCoverage: coverage.entries.length ? coverage : undefined,
-    mutationSnapshotState: "fresh_read_required",
+    mutationSnapshotState: mutationSnapshotState({ ...item, sha256AtObservation }, descriptor),
     changeEvidence: observationState === "unavailable" ? undefined : normalizedChange(item.changeEvidence, item),
     changeReadVerified: item.changeReadVerified === true ? true : undefined,
     changeEvidenceInvalidated: item.changeEvidenceInvalidated === true ? true : undefined,
@@ -173,7 +196,7 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
     const merged = {
       ...previous,
       ...observation,
-      mutationSnapshotState: "fresh_read_required",
+      mutationSnapshotState: mutationSnapshotState(observation, observation.canonicalProject),
     };
     // Byte/source coverage requires an explicit equal version. Missing versions
     // never inherit an old interval or continuation cursor.
@@ -220,7 +243,14 @@ function coalesceFileObservations(items, maxItems = 16, fallbackProject = "") {
     }
     observations.set(identity, merged);
   }
-  return boundChangeBodies([...observations.values()].slice(-maxItems));
+  // One relative path seen in two checkouts: which hash an edit means is
+  // ambiguous, so neither observation authorizes an edit without a fresh read.
+  const all = [...observations.values()];
+  const projectsByPath = new Map();
+  for (const item of all) projectsByPath.set(item.path, new Set([...(projectsByPath.get(item.path) || []), item.canonicalProject]));
+  const settled = all.map(item => (projectsByPath.get(item.path).size > 1 && item.mutationSnapshotState === EXPECTED_HASH_EDIT_OK
+    ? { ...item, mutationSnapshotState: FRESH_READ_REQUIRED } : item));
+  return boundChangeBodies(settled.slice(-maxItems));
 }
 
 function migratePriorFileObservations(items, previousState, maxItems = 16) {
@@ -253,6 +283,8 @@ module.exports = {
   isContainedPath,
   normalizeObservedLineRanges,
   migratePriorFileObservations,
+  editWithoutRereadNote,
+  mutationSnapshotState,
   projectDescriptor,
   projectRoot,
 };

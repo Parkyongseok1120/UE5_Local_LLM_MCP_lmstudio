@@ -88,7 +88,7 @@ function createDirectRuntime(options = {}) {
         : failure("UNKNOWN_TOOL", `Unknown tool: ${name}`);
       return context.directResult(name, payload, responseArgs);
     } catch (error) {
-      return context.directResult(name, errorFromException(error), responseArgs);
+      return context.directResult(name, context.pathPolicyFailure(name, args, error) || errorFromException(error), responseArgs);
     } finally {
       for (const source of sources) source.removeEventListener("abort", abort);
     }

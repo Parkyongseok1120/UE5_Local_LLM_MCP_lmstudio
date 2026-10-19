@@ -38,13 +38,19 @@ def test_intel_mac_installer_dry_run(tmp_path: Path) -> None:
         env=env,
         capture_output=True,
         text=True,
+        # The installer prints UTF-8 (Korean); never decode with the Windows ANSI code page.
+        encoding="utf-8",
+        errors="replace",
         timeout=15,
         check=False,
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert str(uproject) in completed.stdout
-    assert str(engine) in completed.stdout
+    # Git Bash on Windows may print the same directory as /tmp/...; the contract
+    # is that the space-containing project and engine paths survive intact.
+    stdout = completed.stdout.replace("\\", "/")
+    assert f"{project.name}/{uproject.name}" in stdout
+    assert engine.name in stdout
     assert "Lima -> VM -> llmster/login -> LM Link -> MCP/RAG -> server -> checks" in completed.stdout
 
 

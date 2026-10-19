@@ -1,0 +1,765 @@
+{
+  "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
+  "contractRevision": "unreal_contracts@4",
+  "protocol": {
+    "conditions": {
+      "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
+      "contracts": "contract data, S3 warnings and generated guidance enabled"
+    },
+    "pilot": {
+      "caseIds": [
+        "cmc_prediction_is_engine_default",
+        "owner_see_flags_are_render_visibility",
+        "netmode_branch_runs_beyond_remote_clients",
+        "link_claim_requires_build_evidence"
+      ],
+      "runsPerCondition": 1,
+      "totalRuns": 8
+    },
+    "expanded": {
+      "tasks": 12,
+      "runsPerTask": 3,
+      "totalRuns": 72,
+      "status": "17 review cases defined; build/PIE tasks and model comparison runs remain separate, not executed by scorer self-tests"
+    },
+    "fixedSettings": [
+      "model",
+      "quantization",
+      "sampling",
+      "contextLength",
+      "toolset",
+      "engineVersion",
+      "initialProjectState"
+    ],
+    "measures": [
+      "firstBuildSuccess",
+      "finalBuildSuccess",
+      "teardownScenarioPass",
+      "unnecessaryEdits",
+      "unresolvedErrors",
+      "toolCalls",
+      "tokens",
+      "wallSeconds",
+      "reviewScore"
+    ],
+    "resultsDir": "artifacts/ue-correctness-<date>/"
+  },
+  "defaults": {
+    "compile_ready_claim_patterns": [
+      "\\bcompile-ready\\b",
+      "컴파일\\s*(가능|준비|완료)",
+      "그대로\\s*컴파일",
+      "빌드\\s*(통과|가능)"
+    ],
+    "verification_patterns": [
+      "\\bUBT\\b",
+      "UnrealBuildTool",
+      "정적\\s*검증",
+      "빌드\\s*검증",
+      "실제\\s*빌드"
+    ],
+    "compile_ready_penalty": 1.5
+  },
+  "cases": [
+    {
+      "id": "cmc_prediction_is_engine_default",
+      "origin": "Latency_MultiCombat review: claimed the default CharacterMovementComponent has no movement prediction",
+      "contractIds": [
+        "ue.net.cmc-prediction",
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "networking",
+        "engine_default"
+      ],
+      "prompt": "이 캐릭터의 네트워크 이동 구조를 검토해라. 엔진 기본 동작과 프로젝트가 추가한 구현을 구분해서 설명하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Public/CombatCharacter.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Character.h\"\n#include \"CombatCharacter.generated.h\"\n\nUCLASS()\nclass COMBAT_API ACombatCharacter : public ACharacter\n{\n    GENERATED_BODY()\n\npublic:\n    ACombatCharacter();\n\nprotected:\n    void Move(const FVector2D& Axis);\n};\n"
+        },
+        {
+          "path": "Source/Combat/Private/CombatCharacter.cpp",
+          "content": "#include \"CombatCharacter.h\"\n\nACombatCharacter::ACombatCharacter()\n{\n    bReplicates = true;\n}\n\nvoid ACombatCharacter::Move(const FVector2D& Axis)\n{\n    AddMovementInput(GetActorForwardVector(), Axis.Y);\n    AddMovementInput(GetActorRightVector(), Axis.X);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "engine_cmc_prediction",
+          "points": 2.0,
+          "diagnosis": [
+            "(CharacterMovement|CMC)",
+            "(예측|predict)",
+            "(보정|correct|ClientAdjustPosition|서버\\s*검증|reconcil)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "claims_no_engine_prediction",
+          "penalty": 2.0,
+          "patterns": [
+            "(CMC|CharacterMovement\\w*)[^.\\n]{0,30}(예측(이|은|기능)?\\s*(이\\s*)?없(다|음|습니다)|예측을\\s*(하지\\s*않|지원하지\\s*않))",
+            "(has|have|with)\\s+no\\s+(client[- ]side\\s+)?(movement\\s+)?prediction"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "owner_see_flags_are_render_visibility",
+      "origin": "Latency_MultiCombat review: treated OnlyOwnerSee as a replication setting",
+      "contractIds": [
+        "ue.render.owner-visibility"
+      ],
+      "category": [
+        "networking",
+        "rendering"
+      ],
+      "prompt": "1인칭 팔 메시와 3인칭 메시 설정이 멀티플레이에서 어떻게 동작하는지 검토하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatCharacter.cpp",
+          "content": "ACombatCharacter::ACombatCharacter()\n{\n    Arms = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT(\"Arms\"));\n    Arms->SetupAttachment(Camera);\n    Arms->SetOnlyOwnerSee(true);\n    GetMesh()->SetOwnerNoSee(true);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "visibility_not_replication",
+          "points": 2.0,
+          "diagnosis": [
+            "(OnlyOwnerSee|OwnerNoSee)",
+            "(렌더|render|가시|visib|보이)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "owner_see_as_replication",
+          "penalty": 2.0,
+          "patterns": [
+            "(OnlyOwnerSee|OwnerNoSee)[^.\\n]{0,40}(복제되지\\s*않(는다|음|아서|습니다)|복제\\s*대상에서\\s*제외|is\\s+not\\s+replicated|stops?\\s+replication)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "netmode_branch_runs_beyond_remote_clients",
+      "origin": "Latency_MultiCombat review: read NetMode != NM_DedicatedServer as remote-client only",
+      "contractIds": [
+        "ue.net.netmode"
+      ],
+      "category": [
+        "networking",
+        "netmode"
+      ],
+      "prompt": "히트 이펙트 생성 분기가 어떤 실행 주체(Standalone, Listen Server, Dedicated Server, Client)에서 동작하는지 검토하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatWeapon.cpp",
+          "content": "void ACombatWeapon::MulticastHit_Implementation(const FVector& Location)\n{\n    if (GetNetMode() != NM_DedicatedServer)\n    {\n        SpawnHitEffect(Location);\n    }\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "netmode_roles",
+          "points": 2.0,
+          "diagnosis": [
+            "(NM_DedicatedServer|DedicatedServer|전용\\s*서버)",
+            "(ListenServer|리슨\\s*서버|listen\\s*server)",
+            "(Standalone|스탠드\\s*얼론)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "remote_client_only",
+          "penalty": 2.0,
+          "patterns": [
+            "클라이언트(에서)?만\\s*(실행|동작)(된다|한다|됩니다|합니다)\\s*[.\\n]",
+            "(runs|executes)\\s+only\\s+on\\s+(remote\\s+)?clients"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "link_claim_requires_build_evidence",
+      "origin": "Latency_MultiCombat review: asserted a link failure from a missing module .cpp without building",
+      "contractIds": [
+        "policy.claims.build-evidence"
+      ],
+      "category": [
+        "build",
+        "claims"
+      ],
+      "prompt": "빌드는 아직 실행하지 않았다. 아래 모듈 구성을 검토하고, 빌드에 영향을 줄 수 있는 문제를 확인된 것과 확인이 필요한 것으로 나눠라.",
+      "files": [
+        {
+          "path": "Source/CombatCore/CombatCore.Build.cs",
+          "content": "using UnrealBuildTool;\n\npublic class CombatCore : ModuleRules\n{\n    public CombatCore(ReadOnlyTargetRules Target) : base(Target)\n    {\n        PublicDependencyModuleNames.AddRange(new[] { \"Core\", \"CoreUObject\", \"Engine\" });\n    }\n}\n"
+        },
+        {
+          "path": "Source/CombatCore/Public/CombatTypes.h",
+          "content": "#pragma once\n\n#include \"CoreMinimal.h\"\n\nstruct FCombatHit\n{\n    float Damage = 0.f;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "module_impl_needs_build",
+          "points": 2.0,
+          "diagnosis": [
+            "(IMPLEMENT_MODULE|모듈\\s*구현|module\\s*implementation)",
+            "(빌드|build)[^.\\n]{0,40}(확인|검증|verify|confirm|실행)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "asserted_link_failure",
+          "penalty": 2.0,
+          "patterns": [
+            "링크\\s*(에러|오류|실패)(가|이)?\\s*(발생한다|난다|발생합니다|납니다)",
+            "링크\\s*(에러|오류|실패)\\s*(확정|확실)",
+            "(will|does)\\s+fail\\s+to\\s+link",
+            "링크\\s*단계에서[^.\\n]{0,80}?(빌드\\s*)?\\**\\s*실패\\**\\s*(할\\s*것|한다|합니다|됩니다|하게\\s*됩니다)",
+            "LNK\\d{4}[^.\\n]{0,60}?\\**\\s*실패\\**\\s*(할\\s*것|한다|합니다|됩니다)",
+            "링크\\s*(에러|오류|실패)(가|이)?\\s*(날|발생할)\\s*것",
+            "(will|would)\\s+fail\\s+(at|during|in)\\s+(the\\s+)?link"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "redundant_check_is_cleanup_not_defect",
+      "origin": "Latency_MultiCombat review: classified a redundant validity check as a confirmed P2 error",
+      "contractIds": [
+        "policy.claims.severity"
+      ],
+      "category": [
+        "claims",
+        "severity"
+      ],
+      "prompt": "다음 코드를 검토하고 각 지적의 심각도를 분류하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatCharacter.cpp",
+          "content": "void ACombatCharacter::Fire()\n{\n    if (Weapon && IsValid(Weapon))\n    {\n        Weapon->Fire();\n    }\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "redundant_validity_check",
+          "points": 1.0,
+          "diagnosis": [
+            "(중복|redundant|불필요)"
+          ],
+          "fix": [
+            "(정리|cleanup|clean\\s*up|제거|remove|단순화|simplif)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "redundancy_overrated",
+          "penalty": 1.5,
+          "patterns": [
+            "(중복|redundant)[^\\n]{0,60}(\\bP[0-2]\\b|치명|critical|확정\\s*(오류|버그)|심각한\\s*(오류|버그))",
+            "(\\bP[0-2]\\b|치명|critical)[^\\n]{0,60}(중복|redundant)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "worker_thread_spawns_actor",
+      "origin": "S3 rule GAME_THREAD_API_OFF_THREAD / ASYNC_UOBJECT_LIFETIME_RISK",
+      "contractIds": [
+        "ue.thread.uobject-game-thread"
+      ],
+      "category": [
+        "threading",
+        "lifetime"
+      ],
+      "prompt": "이 비동기 코드의 스레드 안전성과 객체 수명을 검토하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatSpawner.cpp",
+          "content": "void ACombatSpawner::SpawnLater(const FTransform& Where)\n{\n    AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this, Where]()\n    {\n        const FTransform Adjusted = ComputeSpawnTransform(Where);\n        GetWorld()->SpawnActor<AProjectile>(ProjectileClass, Adjusted);\n    });\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "spawn_off_game_thread",
+          "points": 2.0,
+          "diagnosis": [
+            "(게임\\s*스레드|game\\s*thread)",
+            "SpawnActor"
+          ],
+          "fix": [
+            "ENamedThreads::GameThread",
+            "AsyncTask\\([^)]*GameThread"
+          ]
+        },
+        {
+          "id": "raw_this_capture",
+          "points": 1.0,
+          "diagnosis": [
+            "(this|수명|lifetime|파괴|destroy)",
+            "(TWeakObjectPtr|Weak)"
+          ]
+        }
+      ],
+      "forbidden_patterns": []
+    },
+    {
+      "id": "subsystem_initialize_dependency",
+      "origin": "S3 rule SUBSYSTEM_INITIALIZATION_DEPENDENCY_REVIEW",
+      "contractIds": [
+        "ue.subsystem.initialize-dependency"
+      ],
+      "category": [
+        "subsystem",
+        "lifetime"
+      ],
+      "prompt": "두 GameInstance 서브시스템의 초기화 순서를 검토하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/InventorySubsystem.cpp",
+          "content": "void UInventorySubsystem::Initialize(FSubsystemCollectionBase& Collection)\n{\n    Super::Initialize(Collection);\n    GetGameInstance()->GetSubsystem<USaveSubsystem>()->LoadInventory(this);\n}\n"
+        },
+        {
+          "path": "Source/Combat/Public/SaveSubsystem.h",
+          "content": "UCLASS()\nclass COMBAT_API USaveSubsystem : public UGameInstanceSubsystem\n{\n    GENERATED_BODY()\npublic:\n    void LoadInventory(UInventorySubsystem* Inventory);\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "missing_initialize_dependency",
+          "points": 2.0,
+          "diagnosis": [
+            "InitializeDependency",
+            "(순서|order)"
+          ],
+          "fix": [
+            "Collection\\.InitializeDependency"
+          ]
+        }
+      ],
+      "forbidden_patterns": []
+    },
+    {
+      "id": "inherited_lifecycle_override_is_valid",
+      "origin": "S1 false positive: BeginDestroy on a world subsystem reported as an invalid override",
+      "contractIds": [
+        "ue.uobject.lifecycle",
+        "ue.subsystem.lifecycle"
+      ],
+      "category": [
+        "lifetime",
+        "subsystem"
+      ],
+      "prompt": "이 서브시스템의 수명 훅 사용을 검토하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/HitStopSubsystem.cpp",
+          "content": "void UHitStopSubsystem::Initialize(FSubsystemCollectionBase& Collection)\n{\n    Super::Initialize(Collection);\n    FWorldDelegates::OnPostWorldCleanup.AddUObject(this, &UHitStopSubsystem::HandleCleanup);\n}\n\nvoid UHitStopSubsystem::BeginDestroy()\n{\n    FWorldDelegates::OnPostWorldCleanup.RemoveAll(this);\n    Super::BeginDestroy();\n}\n"
+        },
+        {
+          "path": "Source/Combat/Public/HitStopSubsystem.h",
+          "content": "UCLASS()\nclass COMBAT_API UHitStopSubsystem : public UTickableWorldSubsystem\n{\n    GENERATED_BODY()\npublic:\n    virtual void Initialize(FSubsystemCollectionBase& Collection) override;\n    virtual void BeginDestroy() override;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "cleanup_belongs_in_deinitialize",
+          "points": 2.0,
+          "diagnosis": [
+            "BeginDestroy",
+            "(Deinitialize|OnWorldEndPlay)"
+          ],
+          "fix": [
+            "(Deinitialize|OnWorldEndPlay)[^.\\n]{0,60}(이동|옮|move|해제|Remove)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "begin_destroy_called_invalid",
+          "penalty": 2.0,
+          "patterns": [
+            "BeginDestroy[^.\\n]{0,40}(존재하지\\s*않|override\\s*(할\\s*수\\s*없|불가)|is\\s+not\\s+(a\\s+)?(valid|virtual)|cannot\\s+be\\s+overridden|잘못된\\s*override)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "actor_damage_returns_processed_amount",
+      "origin": "Engine/Source/Runtime/Engine/Private/Actor.cpp:3390-3453,3484; Pawn.cpp:556-575",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "이 코드에서 Super::TakeDamage가 항상 0을 반환해 전투가 불가능한지 확인하고 수정 필요 여부를 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "float ACombatCharacter::TakeDamage(float Damage, const FDamageEvent& Event, AController* Instigator, AActor* Causer) {\n  const float Actual = Super::TakeDamage(Damage, Event, Instigator, Causer);\n  if (Actual <= 0.f) return 0.f;\n  State->ApplyDamage(Actual, Instigator);\n  return Actual;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "actor_damage_returns_processed_amount",
+          "points": 3.0,
+          "diagnosis": [
+            "ActualDamage\\s*=\\s*DamageAmount",
+            "InternalTakePointDamage",
+            "ShouldTakeDamage",
+            "(이벤트|event|통지)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "actor_damage_returns_processed_amount_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:TakeDamage|기본\\s*구현)[^.\\n]{0,90}(?:항상|always)\\s*0(?:\\.0)?(?:f)?\\s*(?:을\\s*)?(?:반환|returns?)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "spawned_controller_initializes_player_state",
+      "origin": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp:1073-1081; Controller.cpp:623-654",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "Standalone 초기화된 월드에 올바른 GameMode와 PlayerStateClass가 있다. PC를 수동 SpawnActor했으니 PlayerState가 반드시 null인가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* PC = World->SpawnActor<ACombatPlayerController>();\nauto* PS = PC->GetPlayerState<ACombatPlayerState>();\nPS->SetTeam(Team);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "spawned_controller_initializes_player_state",
+          "points": 3.0,
+          "diagnosis": [
+            "PostInitializeComponents",
+            "InitPlayerState",
+            "(GameMode|PlayerStateClass)",
+            "(널\\s*가드|null\\s*guard|생성\\s*실패)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "spawned_controller_initializes_player_state_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:로그인|login)[^.\\n]{0,80}(?:없|안|without)[^.\\n]{0,80}(?:반드시|항상)\\s*(?:null|nullptr|널)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "standalone_game_instance_creates_world",
+      "origin": "Engine/Source/Runtime/Engine/Private/GameInstance.cpp:189-200",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "InitializeStandalone 직후 GetWorld를 사용하면 월드를 따로 안 만들었으므로 반드시 크래시하는가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* Instance = NewObject<UGameInstance>(GEngine);\nInstance->InitializeStandalone();\nUWorld* World = Instance->GetWorld();\nWorld->SetGameMode(URL);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "standalone_game_instance_creates_world",
+          "points": 3.0,
+          "diagnosis": [
+            "InitializeStandalone",
+            "(CreateWorld|임시\\s*월드|dummy\\s*world)",
+            "(컨텍스트|WorldContext)",
+            "(SetCurrentWorld|연결)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "standalone_game_instance_creates_world_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "InitializeStandalone[^.\\n]{0,65}(?:월드를?\\s*(?:생성|만들)하지\\s*않|does\\s+not\\s+create)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "timer_fixture_frame_counter_has_purpose",
+      "origin": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp:959-962,1148; Engine/Source/Runtime/Engine/Public/TimerManager.h:391-394",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "동기 자동화 테스트가 엔진 Tick 없이 World::Tick을 여러 번 호출한다. ++GFrameCounter를 무조건 삭제하라는 제안이 타당한가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "for (float Elapsed = 0; Elapsed < Seconds; Elapsed += 0.05f) {\n  ++GFrameCounter;\n  World->Tick(LEVELTICK_All, 0.05f);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "timer_fixture_frame_counter_has_purpose",
+          "points": 3.0,
+          "diagnosis": [
+            "HasBeenTickedThisFrame",
+            "GFrameCounter",
+            "(중복|한\\s*프레임|once|same\\s*frame)",
+            "(격리|isolation|전역|global)",
+            "(무조건\\s*삭제하지|삭제\\s*전|유지|대체.*검증)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "timer_fixture_frame_counter_has_purpose_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "GFrameCounter[^.\\n]{0,60}(?:필요\\s*없|불필요)[^.\\n]{0,40}(?:삭제|제거)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "set_player_state_does_not_set_owner",
+      "origin": "Engine/Source/Runtime/Engine/Private/Controller.cpp:572-581,639-654",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "PlayerState를 직접 스폰하고 SetPlayerState만 호출하면 엔진의 InitPlayerState와 동일한 소유권 설정인가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "auto* PS = World->SpawnActor<ACombatPlayerState>();\nPC->SetPlayerState(PS);\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "set_player_state_does_not_set_owner",
+          "points": 3.0,
+          "diagnosis": [
+            "SetPlayerState",
+            "(포인터|참조|대입|assign)",
+            "(SpawnInfo\\.Owner|SpawnParameters\\.Owner|SetOwner)",
+            "InitPlayerState"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "set_player_state_does_not_set_owner_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "SetPlayerState[^.\\n]{0,60}(?:Owner|소유자)[^.\\n]{0,30}(?:자동|automatically)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "server_client_rpc_targets_owner",
+      "origin": "Engine/Source/Runtime/Engine/Private/Actor.cpp:5412-5621 (GetFunctionCallspace)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "서버에서 Client RPC 래퍼를 호출하면 전송되는가? 로컬 소유자와 원격 소유자, NetMulticast를 구분하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "UFUNCTION(Client, Unreliable)\nvoid ClientConfirmHit();\n// On the authoritative replicated actor owned by the shooting controller:\nClientConfirmHit();\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "server_client_rpc_targets_owner",
+          "points": 3.0,
+          "diagnosis": [
+            "(소유|own)",
+            "(원격|remote)",
+            "(로컬|local)",
+            "NetMulticast",
+            "GetFunctionCallspace"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "server_client_rpc_targets_owner_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "Client\\s*RPC[^.\\n]{0,70}(?:모든\\s*클라이언트|all\\s*clients)[^.\\n]{0,25}(?:전송|전달|broadcast)",
+            "서버에서[^.\\n]{0,35}ClientConfirmHit[^.\\n]{0,45}(?:아무\\s*일도|전송되지)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repeated_die_checks_idempotence",
+      "origin": "Latency_MultiCombat Source/Latency_MultiCombat/Private/Tests/FPSBaselineTests.cpp:135-146; Private/LatencyMultiCombatCharacter.cpp:300 (Die guard)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.engine-default-vs-project"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "다음 테스트의 두 번째 Die 호출을 전투 버그 은폐로 단정할 수 있는지, 마지막 assertion까지 읽고 평가하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewFixture.cpp",
+          "content": "Red->TakeDamage(1000.f, FDamageEvent(), nullptr, nullptr);\nBlue->TakeDamage(1000.f, FDamageEvent(), nullptr, nullptr);\nRed->Die(nullptr);\nFixture.Advance(0.2f);\nTestTrue(TEXT(\"Both respawn\"), RedPC->GetPawn() != Red && BluePC->GetPawn() != Blue);\nTestEqual(TEXT(\"Repeated death counted once\"), RedPS->DeathCount, 1);\n// Die starts with: if (!HasAuthority() || CombatState == ECombatState::Dead) return;\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "repeated_die_checks_idempotence",
+          "points": 3.0,
+          "diagnosis": [
+            "(멱등|idempoten|중복\\s*호출)",
+            "DeathCount",
+            "(한\\s*번|1)",
+            "(의도|목적|검증|assert)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "repeated_die_checks_idempotence_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:테스트|Die)[^.\\n]{0,60}(?:의도적으로\\s*(?:감추|은폐)|버그를\\s*(?:감추|은폐))"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "inline_header_assignment_is_not_absent",
+      "origin": "2026-10-18 reboot audit: a byteBudget-cut search_files('bIsDead') omitted LatencyMultiCombatPlayerState.h:55 (FORCEINLINE AddDeath sets bIsDead = true)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.absence"
+      ],
+      "category": [
+        "claims",
+        "harness_regression"
+      ],
+      "prompt": "bIsDead가 true로 설정되는 경로가 있는지, 아래 두 파일을 근거로 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Public/CombatPlayerState.h",
+          "content": "UPROPERTY(Replicated)\nbool bIsDead;\nUPROPERTY(Replicated)\nint32 DeathCount = 0;\nFORCEINLINE void AddDeath() { if (HasAuthority() && !bIsDead) { DeathCount++; bIsDead = true; ForceNetUpdate(); } }\n"
+        },
+        {
+          "path": "Source/Combat/Private/CombatPlayerState.cpp",
+          "content": "ACombatPlayerState::ACombatPlayerState()\n\t: bIsDead(false)\n{\n}\nvoid ACombatPlayerState::ResetForRespawn()\n{\n\tbIsDead = false;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "inline_header_assignment_is_not_absent",
+          "points": 3.0,
+          "diagnosis": [
+            "AddDeath",
+            "(?:bIsDead\\s*=\\s*true|true)",
+            "(?:헤더|\\.h\\b|inline|FORCEINLINE|인라인)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "absence_claim_over_partial_evidence",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:어디에도|아무\\s*곳에도)[^.\\n]{0,60}(?:없|않)",
+            "\\bnever\\s+(?:set|assigned)\\b",
+            "true로\\s*(?:설정|대입)(?:되|하)(?:지|는\\s*곳이)\\s*(?:않|없)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "character_has_no_engine_death_pipeline",
+      "origin": "2026-10-18 reboot audit: invented ACharacter Health/OnDeath and Super::TakeDamage going straight to AActor; UE 5.7.4 Pawn.cpp:556 overrides TakeDamage",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.damage.pawn-take-damage",
+        "policy.claims.super-chain"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "Super::TakeDamage 호출이 엔진에서 무엇을 실행하는지, 그리고 엔진 기본 사망 처리와 충돌하는지 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/CombatCharacter.cpp",
+          "content": "float ACombatCharacter::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n\tconst float Applied = Super::TakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser);\n\tif (ACombatPlayerState* PS = GetPlayerState<ACombatPlayerState>()) { PS->ApplyDamage(Applied); if (PS->bIsDead) Die(EventInstigator); }\n\treturn Applied;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "character_has_no_engine_death_pipeline",
+          "points": 3.0,
+          "diagnosis": [
+            "APawn",
+            "(?:ShouldTakeDamage|LastHitBy)",
+            "AActor",
+            "(?:체력|Health|사망|OnDeath|death)[^.\\n]{0,60}(?:없|않|프로젝트|project)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "invented_engine_death_pipeline",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:곧바로|바로|직접)\\s*AActor::TakeDamage",
+            "goes (?:straight|directly) to AActor::TakeDamage",
+            "ACharacter[^.\\n]{0,40}(?:기본|내장|built-in)[^.\\n]{0,30}(?:Health|체력|OnDeath|사망\\s*처리)[^.\\n]{0,20}(?:있|수행|호출|has|calls)"
+          ]
+        }
+      ]
+    }
+  ]
+}

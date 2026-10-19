@@ -1,10 +1,11 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
 import type { DirectConfig, ExecutionOutcome, FinalizationTrigger } from "./execution-contracts";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
-import { containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleTextFromMessages } from "./raw-tool-intent";
+import { hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
@@ -100,6 +101,116 @@ export class DeliveryController {
   }
 }
 
+const STRUCTURE_ONLY_SCOPE = "packet_structure_and_record_consistency";
+// Wording that reads as completed verification. Explicitly negated forms
+// ("facts_not_verified", "미검증") are not matches.
+const VERIFIED_WORDING = /검증\s*완료|검증(?:을|이)?\s*(?:마쳤|끝났|통과했)|사실\s*확인\s*완료|\((?:fully\s+)?verified\)|\bverified\b/iu;
+// Remove only a locally qualified/negated phrase, never another claim in the
+// same answer. A disclaimer about B must not hide a verification claim about A.
+const QUALIFIED_VERIFICATION = /\bnot\s+(?:(?:yet|fully)\s+)?verified\b|\bverified\s*[:=-]?\s*false\b|(?:사실\s*확인|검증)\s*완료(?:가|는)?\s*(?:아니\S*|아닙\S*|아님)|검증(?:을|이)?\s*(?:마치지|끝나지|통과하지)\s*(?:않\S*|못\S*)|(?:형식|구조)\s*(?:(?:검사|검증)\s*)?만\s*(?:검증\s*)?(?:완료|통과(?:했\S*)?)/giu;
+
+/** One deterministic footer when the only validation in this turn checked
+ * packet structure, yet the answer reads as verified. The answer text itself
+ * is never rewritten; the footer states what was actually checked. */
+export function verificationScopeNotice(history: Chat, finalText: string): string | null {
+  const text = String(finalText || "").replace(QUALIFIED_VERIFICATION, "");
+  if (!VERIFIED_WORDING.test(text)) return null;
+  const messages = history.getMessagesArray();
+  let start = 0;
+  messages.forEach((message, index) => { if (message.getRole() === "user") start = index + 1; });
+  const names = new Map<string, string>();
+  let structureOnly = 0, factual = 0;
+  for (const message of messages.slice(start)) {
+    for (const request of message.getToolCallRequests()) names.set(String(request.id || ""), request.name);
+    for (const result of message.getToolCallResults()) {
+      if (names.get(String(result.toolCallId || "")) !== "evidence_first_validate") continue;
+      const raw = (result as { content?: unknown }).content;
+      const content = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
+      if (/\\?"factualEvidenceVerified\\?"\s*:\s*true/u.test(content)) factual++;
+      else if (content.includes(STRUCTURE_ONLY_SCOPE)) structureOnly++;
+    }
+  }
+  if (!structureOnly || factual) return null;
+  return "[검증 범위] 이번 답변의 근거 패킷 검사(evidence_first_validate)는 형식과 기록 일관성만 확인했습니다. "
+    + "사실 검증이 아니므로, 위의 '검증 완료' 표현은 소스·실행 근거로 다시 확인해야 합니다.";
+}
+
+// Wording that states absence or a confirmed defect. Locally negated forms
+// ("확인하지 못했", "not confirmed") are removed before matching.
+const ABSENCE_OR_CONFIRMED_WORDING = /어디에도[^.\n。]{0,60}?(?:없|않)|존재하지\s*않|설정되지\s*않|호출되지\s*않|대입되지\s*않|\bnever\s+(?:set|called|assigned|reached)\b|\bdoes\s+not\s+exist\b|\bnowhere\b|\bP[0-3]\s*(?:\(?\s*confirmed\b|확정)|확정(?:된)?\s*(?:결함|버그|P[0-3])|\bconfirmed\s+(?:defect|bug)\b/iu;
+const QUALIFIED_ABSENCE = /(?:확인|검증)(?:하지|되지)\s*(?:못|않)\S*|\bnot\s+(?:yet\s+)?(?:confirmed|verified)\b|미확인|미검증|의심/giu;
+
+type ResultRecord = Record<string, unknown>;
+function decodeToolResult(raw: unknown): ResultRecord | null {
+  let value: unknown = raw;
+  for (let depth = 0; depth < 3; depth++) {
+    if (typeof value === "string") {
+      try { value = JSON.parse(value); } catch { return null; }
+      continue;
+    }
+    if (Array.isArray(value) && value.length && typeof (value[0] as { text?: unknown })?.text === "string") {
+      value = value.map(block => String((block as { text?: unknown }).text ?? "")).join("");
+      continue;
+    }
+    break;
+  }
+  return value && typeof value === "object" && !Array.isArray(value) ? value as ResultRecord : null;
+}
+
+/** One deterministic footer when the answer states absence or a confirmed
+ * defect while a search in this user turn was partial and never completed.
+ * A partial search page is not evidence of absence; the answer text itself is
+ * never rewritten. */
+export function partialSearchScopeNotice(history: Chat, finalText: string): string | null {
+  const text = String(finalText || "").replace(QUALIFIED_ABSENCE, "");
+  if (!ABSENCE_OR_CONFIRMED_WORDING.test(text)) return null;
+  const messages = history.getMessagesArray();
+  let start = 0;
+  messages.forEach((message, index) => { if (message.getRole() === "user") start = index + 1; });
+  const requests = new Map<string, { name: string; args: ResultRecord }>();
+  const searches = new Map<string, { label: string; omitted: number | null; complete: boolean }>();
+  const limited: string[] = [];
+  for (const message of messages.slice(start)) {
+    for (const request of message.getToolCallRequests()) {
+      requests.set(String(request.id || ""), { name: request.name, args: (request.arguments || {}) as ResultRecord });
+    }
+    for (const result of message.getToolCallResults()) {
+      const request = requests.get(String(result.toolCallId || ""));
+      const value = request && decodeToolResult((result as { content?: unknown }).content);
+      if (!request || !value) continue;
+      const query = String(value.query ?? request.args.query ?? "").slice(0, 80);
+      if (request.name === "search_files") {
+        const key = JSON.stringify([query, String(request.args.path ?? ""), request.args.regex === true,
+          request.args.matchFileNames ?? null]);
+        const entry = searches.get(key) || { label: `search_files '${query}'`, omitted: null, complete: false };
+        // Unreal pages report coverage/matchesOmitted; Unity pages report
+        // items/total and whether the scan stopped early (incomplete).
+        const unityPage = value.coverage === undefined && Array.isArray(value.items);
+        const complete = unityPage ? value.truncated === false && value.incomplete === false
+          : value.coverage === "complete" && value.truncated !== true;
+        const partial = unityPage ? value.truncated === true || value.incomplete === true
+          : value.coverage === "partial" && (value.truncated === true || Number(value.matchesOmitted) > 0);
+        if (complete) entry.complete = true;
+        else if (partial) {
+          const omitted = unityPage ? Number(value.total) - (value.items as unknown[]).length : Number(value.matchesOmitted);
+          if (Number.isFinite(omitted) && omitted > 0) entry.omitted = Math.max(entry.omitted ?? 0, omitted);
+        } else continue;
+        searches.set(key, entry);
+      } else if (request.name === "unreal_symbol_lookup" && value.status === "coverage_limited") {
+        const coverage = (value.coverage || {}) as ResultRecord;
+        if (coverage.apiAbsenceVerified === false || value.apiAbsenceVerified === false) limited.push(`unreal_symbol_lookup '${query}'`);
+      }
+    }
+  }
+  const partial = [...searches.values()].filter(entry => !entry.complete)
+    .map(entry => entry.omitted ? `${entry.label}(${entry.omitted}건 생략)` : `${entry.label}(부분 결과)`);
+  const items = [...partial, ...limited.map(label => `${label}(범위 제한)`)];
+  if (!items.length) return null;
+  const shown = items.slice(0, 3).join(", ") + (items.length > 3 ? ` 외 ${items.length - 3}건` : "");
+  return `[검색 범위] 이번 답변의 근거에 끝까지 받지 않은 부분 검색이 있습니다: ${shown}. `
+    + "부분 결과는 부재의 증거가 아니므로, 위의 '없음·확정' 표현은 남은 결과(nextCursor)나 해당 정의·구현을 직접 읽어 확인해야 합니다.";
+}
+
 export type ExecutionObservation = {
   reportText: string;
   messages?: Array<ChatMessage>;
@@ -168,7 +279,7 @@ export function classifyOutputLimitStage(
 ): OutputLimitStage | undefined {
   if (captured.finishReason !== "maxPredictedTokensReached") return undefined;
   if (captured.toolRequestFailure) return "tool_arguments";
-  const finalRawToolIntent = containsUnresolvedToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
+  const finalRawToolIntent = hasRawToolIntent(visibleTextFromMessages(captured.messages), captured.messages);
   if ((captured.predictionUsage?.rawToolIntentCandidate === true || finalRawToolIntent)
     && !captured.messages.some(message => message.getToolCallRequests().length > 0)) {
     return "tool_arguments";
@@ -207,7 +318,7 @@ export function canRecoverOutputLimit(
   return classifyOutputLimitStage(captured, false, toolGeneration) === "visible_report"
     && (Boolean(reportText) || Number(captured.predictionUsage?.visibleChars || 0) > 0)
     && captured.predictionUsage?.rawToolIntentCandidate !== true
-    && !containsUnresolvedToolIntent(reportText, captured.messages);
+    && !hasRawToolIntent(reportText, captured.messages);
 }
 
 export function classifyFinalDelivery(
@@ -221,7 +332,7 @@ export function classifyFinalDelivery(
     rejectionReason: phaseTimedOut ? "final_timeout"
       : captured.failure !== undefined ? "generation_failure"
         : captured.finishReason === "maxPredictedTokensReached" ? "max_predicted_tokens" : "empty_visible_output" };
-  const unresolvedToolIntent = containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
+  const unresolvedToolIntent = hasRawToolIntent(text, messages);
   let deliveryState: FinalDeliveryState;
   let rejectionReason: string | undefined;
   if (captured.finishReason === "maxPredictedTokensReached") {
@@ -278,8 +389,8 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
     }
     const kind = String(value.kind || "");
     let fact = "";
-    const nativeFile = record.trustedRead && value.provider === "mcp/unreal-agent"
-      && ["read_file", "read_file_range"].includes(String(value.toolName))
+    const nativeFile = record.trustedRead && value.provider === ENGINE_PROFILES.unreal.fileProvider
+      && ENGINE_PROFILES.unreal.reportReadTools.includes(String(value.toolName))
       && typeof value.path === "string" && typeof value.content === "string";
     if (kind === "workspace_file_observation" || nativeFile) {
       const status = String(value.resultStatus || value.status || "");

@@ -9,9 +9,10 @@ const {
   resolveProjectSelection,
 } = require("./unreal-detect.js");
 const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
+const { createEngineSourceResolver } = require("./engine-source-access.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
 const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
-const { clamp, relativeSlash } = require("./direct-runtime-shared.js");
+const { clamp, errorFromException, relativeSlash } = require("./direct-runtime-shared.js");
 const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
 const { resolveAgentStateRoot } = require("./runtime-state-root.js");
@@ -36,6 +37,9 @@ function createDirectRuntimeContext(options = {}) {
   const limits = {
     ...resolveMutationLimits(env),
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
+    // Implicit whole reads cover small non-source files only; source and engine
+    // files are read by symbol, search hit or line range.
+    wholeReadMaxBytes: clamp(env.DIRECT_WHOLE_READ_MAX_BYTES, 8 * 1024, 1024, 2 * 1024 * 1024),
     maxSourceBytes: clamp(env.DIRECT_MAX_SOURCE_FILE_BYTES, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
     commandTimeoutMs: clamp(env.COMMAND_TIMEOUT_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
     maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, DEFAULT_MAX_RESPONSE_CHARS, 16_000, 1_000_000),
@@ -67,8 +71,22 @@ function createDirectRuntimeContext(options = {}) {
     return path.resolve(selection.selected.projectPath);
   }
 
-  async function resolveToolPath(input, projectSelector = "") {
+  // Read-only engine source access; mutationResolution never receives it.
+  const resolveEngine = options.resolveEngineSource || createEngineSourceResolver({
+    workspaceRoot, configPath, env, hostPlatform: options.hostPlatform,
+  });
+
+  // Paths that may be executed in or written near never include engine source.
+  async function resolveWorkingPath(input, projectSelector = "") {
     return resolveReadPath(input, { workspaceRoot, activeProject: await resolveCallProject(projectSelector) });
+  }
+
+  async function resolveToolPath(input, projectSelector = "") {
+    return resolveReadPath(input, {
+      workspaceRoot,
+      activeProject: await resolveCallProject(projectSelector),
+      resolveEngine,
+    });
   }
 
   async function mutationResolution(input, projectSelector = "") {
@@ -158,6 +176,24 @@ function createDirectRuntimeContext(options = {}) {
     return best;
   }
 
+  // A path-policy rejection depends only on the arguments and the configured
+  // roots, so an identical retry is answered from the repeat cache. When the
+  // rejected absolute path is a readable installed-engine file, the same tool
+  // with the observed engine:// URI is offered as the one advisory suggestion.
+  function pathPolicyFailure(toolName, args, error) {
+    if (error?.directErrorCode !== "PATH_OUTSIDE_ALLOWED_ROOTS") return null;
+    const state = `path_policy|${workspaceRoot}`;
+    const duplicate = repeatCache.lookup(toolName, args, state);
+    if (duplicate) return duplicate;
+    const engineUri = error.details?.engineUri;
+    if (engineUri) error.suggestion = toolName === "read_file" && args.maxBytes === undefined && args.offsetBytes === undefined
+      ? { tool: "read_file_range", args: { path: engineUri, startLine: 1, endLine: 20, ...(args.project ? { project: args.project } : {}) } }
+      : { tool: toolName, args: { ...args, path: engineUri } };
+    const payload = errorFromException(error);
+    repeatCache.remember(toolName, args, state, payload);
+    return payload;
+  }
+
   function dedupe(toolName, args, state, payload) {
     const duplicate = repeatCache.lookup(toolName, args, state);
     if (duplicate) return duplicate;
@@ -177,11 +213,14 @@ function createDirectRuntimeContext(options = {}) {
     limits,
     mutationResolution,
     options,
+    pathPolicyFailure,
     payloadFits,
     projectScopedSuggestionArgs,
     repeatCache,
     resolveCallProject,
+    resolveEngine,
     resolveToolPath,
+    resolveWorkingPath,
     runtimeOwner,
     stateRoot,
     workspaceRoot,

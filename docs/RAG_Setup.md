@@ -26,6 +26,16 @@ Python이 없다면 먼저 `INSTALL.bat` 또는 `install.sh`로 설치를 시작
 
 기본 프로젝트를 해제하려면 `.\rag.ps1 clear-project`를 사용합니다.
 
+## 지침 문서 추가·수정 후 검색 자료 갱신
+
+`RAG_Project_Guidelines`의 문서를 추가하거나 고쳐도 기존 `rag.sqlite`에는 반영되지 않습니다. `rag.ps1 refresh`의 `project_source`·`editor_metadata`·`all` 범위는 지침 문서를 다시 읽지 않습니다. 지침 문서는 검색 자료를 처음 만들 때와 같은 명령으로 다시 생성해야 합니다.
+
+```powershell
+python install.py --profile standard --yes --build-rag --index-tier standard --engine-root C:\UE_5.8 --active-project C:\Projects\MyGame\MyGame.uproject
+```
+
+처음 만들 때와 같은 `--index-tier`, `--engine-root`, `--active-project`를 넣어야 합니다. 이 명령은 엔진과 프로젝트 자료도 함께 다시 수집하므로 시간이 걸립니다. 반영 여부는 해당 문서를 `unreal_rag_search`로 검색해 확인합니다. 실행 중인 MCP는 재시작해야 새 자료를 읽습니다.
+
 ## 엔진 소스 재수집
 
 ```powershell

@@ -4245,6 +4245,9 @@ function availabilityHistory() {
       path: "Assets/Code.cs", sha256: "a".repeat(64), startLine: 1, endLine: 2,
       returnedLineCount: 2, totalLines: 2, content: "line one\nline two",
     }) }] }));
+  // A completed turn answers after its tools; a turn ending on a tool result
+  // reads as interrupted and adds a resume fact these tests do not measure.
+  history.append("assistant", "Read both lines of Assets/Code.cs.");
   history.append("user", "Continue the review.");
   return history;
 }
@@ -4342,6 +4345,67 @@ test("T14 injected facts do not block a model-selected reread", async () => {
     { inputAvailabilityMode: "inject", projectEngine: "unity", projectIdentity: "C:\\Game" }, [tool]);
   await handlePredictionLoop(ctl);
   assert.equal(allowed, true);
+});
+
+test("resuming after a turn that ended on tool results tells the model its drafts are unverified", async () => {
+  const interrupted = availabilityHistory().getMessagesArray().filter(message =>
+    !(message.getRole() === "assistant" && message.getText() === "Read both lines of Assets/Code.cs."));
+  const history = Chat.empty();
+  for (const message of interrupted) history.append(message);
+  let receivedHistory;
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      receivedHistory = chat;
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "off" });
+  await handlePredictionLoop(ctl);
+  assert.match(receivedHistory.toString(), /previous assistant turn ended after tool results without a final answer/u);
+  const resume = ctl.debugValues.find(value => value.event === "resume_state");
+  assert.equal(resume.priorTurnInterrupted, true);
+  assert.equal(resume.partialProjections, 0);
+});
+
+for (const observeOnly of [false, true]) test(`a partial projection in the restored chat reaches the SDK input as need-based guidance (observeOnly=${observeOnly})`, async () => {
+  const history = Chat.empty();
+  history.append(ChatMessage.from({ role: "user", content: "Audit GameMode." }));
+  const request = { type: "function", id: "p1", name: "read_file", arguments: { path: "project://Source/Game/GameMode.cpp" } };
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "p1",
+    content: JSON.stringify({ kind: "archived_tool_result_projection", originalCallId: "p1", toolName: "read_file",
+      sourceIdentity: { path: "project://Source/Game/GameMode.cpp" }, bodyTotalChars: 5988, bodyOmittedChars: 5476,
+      bodyComplete: false, archiveRef: { readHandle: "h-p1" }, notice: "PARTIAL BODY: chars 0-512 of 5988" }) }] }));
+  history.append(ChatMessage.from({ role: "assistant", content: "Partial findings." }));
+  history.append(ChatMessage.from({ role: "user", content: "계속해" }));
+  const inputs = [];
+  const selectedModel = {
+    identifier: "selected-model",
+    async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens() { return 100; },
+    async act(chat, _tools, options) {
+      inputs.push(chat.toString());
+      options.onMessage(ChatMessage.create("assistant", "done"));
+    },
+  };
+  const ctl = fakeController(history, selectedModel, { inputAvailabilityMode: "off", observeOnly });
+  await handlePredictionLoop(ctl);
+  assert.equal(inputs.length, 1);
+  const resume = ctl.debugValues.find(value => value.event === "resume_state");
+  assert.equal(resume.partialProjections, 1);
+  if (observeOnly) {
+    assert.doesNotMatch(inputs[0], /present in this input only in part/u);
+  } else {
+    assert.match(inputs[0], /1 earlier tool result\(s\) are present in this input only in part/u);
+    assert.match(inputs[0], /readHandle=h-p1/u);
+    assert.match(inputs[0], /does not require restoring every omitted body/u);
+    assert.doesNotMatch(inputs[0], /Page the omitted body with/u);
+  }
 });
 
 test("availability off mode leaves both model input and availability telemetry disabled", async () => {
@@ -4577,6 +4641,13 @@ test('reasoning recovery is used once across a successful guarded mutation and l
   await handlePredictionLoop(ctl);
   assert.equal(calls, 3); assert.equal(writes, 1); assert.equal(approvals, 1);
   assert.equal(ctl.debugValues.filter(e => e.event === 'reasoning_recovery_scheduled').length, 1);
+  // Telemetry reports the cap actually requested for the retry (twice the configured reserve, capped).
+  const { reasoningRecoveryOutputCap } = require('../dist/reasoning-recovery');
+  const scheduled = ctl.debugValues.find(e => e.event === 'reasoning_recovery_scheduled');
+  assert.equal(scheduled.requestedMaxTokens, 8192); // fixture reserve 4096, doubled
+  assert.equal(scheduled.requestedMaxTokens, reasoningRecoveryOutputCap(4096));
+  assert.equal(reasoningRecoveryOutputCap(8192), 16384);
+  assert.equal(reasoningRecoveryOutputCap(100000), 131072);
   const transitions = ctl.debugValues.find(e => e.event === 'execution_transitions').transitions;
   assert.ok(transitions.some(t => t.from === 'REASONING_RECOVERY' && t.to === 'RESEARCH'));
   assert.ok(ctl.blocks.some(b => b.results.length === 1));
@@ -4882,6 +4953,41 @@ test('unparsed tool handling preserves SDK validation feedback for a parsed requ
   await assert.rejects(handlePredictionLoop(ctl), error => error === schemaError);
 });
 
+test('documents guidance uses the returned engine identity on the next prediction', async () => {
+  let calls = 0;
+  const project = 'C:/Projects/DocumentVersion/DocumentVersion.uproject';
+  const tool = { name: 'static_validate_project', description: 'Validate', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { project: { type: 'string' } } } };
+  const model = { async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      calls++;
+      const text = chat.toString();
+      if (calls === 2) {
+        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.8\]/);
+        assert.doesNotMatch(text, /\[omitted unreal\/lifetime:/);
+        completeRecoveryReply(options, 'The version was observed; these engine rules remain unvalidated for it.'); return;
+      }
+      assert.match(text, /\[omitted unreal\/lifetime: unreal:unknown\]/);
+      const request = { type: 'function', id: 'document-version', name: tool.name, arguments: { project } };
+      await options.guardToolCall(0, 7100, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, projectRoot: 'C:/Projects/DocumentVersion', analysis: {
+          engineIdentity: { status: 'observed', engine: 'unreal', version: '5.3.2', source: 'build_version_file',
+            engineRoot: 'C:/Engines/Fixture', hashScope: 'file', sha256: 'a'.repeat(64) } } }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review lifecycle rules using the project engine version.' }]), model,
+    { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'lifecycle', designGuidanceDelivery: 'documents',
+      designGuidanceMaxTokens: 16000, contextManagementMode: 'hybrid' }, [tool]);
+  ctl.requestConfirmToolCall = async () => ({ type: 'allow' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+});
+
 test('design references reach each measured prediction once and preserve ordinary tool approval', async () => {
   let calls = 0, approvals = 0;
   const original = Chat.from([{ role: 'user', content: 'Make the authorized small C++ edit.' }]);
@@ -4921,7 +5027,9 @@ test('design references reach each measured prediction once and preserve ordinar
   const references = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
   assert.equal(references.length, 2);
   for (let i = 0; i < 2; i++) {
-    assert.equal(references[i].reason, 'included');
+    assert.equal(references[i].reason, i === 0 ? 'included' : 'sticky_kept');
+    assert.equal(references[i].outcome, 'included');
+    assert.equal(references[i].admissionWater, 'high');
     assert.equal(references[i].finalInputTokens, measured[i].finalInputTokens);
     assert.equal(measured[i].finalExactMeasurement, true);
   }
@@ -5090,6 +5198,46 @@ test('Auto adopts returned engine guidance without rebinding later explicit tool
   await handlePredictionLoop(ctl);
   assert.equal(calls, 3);
   assert.doesNotMatch(original.toString(), /Derived reference data/);
+  // Returned engine evidence is the one input that may select again in-turn.
+  const guidance = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.deepEqual(guidance.map(e => [e.reason, e.stickyCause]),
+    [['included', undefined], ['included', 'scope_changed'], ['sticky_kept', undefined]]);
+});
+
+for (const descriptorRead of [false, true]) test(`Auto admits version-checked engine guidance from an earlier turn's engine identity${descriptorRead ? ' unless a later descriptor read invalidated it' : ''}`, async () => {
+  const project = 'C:/Projects/Net/Net.uproject';
+  const lookup = { name: 'unreal_symbol_lookup', description: 'Engine symbol', pluginIdentifier: 'mcp/unreal-rag',
+    parametersJsonSchema: { type: 'object', properties: { symbol: { type: 'string' } } } };
+  const read = { name: 'read_file', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const exchange = (id, tool, args, value) => [
+    ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: { type: 'function', id, name: tool, arguments: args } }] }),
+    ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: id, content: JSON.stringify(value) }] })];
+  const original = Chat.from([{ role: 'user', content: 'Which engine version does the project use?' }]);
+  [...exchange('prior-engine', lookup.name, { symbol: 'AActor' }, { ok: true, canonicalProject: project, sourceMode: 'engine_local',
+    observedEngineIdentity: { status: 'observed', engineRoot: 'C:/Engines/UE_5.8', version: '5.8', hashScope: 'file', sha256: 'e'.repeat(64) } }),
+  ...(descriptorRead ? exchange('prior-descriptor', read.name, { path: 'project://Net.uproject' }, { ok: true, canonicalProject: project,
+    path: 'project://Net.uproject', content: '{"EngineAssociation":"5.8"}', sha256: 'f'.repeat(64), startLine: 1, endLine: 1, totalLines: 1 }) : [])]
+    .forEach(message => original.append(message));
+  original.append('assistant', 'The installed engine is Unreal Engine 5.8.');
+  original.append('user', 'Review whether this Client RPC replication is a defect.');
+  let calls = 0;
+  const model = { async getContextLength() { return 65536; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      calls++;
+      if (descriptorRead) assert.doesNotMatch(chat.toString(), /reference id=unreal-networking\/engine-defaults/);
+      else assert.match(chat.toString(), /reference id=unreal-networking\/engine-defaults[\s\S]*ue\.net\.client-rpc-callspace/);
+      completeRecoveryReply(options, 'Reviewed.');
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'auto',
+    designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [lookup, read]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const guidance = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.equal(guidance.primaryTopic, 'multiplayer');
+  assert.equal(guidance.selectedIds.includes('unreal-networking/engine-defaults'), !descriptorRead);
+  assert.doesNotMatch(original.toString(), /Derived reference data/);
 });
 
 for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {
@@ -5159,6 +5307,95 @@ for (const delivery of ['documents', 'focused']) test(`Auto uses a bounded focus
   const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
   assert.equal(event.primaryTopic, 'design'); assert.equal(event.configuredDelivery, delivery);
   assert.equal(event.effectiveDelivery, 'focused'); assert.ok(event.attempts <= 4);
+  assert.equal(event.admissionWater, 'high');
+});
+
+test('Auto core fallback without a request topic or returned observation keeps low-water admission', async () => {
+  const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); },
+    async act(_chat, _tools, options) { completeRecoveryReply(options, 'Summary.'); } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '지금 프로젝트 어디야' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
+  await handlePredictionLoop(ctl);
+  const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.deepEqual([event.primaryTopic, event.supplementTopic, event.admissionWater], ['core', undefined, 'low']);
+});
+
+// One execution writes per round; input size is charged per round so it moves
+// between low and high water while the evidence history itself stays small.
+function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
+  const { readConfig } = require('../dist/execution-config');
+  const { BudgetBroker } = require('../dist/budget-broker');
+  const systems = [], abort = new AbortController();
+  let calls = 0;
+  const tool = { name: 'write_file', description: 'Write', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } };
+  const model = { identifier: 'sticky-guidance', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) {
+      const round = text.split('WRITE_RESULT_').length - 1;
+      return bases[Math.min(round, bases.length - 1)] + (text.includes('[Optional design reference]') ? guidanceTokens : 0);
+    },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt()).getText());
+      if (n === abortAtCall && abortAtCall > 0) { abort.abort(new Error('user stopped generation')); throw abort.signal.reason; }
+      if (n >= bases.length - 1) { completeRecoveryReply(options, 'Done.'); return; }
+      const request = { type: 'function', id: `sticky-${n}`, name: 'write_file', arguments: { path: `A${n}.cpp`, content: `code ${n}` } };
+      await options.guardToolCall(0, 7300 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `A${n}.cpp`, message: `WRITE_RESULT_${n}` }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '멀티플레이 RPC 코드를 수정해' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
+  ctl.abortSignal = abort.signal;
+  ctl.guardAbort = () => { if (abort.signal.aborted) throw abort.signal.reason; };
+  const config = readConfig(ctl);
+  const water = new BudgetBroker(config).watermarks({ contextLength: 38912, outputReserve: config.maxOutputReserve,
+    inputTokens: 0, exact: true }, 0, false, 0);
+  const events = () => ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  return { ctl, systems, water, events };
+}
+const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
+
+test('admitted guidance keeps one system text across rounds, and a drop is final for the execution', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  assert.ok(high - low > 1000);
+  const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
+  assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
+  assert.equal(run.systems.length, 5);
+  assert.match(run.systems[0], /\[Optional design reference\]/);
+  assert.equal(run.systems[1], run.systems[0]);
+  assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
+  assert.equal(run.systems[3], run.systems[2]);
+  assert.equal(run.systems[4], run.systems[2]);
+});
+
+test('the next user turn selects again, and a canceled execution leaves no retained guidance behind', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const handler = createPredictionLoopHandler();
+  const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
+  await handler(dropped.ctl);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
+  const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
+  await handler(next.ctl);
+  assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);
+  const canceled = stickyGuidanceRun({ bases: [low - 2000, low - 1000, low - 1000], abortAtCall: 1 });
+  await assert.rejects(handler(canceled.ctl), /user stopped generation/);
+  assert.deepEqual(canceled.events().map(e => e.reason), ['included', 'sticky_kept']);
+  const afterCancel = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
+  await handler(afterCancel.ctl);
+  assert.deepEqual(afterCancel.events().map(e => e.reason), ['included', 'sticky_kept']);
+  assert.match(afterCancel.systems[0], /\[Optional design reference\]/);
 });
 
 for (const variant of ['excluded', 'observe', 'zero', 'final']) test(`Auto ${variant} respects existing omission boundaries`, async () => {
@@ -5443,4 +5680,66 @@ test("an unbounded tool loop stops at maxResearchRounds and reports from collect
   assert.deepEqual(toolCounts, [1, 1, 1, 0]);
   assert.ok(ctl.debugValues.some(e => e.event === "research_round_limit" && e.rounds === 3));
   assert.match(ctl.blocks.at(-1).text, /Report from three rounds/);
+});
+
+test("an unclosed raw tool_call is retried with the tool's schema, and no thin partial report precedes the retry", async () => {
+  const tools = gitRecoveryTestTools();
+  const unclosed = "계획을 정리했습니다.\n<tool_call>\n<function=git_diff_file>\n<parameter=path>\nSource/A.cpp";
+  let calls = 0;
+  const model = { identifier: "unclosed-raw-model", async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) { return String(prompt).startsWith("[") ? 100 : 5000; },
+    async act(chat, roundTools, opts) {
+      calls++;
+      if (calls === 1) {
+        opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        opts.onMessage(ChatMessage.create("assistant", unclosed));
+        return;
+      }
+      assert.match(chat.toString(), /Schema reminder/u);
+      assert.match(chat.toString(), /git_diff_file: required \[[^\]]*comparison[^\]]*path[^\]]*\]/u);
+      assert.ok(roundTools.some(tool => tool.name === "git_diff_file"));
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "재시도 뒤 근거 기반 보고입니다."));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Inspect Source/A.cpp changes and report." }]), model,
+    { contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048 }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const retry = ctl.debugValues.find(event => event.event === "fresh_tool_planning_retry_scheduled");
+  assert.ok(retry, JSON.stringify(ctl.debugValues.map(event => event.event)));
+  assert.deepEqual(retry.rawToolIntentNames, ["git_diff_file"]);
+  assert.ok(ctl.debugValues.every(event => event.event !== "partial_report_delivery"),
+    "a retry replaces the round; no partial report may be shown first");
+});
+
+test("raw tool names come from unclosed opening tags, never from quoted examples", () => {
+  const rawToolIntentNames = text => __test.classifyRawToolIntent(text, [], []).names;
+  assert.deepEqual(rawToolIntentNames("먼저\n<tool_call>\n<function=read_file>\n<parameter=path>"), ["read_file"]);
+  assert.deepEqual(rawToolIntentNames("<function=read_file>"), ["read_file"]);
+  assert.deepEqual(rawToolIntentNames("```xml\n<tool_call>\n<function=read_file>\n```"), []);
+  assert.deepEqual(rawToolIntentNames("예시: `<tool_call><function=read_file>`"), []);
+  assert.deepEqual(rawToolIntentNames("ordinary prose without tool syntax"), []);
+});
+
+test("the research path that ends on unexecuted tool text delivers an evidence-based partial report", async () => {
+  const unsafeTools = gitRecoveryTestTools([{ name: "write_file", pluginIdentifier: "mcp/unity-tools",
+    description: "write", parametersJsonSchema: { type: "object" } }]);
+  let calls = 0;
+  const model = { identifier: "no-retry-model", async getContextLength() { return 38912; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(prompt) { return String(prompt).startsWith("[") ? 100 : 5000; },
+    async act(_chat, _roundTools, opts) {
+      calls++;
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "<tool_call><function=write_file><parameter=path>A.cpp</parameter></function></tool_call>"));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Fix A.cpp." }]), model,
+    { contextManagementMode: "hybrid", maxOutputReserve: 8192, safetyMarginTokens: 2048 }, unsafeTools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const delivered = ctl.debugValues.find(event => event.event === "partial_report_delivery");
+  assert.ok(delivered, JSON.stringify(ctl.debugValues.map(event => event.event)));
+  assert.equal(delivered.reason, "raw_tool_intent_not_retried");
+  assert.ok(ctl.blocks.some(block => /부분 조사 보고/u.test(block.text)));
 });

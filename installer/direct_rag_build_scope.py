@@ -100,6 +100,8 @@ def resolve_build_scope(
     )
     if target_binding.get("ok") is not True:
         raise ValueError(str(target_binding.get("error") or "active project engine is unresolved"))
+    if target_binding.get("engineVersionStatus") == "unknown" or target_binding.get("engineVersionSource") == "folder_name_inferred":
+        raise ValueError("active project engine version is unverified; a folder name cannot establish the build binding")
     target_version = str(target_binding.get("engineVersion") or "")
     target_association = str(target_binding.get("engineAssociation") or "")
 
@@ -114,6 +116,8 @@ def resolve_build_scope(
         if not dry_run and not engine_source.is_dir():
             raise ValueError(f"Unreal Engine source directory is missing: {engine_source}")
         actual_version = engine_version(engine_root) if engine_root else ""
+        if not dry_run and not actual_version:
+            raise ValueError("engine root version is unverified; a valid Engine/Build/Build.version is required")
         if not dry_run and target_version and actual_version != target_version:
             raise ValueError(
                 f"active project uses Unreal {target_version}, "
@@ -128,12 +132,13 @@ def resolve_build_scope(
     excluded: list[Path] = []
     for descriptor in candidates:
         binding = project_binding(descriptor, workspace)
-        if binding.get("ok") is True and bindings_match(
+        if (binding.get("ok") is True and binding.get("engineVersionStatus") != "unknown"
+            and binding.get("engineVersionSource") != "folder_name_inferred" and bindings_match(
             str(binding.get("engineVersion") or ""),
             str(binding.get("engineAssociation") or ""),
             target_version,
             target_association,
-        ):
+        )):
             included.append(descriptor)
         else:
             excluded.append(descriptor)

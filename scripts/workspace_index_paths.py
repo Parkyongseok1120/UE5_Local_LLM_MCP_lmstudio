@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from workspace_config import (
-    DEFAULT_ENGINE_VERSION,
+    DEFAULT_INDEX_ENGINE_VERSION,
     RUNTIME_INDEX_PATH_ENV,
     canonical_workspace_root,
     find_workspace_root,
@@ -91,7 +91,8 @@ def resolve_index_path_in_workspace(workspace: Path | str) -> Path:
     return (root / "data" / namespace / "rag.sqlite").resolve()
 
 
-def resolve_engine_version(start: Path | None = None) -> str:
+def resolve_index_engine_version(start: Path | None = None) -> str:
+    """Version label that selects the RAG index shard (never an engine identity)."""
     version = _index_settings(start).get("engineVersion", "")
     if version:
         return version
@@ -112,7 +113,11 @@ def resolve_engine_version(start: Path | None = None) -> str:
             folder = Path(engine_root).name
             if folder.upper().startswith("UE_"):
                 return folder[3:].replace("_", ".")
-    return DEFAULT_ENGINE_VERSION
+    return DEFAULT_INDEX_ENGINE_VERSION
+
+
+# Historical name kept for callers that pick an index shard; see engine_identity.py for identity.
+resolve_engine_version = resolve_index_engine_version
 
 
 def resolve_index_namespace(start: Path | None = None) -> str:

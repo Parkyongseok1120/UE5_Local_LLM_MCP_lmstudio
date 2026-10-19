@@ -3,14 +3,17 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { assertReadChildContained, displayPath, pathMetadata } = require("./read-path-resolver.js");
+const { assertReadChildContained, displayPath, isWithin, pathMetadata } = require("./read-path-resolver.js");
+const { ENGINE_URI_PREFIX, isAllowedEngineRelative } = require("./engine-source-access.js");
 const { createSearchCapability } = require("./direct-search-capability.js");
 const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
+const { isSourceLikeExt } = require("./write-guards.js");
 
-const { lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
+const { lexicalDeclarationWindow, lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
+const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
 
 const fsp = fs.promises;
 
@@ -26,23 +29,95 @@ function createReadCapabilities(context) {
     resolveToolPath,
   } = context;
 
+  // Locate-first reads: one list for the whole-read refusal and completed source ranges.
+  function locateAlternatives(args) {
+    return [
+      { tool: "search_files", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, query: "<symbol>", contextLines: 3 }) },
+      { tool: "read_symbol", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, symbol: "<symbol>", view: "declaration" }) },
+    ];
+  }
+
+  // The one advisory search for a missing path. For engine:// it searches the
+  // owning module (or the nearest existing readable ancestor) inside the
+  // engine, never the project, and names only directories that exist.
+  async function notFoundSuggestion(args, resolution) {
+    const query = path.basename(String(args.path || ""));
+    if (resolution.resolvedRootType !== "installed_engine") {
+      return { tool: "search_files", args: projectScopedSuggestionArgs(args, { query, path: "project://", matchFileNames: true }) };
+    }
+    const root = resolution.engineLexicalRoot;
+    const segments = path.relative(root, resolution.absolutePath).split(path.sep).join("/").split("/");
+    const sourceIndex = segments.lastIndexOf("Source");
+    const moduleDepth = segments[0] === "Engine" && segments[1] === "Source" ? sourceIndex + 3 : sourceIndex + 2;
+    const candidates = [];
+    if (sourceIndex >= 0 && segments.length > moduleDepth) candidates.push(segments.slice(0, moduleDepth).join("/"));
+    for (let depth = segments.length - 1; depth > 0; depth--) candidates.push(segments.slice(0, depth).join("/"));
+    for (const relative of candidates) {
+      const directory = path.join(root, relative);
+      const stat = await statOrNull(directory);
+      if (stat?.isDirectory() && isWithin(directory, root) && isAllowedEngineRelative(relative, { isFile: false })) {
+        return { tool: "search_files",
+          args: projectScopedSuggestionArgs(args, { query, path: `${ENGINE_URI_PREFIX}${relative}`, matchFileNames: true }) };
+      }
+    }
+    return undefined;
+  }
+
+  // Reader messages name the caller's URI, never the resolved host path.
+  function readMessage(read, args, resolution) {
+    if (read.errorCode === "NOT_FOUND") return `File not found: ${args.path}`;
+    const absolute = String(resolution.absolutePath || "");
+    let message = String(read.message || "");
+    if (absolute) for (const form of new Set([absolute, absolute.split(path.sep).join("/")])) message = message.split(form).join(String(args.path));
+    return message;
+  }
+
+  // byteBudget bounds the whole serialized response (metadata included), not
+  // the body; say so whenever it is what stopped the body early.
+  function budgetFields(args, cutByBudget) {
+    if (args.byteBudget === undefined) return cutByBudget ? { omissionReason: "response_budget" } : {};
+    return { effectiveByteBudget: args.byteBudget, budgetScope: "whole_response",
+      ...(cutByBudget ? { omissionReason: "byte_budget" } : {}) };
+  }
+
+  // The same read, continued: identity and budget kept, receipt dropped.
+  function continuationArgs(args, position) {
+    const { repeatReceipt: _receipt, project: _project, ...same } = args;
+    return { ...same, ...position };
+  }
+
   async function listDirectory(args) {
     const resolution = await resolveToolPath(args.path, args.project);
     const stat = await statOrNull(resolution.absolutePath);
     if (!stat) {
       return failure("NOT_FOUND", `Directory not found: ${args.path}`, {
-        suggestion: {
-          tool: "search_files",
-          args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: ".", matchFileNames: true }),
-        },
+        suggestion: resolution.resolvedRootType === "installed_engine"
+          ? await notFoundSuggestion(args, resolution)
+          : { tool: "search_files",
+            args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: ".", matchFileNames: true }) },
       });
     }
     if (!stat.isDirectory()) return failure("NOT_A_DIRECTORY", `Not a directory: ${args.path}`);
     const maxEntries = clamp(args.maxEntries, 200, 1, 2000);
     const rawEntries = await fsp.readdir(resolution.absolutePath, { withFileTypes: true });
-    const offset = clamp(args.offset, 0, 0, rawEntries.length);
+    let omittedByPathPolicy = 0;
+    const readableEntries = [];
+    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+      try {
+        if (resolution.resolvedRootType === "installed_engine") {
+          await assertReadChildContained(path.join(resolution.absolutePath, entry.name), resolution);
+        }
+      }
+      catch (error) {
+        if (error.code !== "ENGINE_SOURCE_PATH_DENIED") throw error;
+        omittedByPathPolicy++;
+        continue;
+      }
+      readableEntries.push(entry);
+    }
+    const offset = clamp(args.offset, 0, 0, readableEntries.length);
     const entries = [];
-    for (const entry of rawEntries.sort((a, b) => a.name.localeCompare(b.name)).slice(offset, offset + maxEntries)) {
+    for (const entry of readableEntries.slice(offset, offset + maxEntries)) {
       const candidate = path.join(resolution.absolutePath, entry.name);
       await assertReadChildContained(candidate, resolution);
       const childStat = await statOrNull(candidate);
@@ -54,14 +129,15 @@ function createReadCapabilities(context) {
       });
     }
     const makePayload = (count) => {
-      const nextOffset = offset + count < rawEntries.length ? offset + count : null;
+      const nextOffset = offset + count < readableEntries.length ? offset + count : null;
       return success({
         path: displayPath(resolution),
         ...pathMetadata(resolution),
         entries: entries.slice(0, count),
         offset,
         nextOffset,
-        totalEntries: rawEntries.length,
+        totalEntries: readableEntries.length,
+        ...(resolution.resolvedRootType === "installed_engine" ? { omittedByPathPolicy } : {}),
         truncated: nextOffset !== null,
         ...(count < entries.length ? { omissionReason: "response_budget" } : {}),
       });
@@ -82,16 +158,31 @@ function createReadCapabilities(context) {
     const initialState = `${resolution.activeProject || ""}|${statSignature(initialStat)}`;
     if (!initialStat) {
       return dedupe("read_file", args, initialState, unavailable(resolution, "NOT_FOUND", `File not found: ${args.path}`, {
-        suggestion: {
-          tool: "search_files",
-          args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
-        },
+        suggestion: await notFoundSuggestion(args, resolution),
       }));
     }
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
+    const explicitWindow = args.offsetBytes !== undefined || args.maxBytes !== undefined;
+    // Source is located first at any size; only small non-source files read whole.
+    const wholeReadRefusal = explicitWindow ? null
+      : resolution.resolvedRootType === "installed_engine" ? "engine source requires a targeted read"
+        : isSourceLikeExt(path.extname(resolution.absolutePath)) ? "source files are located first, not read whole"
+          : initialStat.size > limits.wholeReadMaxBytes ? `files over ${limits.wholeReadMaxBytes} bytes require a targeted read` : null;
+    if (wholeReadRefusal) {
+      return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
+        `${args.path} is ${initialStat.size} bytes; ${wholeReadRefusal}. `
+        + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
+          retryAllowed: true, retryMode: "different_arguments",
+          suggestion: locateAlternatives(args)[0],
+          details: { size: initialStat.size, alternatives: [
+            ...locateAlternatives(args),
+            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },
+          ] },
+        });
+    }
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
-      return unavailable(resolution, stableRead.errorCode, stableRead.message, { retryAllowed: true, retryMode: "after_state_change" });
+      return unavailable(resolution, stableRead.errorCode, readMessage(stableRead, args, resolution), { retryAllowed: true, retryMode: "after_state_change" });
     }
     if (isBinary(stableRead.buffer)) return unavailable(resolution, "BINARY_FILE", `File appears binary: ${args.path}`);
     const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
@@ -107,12 +198,15 @@ function createReadCapabilities(context) {
         nextOffsetBytes,
         hasMore: nextOffsetBytes < stableRead.stat.size,
         truncated: nextOffsetBytes < stableRead.stat.size,
+        ...budgetFields(args, byteLength < stableRead.buffer.length),
         ...version,
+        ...(nextOffsetBytes < stableRead.stat.size ? { suggestion: { tool: "read_file",
+          args: projectScopedSuggestionArgs(args, continuationArgs(args, { offsetBytes: nextOffsetBytes })) } } : {}),
       });
     };
     const fitted = fitUtf8Prefix(stableRead.buffer, makePayload, args.byteBudget);
     if (!fitted || (stableRead.buffer.length > 0 && fitted.bytes === 0)) {
-      return failure("OUTPUT_LIMIT_EXCEEDED", "The next UTF-8 unit cannot fit in the response limit. Reduce surrounding metadata or use a larger configured response limit.", { retryAllowed: true, retryMode: "different_arguments" });
+      return failure("OUTPUT_LIMIT_EXCEEDED", "The next UTF-8 unit cannot fit in the response limit. byteBudget bounds the whole JSON response including metadata; raise byteBudget (max 65536).", { retryAllowed: true, retryMode: "different_arguments" });
     }
     return dedupe(
       "read_file",
@@ -129,11 +223,8 @@ function createReadCapabilities(context) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) {
-      return unavailable(resolution, read.errorCode, read.message, {
-        suggestion: read.errorCode === "NOT_FOUND" ? {
-          tool: "search_files",
-          args: projectScopedSuggestionArgs(args, { query: path.basename(String(args.path)), path: "project://", matchFileNames: true }),
-        } : undefined,
+      return unavailable(resolution, read.errorCode, readMessage(read, args, resolution), {
+        suggestion: read.errorCode === "NOT_FOUND" ? await notFoundSuggestion(args, resolution) : undefined,
       });
     }
     const lines = read.content.split(/\r?\n/);
@@ -141,17 +232,35 @@ function createReadCapabilities(context) {
     const requestedEnd = clamp(args.endLine, start, start, Math.max(start, lines.length));
     const maximumEnd = Math.min(requestedEnd, start + 3999, lines.length);
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const numbered = args.lineNumbers !== false;
+    const sourceFile = isSourceLikeExt(path.extname(resolution.absolutePath));
     const makePayload = (end) => success({
       path: displayPath(resolution),
       ...pathMetadata(resolution),
-      content: lines.slice(start - 1, end).join("\n"),
+      content: (numbered ? numberLines(lines.slice(start - 1, end), start) : lines.slice(start - 1, end)).join("\n"),
+      ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
       endLine: end,
       totalLines: lines.length,
       sha256: read.hash,
-      truncated: end < requestedEnd || end < lines.length,
-      nextStartLine: end < lines.length ? end + 1 : null,
+      // truncated: the requested range was not returned whole. A file that
+      // merely continues after endLine is moreLinesInFile, not truncation.
+      truncated: end < requestedEnd,
+      requestedEndLine: requestedEnd,
+      requestedRangeComplete: end >= requestedEnd,
+      rangeComplete: end >= requestedEnd,
+      moreLinesInFile: end < lines.length,
+      // Only a cut request continues; lines past a completed range are not owed.
+      ...(end < requestedEnd ? { nextStartLine: end + 1 } : {}),
+      ...(end < requestedEnd ? { omissionReason: end >= maximumEnd ? "line_limit"
+        : args.byteBudget === undefined ? "response_budget" : "byte_budget" } : {}),
+      ...budgetFields(args, end < maximumEnd),
       ...version,
+      ...(end < requestedEnd ? { suggestion: { tool: "read_file_range",
+        args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: end + 1, endLine: requestedEnd })) } } : {}),
+      // A completed source range does not owe the rest of the file: locate, don't sweep to EOF.
+      ...(end >= requestedEnd && end < lines.length && sourceFile
+        ? { afterRange: { owed: false, locateNext: locateAlternatives(args) } } : {}),
     });
     let low = start;
     let high = maximumEnd;
@@ -190,23 +299,35 @@ function createReadCapabilities(context) {
   async function readSymbol(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
-    if (!read.ok) return unavailable(resolution, read.errorCode, read.message);
-    const window = lexicalSymbolWindow(read.content, args.symbol, args.contextLines);
+    if (!read.ok) {
+      return unavailable(resolution, read.errorCode, readMessage(read, args, resolution),
+        read.errorCode === "NOT_FOUND" ? { suggestion: await notFoundSuggestion(args, resolution) } : {});
+    }
+    if (args.view !== undefined && !["body", "declaration", "member"].includes(args.view)) {
+      return failure("INVALID_ARGUMENT", "view must be body, declaration or member.", { retryAllowed: true, retryMode: "different_arguments" });
+    }
+    if (args.view === "member" && !/^[A-Za-z_]\w*::[A-Za-z_]\w*$/.test(String(args.symbol || ""))) {
+      return failure("INVALID_SYMBOL", "member view requires Owner::Name to select the class/struct scope.", { retryAllowed: true });
+    }
+    const declaration = args.view === "declaration" || args.view === "member";
+    const window = (declaration ? lexicalDeclarationWindow : lexicalSymbolWindow)(read.content, args.symbol, args.contextLines);
     if (!window.ok) return window;
     const { symbol, allLines, start, end, candidateCount } = window;
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const numbered = args.lineNumbers !== false;
     const makePayload = returnedEnd => success({
       path: displayPath(resolution),
       symbol,
       ...pathMetadata(resolution),
-      content: allLines.slice(start - 1, returnedEnd).join("\n"),
+      content: (numbered ? numberLines(allLines.slice(start - 1, returnedEnd), start) : allLines.slice(start - 1, returnedEnd)).join("\n"),
+      ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
       endLine: returnedEnd,
       requestedEndLine: end,
       nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
       hasMore: returnedEnd < end,
       truncated: returnedEnd < end,
-      representation: "lexical_body_candidate",
+      representation: declaration ? "lexical_declaration_candidate" : "lexical_body_candidate",
       candidateCount,
       candidateLines: window.candidateLines,
       selection: window.selection,
@@ -231,7 +352,7 @@ function createReadCapabilities(context) {
     read_file: readFile,
     read_file_range: readFileRange,
     read_symbol: readSymbol,
-    ...createSearchCapability(context),
+    ...createSearchCapability(context, { notFoundSuggestion }),
   };
 }
 

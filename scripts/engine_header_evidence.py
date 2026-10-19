@@ -20,6 +20,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
+from engine_definition_evidence import DefinitionBudget, attach_definition_candidates
 from workspace_paths import (
     ascii_windows_fold,
     canonical_absolute_path_identity,
@@ -443,6 +444,7 @@ def lookup_engine_header_evidence(
     max_header_chars: int = 1_000_000,
     host_platform: str | None = None,
     local_source_identity: str | None = None,
+    include_definitions: bool = True,
 ) -> dict[str, Any]:
     """Return exact source excerpts keyed by ``owner::symbol`` or symbol.
 
@@ -451,7 +453,8 @@ def lookup_engine_header_evidence(
     """
 
     if local_source_identity is not None:
-        return _bounded_local_lookup(engine_root, list(claims), local_source_identity, host_platform=host_platform)
+        return _bounded_local_lookup(engine_root, list(claims), local_source_identity, host_platform=host_platform,
+                                     include_definitions=include_definitions)
     root = Path(engine_root).expanduser().resolve() if engine_root else None
     if root is None or not root.is_dir():
         return {
@@ -642,11 +645,13 @@ def clear_engine_header_catalog_cache() -> None:
 
 
 def _local_catalog(module: Path, identity: str, deadline: float, host_platform: str | None,
-                   generation: int | None = None) -> tuple[list[Path], str]:
+                   generation: int | None = None, *, skip: frozenset[str] | set[str] = frozenset(_SKIP_DIRS),
+                   max_entries: int = 16384, max_paths: int = 4096, ttl_seconds: float = 30,
+                   tag: str = "local-v1") -> tuple[list[Path], str]:
     """Bound filename discovery as well as reads; no recursive content search."""
-    key = (_cache_root_identity(module, host_platform=host_platform), identity, "local-v1")
+    key = (_cache_root_identity(module, host_platform=host_platform), identity, tag)
     cached = _LOCAL_CATALOGS.get(key)
-    if cached and time.monotonic() - cached[0] < 30:
+    if cached and time.monotonic() - cached[0] < ttl_seconds:
         _LOCAL_CATALOGS.move_to_end(key)
         return cached[1], "complete_filename_catalog"
     generation = _LOCAL_CACHE_GENERATION if generation is None else generation
@@ -663,10 +668,10 @@ def _local_catalog(module: Path, identity: str, deadline: float, host_platform: 
             with os.scandir(directory) as listing:
                 for entry in listing:
                     entries += 1
-                    if time.monotonic() >= deadline or entries > 16384 or len(paths) >= 4096:
+                    if time.monotonic() >= deadline or entries > max_entries or len(paths) >= max_paths:
                         reason = "deadline" if time.monotonic() >= deadline else "catalog_limit"
                         break
-                    if entry.is_symlink() or entry.name in _SKIP_DIRS:
+                    if entry.is_symlink() or entry.name in skip:
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         child = Path(entry.path)
@@ -717,7 +722,10 @@ def _owner_region(masked: str, owner: str) -> tuple[int, int, int] | None:
 def _without_reflection_annotations(prefix: str) -> str:
     # Remove only known UE annotation invocations, with balanced parentheses.
     # This does not evaluate macros or assert their compiled expansion.
-    for match in reversed(list(re.finditer(r"\b(?:UFUNCTION|UPROPERTY|UMETA|GENERATED_BODY|GENERATED_UCLASS_BODY)\s*\(", prefix))):
+    # UE_DEPRECATED* precedes many engine declarations; without stripping it
+    # a deprecated API was never found as a declaration at all.
+    for match in reversed(list(re.finditer(
+            r"\b(?:UFUNCTION|UPROPERTY|UMETA|GENERATED_BODY|GENERATED_UCLASS_BODY|UE_DEPRECATED\w*)\s*\(", prefix))):
         depth, end = 1, match.end()
         while end < len(prefix) and depth:
             depth += (prefix[end] == "(") - (prefix[end] == ")")
@@ -725,6 +733,35 @@ def _without_reflection_annotations(prefix: str) -> str:
         if depth == 0:
             prefix = prefix[:match.start()] + " " + prefix[end:]
     return prefix
+
+
+def _declaration_end(masked: str, pos: int, kind: str, limit: int = 8192) -> int | None:
+    """Offset just past the declaration starting at ``pos`` in comment/string-masked
+    text: a method's balanced parameter list, qualifiers and its ``;`` or ``{``; a
+    field's ``;``; an enumerator's top-level ``,`` or ``}``. None when unproven."""
+    if kind not in ("method", "field", "enum_value"):
+        return None
+    index = masked.find("(", pos, pos + limit) if kind == "method" else pos
+    if index < 0:
+        return None
+    depth, seen_parameters = 0, kind != "method"
+    for offset in range(index, min(len(masked), index + limit)):
+        char = masked[offset]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            seen_parameters = True
+            if depth < 0:
+                return None
+        elif depth == 0 and seen_parameters:
+            if kind == "enum_value" and char in ",}":
+                return offset + (char == ",")
+            if kind != "enum_value" and char in ";{":
+                return offset + 1
+            if kind == "field" and char == "}":
+                return None
+    return None
 
 
 def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] | None:
@@ -768,7 +805,9 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
         return None
     pos = positions[0]
     line = text.count("\n", 0, pos) + 1
-    lines = text.splitlines()
+    # Line numbers count "\n"; splitlines() would also split \f and U+2028.
+    lines = [item.removesuffix("\r") for item in text.split("\n")]
+    terminator = _declaration_end(masked, pos, kinds[pos])
     excerpt_start = max(0, line - 2)
     # Include a preceding multiline reflection annotation when lexically
     # adjacent. This bounded window does not prove absence or macro expansion.
@@ -784,7 +823,10 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             end_annotation += 1
         if depth == 0 and not re.search(r"[;{}]", lexical_prefix[end_annotation:]):
             excerpt_start = prefix_start + prefix.count("\n", 0, annotation.start())
-    excerpt = "\n".join(lines[excerpt_start:min(len(lines), line + 5)])
+    # The whole signature and nothing after it when its end is lexically proven;
+    # otherwise the fixed window, marked as not proven complete.
+    end_line = text.count("\n", 0, terminator) + 1 if terminator is not None else min(len(lines), line + 5)
+    excerpt = "\n".join(lines[excerpt_start:end_line])
     conditional = bool(re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif|define)\b", masked[:end], re.M))
     access = "public" if re.match(r"(?:struct|enum)\b", masked[start:opening]) else "private"
     for label in re.finditer(r"\b(public|protected|private)\s*:", masked[opening + 1:pos]):
@@ -793,7 +835,9 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             access = label.group(1)
     bases = re.findall(r"\b(?:public|protected|private)\s+(?:virtual\s+)?([A-Za-z_]\w*(?:::\w+)*)", masked[start:opening])[:8]
     return {"line": line, "excerpt": excerpt[:1800], "excerptStartLine": excerpt_start + 1,
-            "excerptTruncated": len(excerpt) > 1800,
+            "excerptTruncated": len(excerpt) > 1800 or (terminator is None and kinds[pos] in ("method", "field", "enum_value")),
+            **({"declarationEndLine": end_line, "signatureComplete": len(excerpt) <= 1800} if terminator is not None
+               else {"signatureComplete": False}),
             "annotationVerification": "bounded_lexical_context; absence_and_expansion_unverified",
             "observedOwner": owner or symbol,
             "requestedOwner": owner or symbol, "declarationKind": kinds[pos],
@@ -803,8 +847,149 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             "signatureVerification": "lexical_only; overloads_inheritance_macros_and_callability_unverified"}
 
 
+# Public API headers only: private/internal implementation headers are not an
+# includable contract, and skipping them keeps a full Runtime+Editor+Plugins
+# filename catalog near one second on an installed engine.
+_PUBLIC_SKIP_DIRS = frozenset(_SKIP_DIRS | {"Private", "Internal", "Tests", "Content", "Resources",
+                                            "Docs", "Extras", "Config", "Build", "Shaders"})
+_PUBLIC_ROOTS = ("Engine/Source/Runtime", "Engine/Source/Editor", "Engine/Plugins")
+# Separate from the 3 s read deadline: discovery is cached per engine identity.
+_PUBLIC_CATALOG_SECONDS = 8.0
+_INHERITANCE_MAX_DEPTH = 8
+_INHERITANCE_MAX_TYPES = 32
+_INHERITANCE_MAX_FILES = 12
+_CANDIDATES_PER_TYPE = 4
+_READ_LIMIT_BYTES = 1048576
+
+
+def _type_parents(text: str, owner: str) -> list[str] | None:
+    """Direct C++ bases of ``owner`` when exactly one definition is visible."""
+    masked = _lexical_source(text)
+    region = _owner_region(masked, owner)
+    if not region:
+        return None
+    start, opening, _ = region
+    bases = re.findall(r"\b(?:public|protected|private)\s+(?:virtual\s+)?([A-Za-z_]\w*(?:::\w+)*)",
+                       masked[start:opening])[:8]
+    return [base.split("::")[-1] for base in bases]
+
+
+def _declaration_specifiers(excerpt: str, symbol: str) -> dict[str, Any]:
+    """Specifiers lexically observed in the bounded excerpt; never a compiled fact."""
+    observed: dict[str, Any] = {"verification": "lexical_excerpt_only"}
+    reflection = re.findall(r"\b(UFUNCTION|UPROPERTY)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", excerpt)
+    if reflection:
+        macro, arguments = reflection[-1]
+        observed["reflection"] = {"macro": macro, "arguments": re.sub(r"\s+", " ", arguments).strip()[:400]}
+    line = next((item for item in excerpt.splitlines() if re.search(r"\b" + re.escape(symbol) + r"\b", item)), "")
+    head, _, tail = line.partition(symbol)
+    observed["keywords"] = [k for k in ("virtual", "static", "inline", "constexpr", "explicit")
+                            if re.search(r"\b" + k + r"\b", head)]
+    observed["qualifiers"] = [k for k in ("const", "override", "final") if re.search(r"\b" + k + r"\b", tail)]
+    if re.search(r"=\s*0\s*;", tail):
+        observed["qualifiers"].append("pure_virtual")
+    if re.search(r"=\s*delete\b", tail):
+        observed["qualifiers"].append("deleted")
+    return observed
+
+
+def _deprecation(excerpt: str) -> dict[str, Any]:
+    match = re.search(r"\bUE_DEPRECATED(?:_FORGAME)?\s*\(\s*([0-9.]+)\s*,\s*\"([^\"]{0,240})", excerpt)
+    if match:
+        return {"observed": True, "version": match.group(1), "message": match.group(2), "source": "UE_DEPRECATED"}
+    if re.search(r"\bDeprecatedFunction\b|\bDEPRECATED_[A-Z_]+\b", excerpt):
+        return {"observed": True, "source": "reflection_metadata"}
+    # Absence in a bounded excerpt is not proof that the API is current.
+    return {"observed": False, "verification": "not_observed_in_bounded_excerpt"}
+
+
+def _module_owner(header: Path, root: Path) -> dict[str, Any]:
+    try:
+        parts = list(header.relative_to(root).parts)
+    except ValueError:
+        return {"status": "unknown"}
+    if "Source" not in parts:
+        return {"status": "unknown"}
+    index = len(parts) - 1 - parts[::-1].index("Source")
+    module_index = index + 1
+    if module_index < len(parts) - 1 and parts[module_index] in {"Runtime", "Editor", "Developer"} \
+            and parts[:2] == ["Engine", "Source"]:
+        module_index += 1
+    if module_index >= len(parts) - 1:
+        return {"status": "unknown"}
+    module = parts[module_index]
+    build = Path(*parts[:module_index + 1]) / f"{module}.Build.cs"
+    owner: dict[str, Any] = {"status": "observed" if (root / build).is_file() else "build_cs_not_found",
+                             "module": module, "buildCs": build.as_posix()}
+    if parts[:2] == ["Engine", "Plugins"]:
+        owner["pluginPath"] = "/".join(parts[:index])
+    return owner
+
+
+def _engine_uri(path: Path, root: Path, *, parent: bool = False) -> str:
+    """The read-only engine:// form of an observed path; empty if outside root."""
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return ""
+    return "engine://" + (relative.parent if parent else relative).as_posix()
+
+
+def _public_header_index(root: Path, identity: str, host_platform: str | None, generation: int,
+                         reasons: set[str]) -> dict[str, list[Path]]:
+    catalog_deadline = time.monotonic() + _PUBLIC_CATALOG_SECONDS
+    index: dict[str, list[Path]] = {}
+    for relative in _PUBLIC_ROOTS:
+        base = root / relative
+        if not base.is_dir() or not _contained(base, root):
+            continue
+        paths, status = _local_catalog(base, identity, catalog_deadline, host_platform, generation,
+                                       skip=_PUBLIC_SKIP_DIRS, max_entries=600000, max_paths=120000,
+                                       ttl_seconds=600, tag="public-v1")
+        if status != "complete_filename_catalog":
+            reasons.add(status)
+        for path in paths:
+            index.setdefault(path.stem.lower(), []).append(path)
+    return index
+
+
+def _type_candidates(index: dict[str, list[Path]], type_name: str) -> list[Path]:
+    exact = {p for name in _header_names(type_name) for p in index.get(Path(name).stem.lower(), [])}
+    if exact:
+        return sorted(exact, key=str)
+    stem = _unqualified(type_name)
+    stem = stem[1:] if len(stem) > 1 and stem[0] in "AUFSEI" and stem[1].isupper() else stem
+    tokens = [t.lower() for t in re.findall(r"[A-Z][a-z]+|[A-Z]+(?=[A-Z][a-z]|$)", stem) if len(t) >= 4]
+    if not tokens:
+        return []
+    # Prefer headers whose name covers more of the type's words (a Tickable*
+    # type may live in WorldSubsystem.h); every hint is re-read before use.
+    scored = [(sum(len(t) for t in tokens if t in name), name) for name in index if any(t in name for t in tokens)]
+    ranked = sorted(scored, key=lambda item: (-item[0], len(item[1]), item[1]))
+    return [p for _, name in ranked[:_CANDIDATES_PER_TYPE] for p in sorted(index[name], key=str)]
+
+
+def _read_bounded_header(header: Path, root: Path, budget: int, limit: int = 262144) -> tuple[bytes, bool] | str:
+    """Read a source prefix with identity/stability checks; a reason on failure."""
+    if not _contained(header, root):
+        return "containment"
+    try:
+        with header.open("rb") as stream:
+            before = os.fstat(stream.fileno())
+            raw = stream.read(min(limit, budget))
+            after = os.fstat(stream.fileno())
+        current = header.stat()
+    except OSError:
+        return "read_unavailable"
+    stable = all((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) ==
+                 (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) for s in (after, current))
+    if not stable or not _contained(header, root):
+        return "source_changed"
+    return raw, len(raw) == before.st_size
+
+
 def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str, str]], identity: str,
-                          *, host_platform: str | None = None) -> dict[str, Any]:
+                          *, host_platform: str | None = None, include_definitions: bool = True) -> dict[str, Any]:
     generation = _LOCAL_CACHE_GENERATION
     root = Path(engine_root).expanduser().resolve() if engine_root else None
     if root is None or len(claims) != 1:
@@ -812,79 +997,119 @@ def _bounded_local_lookup(engine_root: str | Path | None, claims: list[dict[str,
     claim = claims[0]
     symbol = str(claim.get("symbol") or "")
     owner = str(claim.get("receiverType") or "")
-    deadline = time.monotonic() + 3.0
-    modules = [root / "Engine/Source/Runtime" / name for name in ("Core", "CoreUObject", "Engine")]
-    if "input" in (owner + symbol).lower():
-        modules.insert(0, root / "Engine/Plugins/EnhancedInput/Source/EnhancedInput")
-    modules = [m for m in modules if m.is_dir() and _contained(m, root)]
-    candidates: dict[str, tuple[Path, Path, int]] = {}
     reasons: set[str] = set()
-    names = {Path(n).stem.lower() for n in _header_names(owner or symbol)}
-    stem = _unqualified(owner or symbol)
-    stem = stem[1:] if len(stem) > 1 and stem[0] in "AUFSEI" and stem[1].isupper() else stem
-    tokens = [t.lower() for t in re.findall(r"[A-Z][a-z]+|[A-Z]+(?=[A-Z][a-z]|$)", stem)]
-    for module in modules:
-        if time.monotonic() >= deadline:
-            reasons.add("deadline")
+    index = _public_header_index(root, identity, host_platform, generation, reasons)
+    deadline = time.monotonic() + 3.0
+    results: list[dict[str, Any]] = []
+    read_bytes = inspected = 0
+    visited: list[str] = []
+    edges: list[list[str]] = []
+    unresolved: list[str] = []
+    # Type definitions actually read on the owner chain. They locate where the
+    # requested member was not declared; they never prove where it is.
+    observed_types: list[dict[str, str]] = []
+    stop = False
+    # Breadth-first from the requested owner. The nearest declaration on a
+    # branch hides that name in its parents, so a found branch stops there.
+    queue: list[tuple[str, list[str]]] = [(owner or symbol, [owner or symbol])]
+    while queue and not stop:
+        type_name, chain = queue.pop(0)
+        if type_name in visited:
+            continue
+        if len(visited) >= _INHERITANCE_MAX_TYPES:
+            reasons.add("type_limit")
             break
-        paths, status = _local_catalog(module, identity, deadline, host_platform, generation)
-        if status != "complete_filename_catalog":
-            reasons.add(status)
-        for path in paths:
+        visited.append(type_name)
+        parents: list[str] | None = None
+        declared_here = False
+        for header in _type_candidates(index, type_name)[:_CANDIDATES_PER_TYPE]:
             if time.monotonic() >= deadline:
                 reasons.add("deadline")
+                stop = True
                 break
-            name = path.stem.lower()
-            score = 100 if name in names else sum(len(t) for t in tokens if len(t) >= 4 and t in name)
-            if score:
-                key = _identity(path, host_platform=host_platform)
-                candidates.setdefault(key, (path, module, score))
-    ranked = sorted(candidates.values(), key=lambda c: (-c[2], str(c[0])))
-    if len(ranked) > 4:
-        reasons.add("candidate_limit")
-    results = []
-    read_bytes = 0
-    inspected = 0
-    for header, module, _ in ranked[:4]:
-        if time.monotonic() >= deadline:
-            reasons.add("deadline")
-            break
-        if not _contained(header, module) or not _contained(module, root):
-            reasons.add("containment")
-            continue
-        try:
-            with header.open("rb") as stream:
-                before = os.fstat(stream.fileno())
-                raw = stream.read(min(262144, 1048576 - read_bytes))
-                after = os.fstat(stream.fileno())
+            if inspected >= _INHERITANCE_MAX_FILES or read_bytes >= _READ_LIMIT_BYTES:
+                reasons.add("file_limit" if inspected >= _INHERITANCE_MAX_FILES else "read_limit")
+                stop = True
+                break
+            observation = _read_bounded_header(header, root, _READ_LIMIT_BYTES - read_bytes)
+            if isinstance(observation, str):
+                reasons.add(observation)
+                if observation == "read_unavailable":
+                    # A cached positive path no longer exists; rediscover next time.
+                    for relative in _PUBLIC_ROOTS:
+                        _LOCAL_CATALOGS.pop((_cache_root_identity(root / relative, host_platform=host_platform),
+                                             identity, "public-v1"), None)
+                continue
+            raw, complete = observation
             read_bytes += len(raw)
             inspected += 1
-            current = header.stat()
-            stable = all((s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns) ==
-                         (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) for s in (after, current))
-            if not stable or not _contained(header, module):
-                reasons.add("source_changed")
-                continue
-            complete = len(raw) == before.st_size
             if not complete:
                 reasons.add("read_limit")
             text = raw.decode("utf-8-sig", errors="replace")
-            found = _bounded_declaration(text, symbol, owner)
-            if not found:
-                continue
-            results.append({"symbol_name": symbol, "qualified_name": f"{owner}::{symbol}" if owner else symbol,
-                            "source": str(header.resolve()), "moduleRoot": str(module.resolve()), **found,
-                            "fingerprint": {"sha256": hashlib.sha256(raw).hexdigest(),
-                                            "hashScope": "file" if complete else "byte_range",
-                                            "readByteRange": [0, len(raw)], "readBytes": len(raw), "completeFile": complete}})
-        except OSError:
-            reasons.add("read_unavailable")
-            # A cached positive path no longer exists. Do not keep serving the
-            # stale catalog; the next bounded request discovers current names.
-            _LOCAL_CATALOGS.pop((_cache_root_identity(module, host_platform=host_platform), identity, "local-v1"), None)
+            found = _bounded_declaration(text, symbol, type_name if owner else "")
+            if found:
+                module = _module_owner(header, root)
+                results.append({
+                    "symbol_name": symbol,
+                    "qualified_name": f"{type_name}::{symbol}" if owner else symbol,
+                    "source": str(header.resolve()),
+                    "moduleRoot": str((root / module["buildCs"]).parent) if module.get("buildCs") else "",
+                    **found,
+                    "requestedOwner": owner or symbol, "observedOwner": type_name, "declaredIn": type_name,
+                    "inheritancePath": list(chain),
+                    "specifiers": _declaration_specifiers(found["excerpt"], symbol),
+                    "deprecated": _deprecation(found["excerpt"]), "moduleOwner": module,
+                    "fingerprint": {"sha256": hashlib.sha256(raw).hexdigest(),
+                                    "hashScope": "file" if complete else "byte_range",
+                                    "readByteRange": [0, len(raw)], "readBytes": len(raw), "completeFile": complete}})
+                declared_here = True
+                break
+            if owner and parents is None:
+                parents = _type_parents(text, type_name)
+                if parents is not None:
+                    observed = {"typeName": type_name, "headerUri": _engine_uri(header, root)}
+                    module = _module_owner(header, root)
+                    if module.get("status") == "observed":
+                        observed["moduleUri"] = _engine_uri(root / module["buildCs"], root, parent=True)
+                    observed_types.append({k: v for k, v in observed.items() if v})
+                    break
+        if declared_here or not owner or stop:
+            continue
+        if parents is None:
+            unresolved.append(type_name)
+            continue
+        if len(chain) > _INHERITANCE_MAX_DEPTH:
+            reasons.add("depth_limit")
+            continue
+        for parent in parents:
+            edges.append([type_name, parent])
+            queue.append((parent, chain + [parent]))
+    # Declaration -> implementation: share the same deadline, file and byte budget.
+    if results and include_definitions:
+        budget = DefinitionBudget(deadline=deadline, max_files=_INHERITANCE_MAX_FILES, max_bytes=_READ_LIMIT_BYTES,
+                                  inspected=inspected, read_bytes=read_bytes)
+        attach_definition_candidates(results, root, budget, read_source=_read_bounded_header, lexical=_lexical_source)
+        inspected, read_bytes = budget.inspected, budget.read_bytes
+        reasons |= budget.reasons
+        for row in results:
+            reasons.update(row.get("definitionSearch", {}).get("reasons", []))
+    declaring = sorted({row["declaredIn"] for row in results})
+    limited = reasons & {"deadline", "type_limit", "file_limit", "depth_limit", "read_limit"}
+    searched = "not_applicable" if not owner else (
+        "parents_searched" if not unresolved and not limited and not queue else "partial")
+    for row in results:
+        row["inheritanceVerification"] = searched
     # Filename discovery is intentionally incomplete as a declaration search.
     # Even a complete catalog and zero hits cannot establish API absence.
+    coverage: dict[str, Any] = {"scope": "bounded_public_header_candidates", "completeness": "partial",
+                                "reasons": sorted(reasons), "apiAbsenceVerified": False,
+                                "inheritance": {"verification": searched, "visitedTypes": visited[:16],
+                                                "edges": edges[:16], "unresolvedTypes": unresolved[:8],
+                                                "ambiguity": "multiple_declaring_types" if len(declaring) > 1 else None,
+                                                "limits": {"depth": _INHERITANCE_MAX_DEPTH, "types": _INHERITANCE_MAX_TYPES,
+                                                           "files": _INHERITANCE_MAX_FILES}}}
+    if observed_types and not results:
+        coverage["observedTypeCandidates"] = [{**item, "meaning": "type_observed_member_not_found"}
+                                              for item in observed_types[:8]]
     return {"status": "ready" if results else "coverage_limited", "engineRoot": str(root),
-            "results": results, "readBytes": read_bytes, "inspectedFileCount": inspected,
-            "coverage": {"scope": "bounded_module_filename_candidates", "completeness": "partial",
-                         "reasons": sorted(reasons), "apiAbsenceVerified": False}}
+            "results": results, "readBytes": read_bytes, "inspectedFileCount": inspected, "coverage": coverage}

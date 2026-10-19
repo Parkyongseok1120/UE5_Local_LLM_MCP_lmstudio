@@ -99,17 +99,24 @@ function defaultEngineLocations(
   ], hostPlatform);
 }
 
-function engineRootNumericVersion(engineRoot) {
+/** Version plus how it was learned: "build_version_file" is observed, while
+ * "folder_name_inferred" is only a guess and must not be treated as verified. */
+function engineRootVersionWithSource(engineRoot) {
   const versionPath = path.join(engineRoot, "Engine", "Build", "Build.version");
   try {
     const payload = JSON.parse(fs.readFileSync(versionPath, "utf8"));
     const major = Number(payload.MajorVersion);
     const minor = Number(payload.MinorVersion);
-    if (Number.isInteger(major) && Number.isInteger(minor)) return `${major}.${minor}`;
+    if (Number.isInteger(major) && Number.isInteger(minor)) return { version: `${major}.${minor}`, source: "build_version_file" };
   } catch {
     // Fall back to a conventional UE_<major>.<minor> directory name.
   }
-  return path.basename(String(engineRoot || "")).match(/UE[_ -]?(\d+(?:\.\d+)*)/i)?.[1] || "";
+  const guessed = path.basename(String(engineRoot || "")).match(/UE[_ -]?(\d+(?:\.\d+)*)/i)?.[1] || "";
+  return guessed ? { version: guessed, source: "folder_name_inferred" } : { version: "", source: "" };
+}
+
+function engineRootNumericVersion(engineRoot) {
+  return engineRootVersionWithSource(engineRoot).version;
 }
 
 function engineRootMatchesNumericAssociation(engineRoot, association) {
@@ -127,5 +134,6 @@ module.exports = {
   engineFolderFromAssociation,
   engineRootMatchesNumericAssociation,
   engineRootNumericVersion,
+  engineRootVersionWithSource,
   resolveEngineBuildTool,
 };

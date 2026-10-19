@@ -43,7 +43,19 @@ namespace EvidenceFirst.Tests
                 var request = new JObject { ["action"] = "create", ["name"] = "ReceiptTarget", ["scenePath"] = scene.path, ["operationId"] = "create-object-0001" };
                 var created = Call("unity_scene", request);
                 var again = Call("unity_scene", request);
+                report["idempotencyDiagnostics"] = new JObject {
+                    ["rootCount"] = scene.rootCount,
+                    ["sameResult"] = JToken.DeepEquals(created, again),
+                    ["sameJson"] = created.ToString(Formatting.None) == again.ToString(Formatting.None),
+                    ["firstObservedAtType"] = created["origin"]?["observedAt"]?.Type.ToString(),
+                    ["replayedObservedAtType"] = again["origin"]?["observedAt"]?.Type.ToString()
+                };
                 Check(JToken.DeepEquals(created, again) && scene.rootCount == 1, "idempotent create");
+                var recorded = Call("unity_operation", new JObject { ["action"] = "get", ["operationId"] = request["operationId"] });
+                Check(created["origin"]["observedAt"].Type == JTokenType.String &&
+                    again["origin"]["observedAt"].Type == JTokenType.String &&
+                    recorded["origin"]["observedAt"].Type == JTokenType.String && JToken.DeepEquals(created, recorded),
+                    "journal replay and lookup preserve JSON string types");
                 var target = (JObject)created["target"];
                 var go = (GameObject)Objects.Resolve(target);
                 go.name = "UserInspectorChange";

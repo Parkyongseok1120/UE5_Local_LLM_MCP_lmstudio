@@ -9,6 +9,7 @@ const {
   runUnrealBuildFromPlan,
   normalizeVersion,
   detectEngineVersion,
+  detectEngineVersionWithSource,
   assertEngineContainment,
   resolveBuildExecutable,
   spawnBuildProcess,
@@ -386,4 +387,14 @@ test("runUnrealBuildFromPlan reports timedOut", async () => {
   });
   assert.strictEqual(result.timedOut, true, JSON.stringify(result));
   assert.strictEqual(result.errorCode, "BUILD_TIMEOUT");
+});
+
+test("engine version source separates an observed Build.version from a folder-name guess", async () => {
+  const observed = createFakeEngine("5.4");
+  assert.deepEqual(await detectEngineVersionWithSource(observed), { version: "5.4", source: "build_version_file" });
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "ue-guess-"));
+  const guessed = path.join(parent, "UE_5.6");
+  fs.mkdirSync(path.join(guessed, "Engine", "Build"), { recursive: true });
+  assert.deepEqual(await detectEngineVersionWithSource(guessed), { version: "5.6", source: "folder_name_inferred" });
+  assert.equal(await detectEngineVersion(guessed), "5.6");
 });

@@ -1,4 +1,5 @@
 "use strict";
+const { ENGINE_PROFILES, ENGINE_PROVIDERS } = require("./engine-profiles.js");
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -20,7 +21,7 @@ const MAX_NOTE_ITEMS = 4;
 const MAX_STORED_NOTES = 128;
 const NOTE_INSTRUCTION = [
   "You may append a private continuity note only when a decision, rejected hypothesis, or open question materially changes.",
-  "Use only these optional JSON arrays: decisions [{id?, status?, statement, rationale, supersedes?, refs?}], rejectedHypotheses [{id?, status?, hypothesis, reason, supersedes?, refs?}], openQuestions [{id?, status?, question, supersedes?, refs?}]. status is open, resolved, or superseded. Reuse an injected item's id for an explicit status update; supersedes contains prior item ids. No other keys. refs may contain only tool-call:<id> values for completed tool calls already in this conversation; omit uncertain refs.",
+  "Use only these optional JSON arrays: decisions [{id?, status?, statement, rationale, supersedes?, refs?}], rejectedHypotheses [{id?, status?, hypothesis, reason, supersedes?, refs?}], openQuestions [{id?, status?, question, supersedes?, refs?}]. status is open, resolved, or superseded. Reuse an injected item's id for an explicit status update; supersedes contains prior item ids. No other keys. refs may contain only tool-call:<id> values copied exactly from the [Available tool-call refs] list when it is present (never invent ids); omit uncertain refs.",
   "Write the normal user-facing answer first. Then append this footer with only your JSON object between the tags:",
   "<!-- direct-continuity-note-v1 -->",
   "<continuity-note>",
@@ -182,6 +183,7 @@ function provenanceFromMessages(messages) {
   const completedIds = new Set();
   const observations = new Map();
   const observationBatches = new Map();
+  const toolNames = new Map();
   for (let index = startIndex; index < messages.length; index += 1) {
     const message = messages[index];
     if (message.getRole() === "assistant") {
@@ -194,6 +196,8 @@ function provenanceFromMessages(messages) {
     for (const [ri, result] of message.getToolCallResults().entries()) {
       if (!pairing.matches.has(`${index - startIndex}:${ri}`)) continue;
       completedIds.add(String(result.toolCallId));
+      const paired = pairing.matches.get(`${index - startIndex}:${ri}`);
+      if (paired && typeof paired.name === "string") toolNames.set(String(result.toolCallId), paired.name);
       const content = String(result.content || "");
       if (content.length > 262144) continue;
       const decoded = decodeToolResultRecord(content);
@@ -214,7 +218,7 @@ function provenanceFromMessages(messages) {
       const unrealDescriptor = String(value.canonicalProject || value.projectPath || value.project
         || (typeof value.activeProject === "string" ? value.activeProject : ""));
       const unrealRoot = normalizedProjectRoot(unrealDescriptor);
-      if (unrealRoot && unrealRoot.toLowerCase().endsWith(".uproject")) {
+      if (unrealRoot && unrealRoot.toLowerCase().endsWith(ENGINE_PROFILES.unreal.descriptorExtension)) {
         const identity = `unreal:${crypto.createHash("sha256").update(unrealRoot).digest("hex")}`;
         projects.set(identity, unrealRoot);
       }
@@ -228,7 +232,15 @@ function provenanceFromMessages(messages) {
     verifiedToolIds,
     observations: new Map([...observations].filter(([id]) => verifiedToolIds.has(id))),
     observationBatches,
+    toolNames,
   };
+}
+
+// A structure validator proves a packet is well formed, never that its facts are true.
+const STRUCTURE_ONLY_TOOLS = new Set(["evidence_first_validate"]);
+function structureOnlyResult(value, toolName) {
+  return STRUCTURE_ONLY_TOOLS.has(String(toolName || ""))
+    || (isRecord(value) && typeof value.validationScope === "string" && value.factualEvidenceVerified === false);
 }
 
 function availableFileObservation(value) { return value.ok !== false && !value.errorCode
@@ -347,9 +359,11 @@ function renderAssistantNote(note, messages = []) {
   const applicability = [];
   for (const item of [...note.decisions, ...note.rejectedHypotheses, ...note.openQuestions]) {
     for (const ref of item.refs || []) {
-      const value = provenance.observations.get(ref.replace(/^tool-call:/, ""));
+      const refId = ref.replace(/^tool-call:/, "");
+      const value = provenance.observations.get(refId);
       let state = "source_unavailable";
-      if (value?.kind === "git_observation") state = "historical";
+      if (structureOnlyResult(value, provenance.toolNames?.get(refId))) state = "structure_only";
+      else if (value?.kind === "git_observation") state = "historical";
       else if (value && identity(value)) {
         const latest = uniqueLatest(records.filter(([, v]) => v.kind !== "git_observation" && identity(v) === identity(value)),
           ([id]) => provenance.observationBatches.get(id))?.[1];
@@ -361,7 +375,67 @@ function renderAssistantNote(note, messages = []) {
       applicability.push({ id: item.id, ref, state });
     }
   }
-  return `${NOTE_MARKER}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: note, sourceApplicability: applicability })}`;
+  const structureOnly = [...new Set(applicability.filter(entry => entry.state === "structure_only").map(entry => entry.id))];
+  const structureNote = structureOnly.length
+    ? ` 구조 검증만 있음, 사실 근거 아님: ${structureOnly.join(", ")} (evidence_first_validate는 packet 형식만 확인한다).` : "";
+  const view = withdrawnView(note);
+  const withdrawnNote = view.withdrawn?.length
+    ? "\nWithdrawn items are listed only so they are not re-asserted; they are not current judgments." : "";
+  return `${NOTE_MARKER}${structureNote ? "\n" + structureNote.trim() : ""}${withdrawnNote}\nPrior assistant judgments, not verified facts. reviewClaims are assistant-claimed reviews, never verified semantic completion; file coverage only proves delivered evidence. Current user instructions and newer tool observations take precedence. ${note.scope.projectIdentity ? "Project identity was bound to a tool observation." : "No single project identity was proven; do not attribute these notes to the active project."}\n${JSON.stringify({ modelNotes: view, sourceApplicability: applicability })}`;
+}
+
+/** A superseded judgment (its own status, or named by another
+ * item's `supersedes`) is moved out of the current lists into `withdrawn`, so a
+ * withdrawn hypothesis cannot be re-read as a standing decision. */
+function withdrawnView(note) {
+  const supersededBy = new Map();
+  for (const item of [...note.decisions, ...note.rejectedHypotheses, ...note.openQuestions]) {
+    for (const id of item.supersedes || []) if (!supersededBy.has(id)) supersededBy.set(id, item.id || null);
+  }
+  const isWithdrawn = item => item.status === "superseded" || (item.id && supersededBy.has(item.id));
+  const withdrawn = [];
+  const keep = (items, kind, text) => items.filter(item => {
+    if (!isWithdrawn(item)) return true;
+    withdrawn.push({ ...(item.id ? { id: item.id } : {}), kind, text: String(text(item) || "").slice(0, 240),
+      ...(item.id && supersededBy.get(item.id) ? { supersededBy: supersededBy.get(item.id) } : {}) });
+    return false;
+  });
+  const decisions = keep(note.decisions, "decision", item => item.statement);
+  const rejectedHypotheses = keep(note.rejectedHypotheses, "rejectedHypothesis", item => item.hypothesis);
+  const openQuestions = keep(note.openQuestions, "openQuestion", item => item.question);
+  return withdrawn.length ? { ...note, decisions, rejectedHypotheses, openQuestions, withdrawn } : note;
+}
+
+const REF_TARGET_KEYS = ["path", "symbol", "query", "project", "projectPath", "fileName", "action"];
+
+/** Recent completed tool calls the model may cite, by their real ids. The ids are
+ * otherwise invisible to it, which made it invent refs such as tool-call:1. */
+function renderAvailableRefs(messages, limit = 16, maxChars = 2400) {
+  const index = exchangeIndex([...messages]);
+  const counts = new Map();
+  messages.forEach(message => { if (message.getRole() === "assistant") for (const request of message.getToolCallRequests()) {
+    const id = String(request.id || ""); if (id) counts.set(id, (counts.get(id) || 0) + 1); } });
+  const rows = [];
+  messages.forEach((message, messageIndex) => {
+    if (message.getRole() !== "tool") return;
+    message.getToolCallResults().forEach((result, resultIndex) => {
+      const request = index.matches.get(`${messageIndex}:${resultIndex}`);
+      const id = String(result.toolCallId || "");
+      if (!request || !/^[A-Za-z0-9_-]{1,80}$/u.test(id) || counts.get(id) !== 1) return;
+      const args = isRecord(request.arguments) ? request.arguments : {};
+      const key = REF_TARGET_KEYS.find(name => typeof args[name] === "string" && args[name]);
+      const raw = key ? String(args[key]).replace(/\s+/gu, " ").slice(0, 100) : "";
+      const target = raw && sanitizeDerivedOperationalText(raw) === raw ? ` ${key}=${raw}` : "";
+      rows.push(`- tool-call:${id} ${String(request.name || "tool").slice(0, 60)}${target}`);
+    });
+  });
+  const header = "[Available tool-call refs] Cite evidence only with these exact tool-call:<id> values; other ids are rejected.";
+  const kept = [];
+  for (const row of rows.slice(-Math.max(0, limit)).reverse()) {
+    if ([header, ...kept, row].join("\n").length > maxChars) break;
+    kept.push(row);
+  }
+  return kept.length ? [header, ...kept.reverse()].join("\n") : "";
 }
 
 function historyKey(messages, workingDirectory) {
@@ -429,6 +503,7 @@ module.exports = {
   provenanceFromMessages,
   reconcileStoredNote,
   renderAssistantNote,
+  renderAvailableRefs,
   splitVisibleAnswer,
   validateDraftNote,
   validateStoredNote,

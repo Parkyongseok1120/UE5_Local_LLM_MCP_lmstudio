@@ -1,3 +1,4 @@
+import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import type { ChatMessage,Tool,ToolCallRequest } from "@lmstudio/sdk";
 import fs from "node:fs";
 import path from "node:path";
@@ -25,12 +26,12 @@ export function toolEngine(tool: Pick<ScopedTool, "pluginIdentifier">): "unity" 
 }
 
 function directoryProjectScope(directory: string): { engine: ResolvedProjectEngine; projectIdentity: string } {
-  const unityMarkers = ["Assets", "Packages/manifest.json", "ProjectSettings/ProjectVersion.txt"];
+  const unityMarkers = ENGINE_PROFILES.unity.projectMarkers;
   const unity = unityMarkers.every((marker) => fs.existsSync(path.join(directory, marker)));
   let unrealProjects: Array<string> = [];
   try {
     unrealProjects = fs.readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".uproject"))
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(ENGINE_PROFILES.unreal.descriptorExtension))
       .map((entry) => path.join(directory, entry.name));
   } catch {
     // The working directory may disappear or become unreadable between turns.
@@ -47,7 +48,7 @@ function explicitProjectScope(value: string): { engine: ResolvedProjectEngine; p
   if (!candidate || !path.isAbsolute(candidate)) return { engine: "unknown", projectIdentity: "" };
   try {
     const resolved = path.resolve(candidate);
-    if (resolved.toLowerCase().endsWith(".uproject") && fs.statSync(resolved).isFile()) {
+    if (resolved.toLowerCase().endsWith(ENGINE_PROFILES.unreal.descriptorExtension) && fs.statSync(resolved).isFile()) {
       return { engine: "unreal", projectIdentity: resolved };
     }
     if (!fs.statSync(resolved).isDirectory()) return { engine: "unknown", projectIdentity: "" };

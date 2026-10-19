@@ -1,0 +1,456 @@
+{
+  "schemaVersion": "1.1.2",
+  "mode": "codegen",
+  "baselineHead": "bc5e92b33fbdd380093add6e432b331eba4da52d",
+  "existing": [
+    "ue-accuracy-fixture.cjs owns cases and grading; eval-ue-accuracy.cjs owns isolated executions",
+    "reference-context and EvidenceManager own observed engine applicability",
+    "direct-read-capabilities owns refusal and locate alternatives"
+  ],
+  "proposed": [
+    "Reuse the existing historical engine observation patch with its invalidation tests",
+    "Correct fixture setup, engine identity, case isolation, recording and unobserved grading fields",
+    "Use a non-executable locator template after an implicit whole-read refusal"
+  ],
+  "doNotDuplicate": [
+    "No new semantic truth validator, completion ledger or persistent source cache",
+    "Keep existing explicit window, pagination, receipt and edit recovery contracts"
+  ],
+  "invariants": [
+    "Preserve the original 78 results and original Claude worktree",
+    "Do not treat a correct label as a verified cause or an unobserved retraction as successful",
+    "Same engine build for prompt, source evidence and lookup; unknown symbols fail honestly",
+    "No guessed query or first-page range in whole-read refusal",
+    "Retain role boundaries, version invalidation, exact input budgeting and tool call/result pairs"
+  ],
+  "impactedSurfaces": [
+    "Fixture and evaluator scripts and tests",
+    "Reference ingestion, guidance selection, prediction loop and generated identity",
+    "Unreal read refusal, recovery tests and component versions",
+    "Documentation and local installation identity"
+  ],
+  "validationPlan": [
+    "Validate this packet, then build generated assets and TypeScript",
+    "Test case isolation, incompatible resume refusal, grading unknowns and fixture call paths",
+    "Run read/edit MCP and guidance/continuity regressions",
+    "Run corrected real-model smoke before considering broad repetition or conditional new behavior",
+    "Keep accuracy, semantic review, delivery and latency separate; document runtime limits",
+    "Recover using preserved originals and installer backups; never reset user changes"
+  ],
+  "claims": [
+    {
+      "claim": "The implemented engine-observation, evaluation and locator-hint corrections pass regression checks; overall accuracy and end-to-end latency improvement still need separate runtime evidence.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-20261019/harness-compactor-final-tests.log",
+          "observation": "855 tests passed; includes engine applicability, project conflicts, guidance selection and continuity."
+        },
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-20261019/harness-unreal-final-tests.log",
+          "observation": "337 tests passed, 2 skipped; includes actual stdio locator flow, stale hash, receipts and edit conflict regression checks."
+        },
+        {
+          "kind": "runtime",
+          "location": "LM Studio configured unreal-agent fresh stdio connection",
+          "observation": "Server 0.3.29 refused implicit source whole read with a project-scoped search_files argsTemplate, without executable empty args; the filled query succeeded."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs:assertBuiltIdentity and oneRun",
+          "observation": "Evaluations require a current compiled identity, record full visible answers and observed prediction settings, and leave semantic credit pending separate review."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "eval-ue-accuracy.cjs:main",
+          "symbol": "assertBuiltIdentity"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "prediction-loop.ts",
+          "symbol": "createPredictionLoopHandler"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "schema 3 smoke outputs",
+          "symbol": "visible answers, tool records, guidance observations"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "unknown",
+          "location": "existing LM Studio GUI chat",
+          "symbol": "actual loaded identity and end-to-end game audit"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "repaired-smoke-receive-catalog-v3.json:P3-N",
+          "observation": "Correct not_defect label still accompanies incorrect client LocalRole and engine-branch explanation."
+        },
+        {
+          "kind": "project_source",
+          "location": "direct-read-capabilities.js:locateAlternatives",
+          "observation": "Changing a suggestion does not prevent a model from independently choosing sequential range reads."
+        }
+      ],
+      "unknowns": [
+        "Full matched off/auto accuracy on the corrected 13-case set and held-out cases",
+        "End-to-end game-audit latency versus fbff0599 under equal settings",
+        "Actual loaded plugin identity in the existing LM Studio GUI chat",
+        "Sequential range-read frequency and token savings in live model/MCP use",
+        "Long-term reappearance of a withdrawn claim beyond the observed single follow-up",
+        "Effective seed: requested value was recorded but runtime did not echo an effective seed"
+      ]
+    }
+  ],
+  "validationResults": {
+    "compactor": {
+      "passed": 855,
+      "failed": 0,
+      "skipped": 0
+    },
+    "unrealMcp": {
+      "passed": 337,
+      "failed": 0,
+      "skipped": 2
+    },
+    "installerVersionEngine": {
+      "passed": 24,
+      "failed": 0
+    },
+    "finalRunnerFocused": {
+      "passed": 12,
+      "failed": 0
+    },
+    "build": "passed",
+    "generatedIdentityCheck": "passed",
+    "gitDiffCheck": "passed",
+    "ueCompilationAndPlay": "not performed; source excerpts only"
+  },
+  "installation": {
+    "compactorVersion": "0.4.80",
+    "revision": 127,
+    "unrealMcpVersion": "0.3.29",
+    "installerConfigurationVersion": "2.1.29",
+    "productVersion": "1.4.0",
+    "buildId": "ef-build-v2-4cf45cf9c625634b8e9b1aec4e1b526674691714427c42e4ad4edbd009b543d9",
+    "diskInstallVerified": true,
+    "status": {
+      "ok": true,
+      "sourceLayoutVerified": true,
+      "installedSourceComplete": true,
+      "executionMode": "transparent_context_only",
+      "modelOwner": "lmstudio_selected_model",
+      "toolsOwner": "lmstudio_selected_model",
+      "runtimeActivation": "not_machine_verifiable",
+      "runtimeActivationProven": false,
+      "missing": [],
+      "issues": []
+    },
+    "restartRequired": true,
+    "existingConversationsChanged": 0
+  },
+  "sourceCorrection": {
+    "engine": "5.8.2",
+    "changelist": 56702186,
+    "scope": "Default legacy UNetDriver; no custom replication routing/authorization",
+    "firstFailure": "Actor.cpp:1965 returns null for Owner=null; NetDriver.cpp:8263-8274 drops before InternalProcessRemoteFunction on the client too.",
+    "receiveChecks": "DataChannel bNetOwner and ReceivedRPC/ShouldCallRemoteFunction are additional defenses, not the first failure in P3-D.",
+    "earlierInterpretationWithdrawn": "The no-owning-connection warning was incorrectly treated as server-to-client only.",
+    "independentReviewer": "/root/review_changes"
+  },
+  "artifacts": {
+    "root": "$USERPROFILE/.evidence-first/evaluations/harness-20261019",
+    "manifest": [
+      {
+        "file": "historical-78-v2.json",
+        "sha256": "bc59acb70df2c997338bc98b31b586185b85c32fc8eaac082909026d192a4919",
+        "bytes": 105295,
+        "runs": 78,
+        "buildId": null
+      },
+      {
+        "file": "repaired-smoke-before-receive-catalog-v3.json",
+        "sha256": "65505de9c2d271f41c52abe9550a5e21e141547fa13b260a6c8897c778de4fcb",
+        "bytes": 700775,
+        "runs": 3,
+        "buildId": "ef-build-v2-16e9ea07ac4aecf17438520cade0eb1bbe3e222b781e344f0f4517752b1c9855"
+      },
+      {
+        "file": "repaired-smoke-receive-catalog-v3.json",
+        "sha256": "88dafdfe3c8a7d2d5b5bf8737443817c84d98a640496da798a22ccb4e37c131d",
+        "bytes": 453409,
+        "runs": 2,
+        "buildId": "ef-build-v2-3b5fe1a7580dde181366d8c09f06e1c8defea6995f696d383715a946d2f6aa43"
+      },
+      {
+        "file": "final-build-smoke-v3.json",
+        "sha256": "d6a8fde1acc0b66db967046ed4c38f3d8428552f8286ffb37e1528ec994d73c5",
+        "bytes": 494611,
+        "runs": 2,
+        "buildId": "ef-build-v2-4cf45cf9c625634b8e9b1aec4e1b526674691714427c42e4ad4edbd009b543d9"
+      },
+      {
+        "file": "harness-compactor-final-tests.log",
+        "sha256": "e93797ed4adab1023c5c6adf253120046531bdac3d5e6b113feceb9cafa791a0",
+        "bytes": 82945,
+        "kind": "validation"
+      },
+      {
+        "file": "harness-unreal-final-tests.log",
+        "sha256": "24406656177fbf4286a592c4f42d3c4213605368e39abcd24cbf1f9ec1155c48",
+        "bytes": 30015,
+        "kind": "validation"
+      },
+      {
+        "file": "harness-python-repair-tests.log",
+        "sha256": "e973834abf1b9baa179e9b5a9f30461cb804801213197acd8ffeb119cb45a082",
+        "bytes": 101,
+        "kind": "validation"
+      },
+      {
+        "file": "harness-install-final.json",
+        "sha256": "a86d7366228456f1f63f01d8085eea7942cc33a603bb5c50167efba995cbfe1a",
+        "bytes": 2105,
+        "kind": "validation"
+      },
+      {
+        "file": "harness-install-final.log",
+        "sha256": "f71af95a627471b526c4c905ad751b839cb29b02cb0ad616b48fb13f873cba84",
+        "bytes": 790,
+        "kind": "validation"
+      },
+      {
+        "file": "harness-status-final.json",
+        "sha256": "dbf0dedc04b21709d07398c03b595bc71eb8ffa65753e004ac47d2ffac7642b8",
+        "bytes": 294,
+        "kind": "validation"
+      },
+      {
+        "file": "source-review.json",
+        "sha256": "59b7e94321f4c161638732dc26f0bd03d3bad1ad8fc05ab2e81d14f8fae4a8b4",
+        "bytes": 7560,
+        "kind": "independent_review"
+      }
+    ],
+    "review": "source-review.json",
+    "rawContainsSourceExcerpts": true
+  },
+  "modelReview": [
+    {
+      "artifact": "repaired-smoke-before-receive-catalog-v3.json",
+      "caseId": "P1-N",
+      "reviewer": "Codex independent source review",
+      "causeCorrect": true,
+      "evidenceCorrect": true,
+      "notes": "Correct remote-owned pawn Client RPC -> local controller feedback component -> enabled display chain under the explicit fixture preconditions.",
+      "sourceSha256": "65505de9c2d271f41c52abe9550a5e21e141547fa13b260a6c8897c778de4fcb",
+      "elapsedMs": 143981,
+      "rounds": 4,
+      "grade": {
+        "caseId": "P1-N",
+        "pair": 1,
+        "variant": "N",
+        "label": "not_defect",
+        "severity": null,
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": null,
+        "labelCorrect": true,
+        "causeCorrect": true,
+        "evidenceCorrect": true,
+        "qualifiedCorrect": true
+      }
+    },
+    {
+      "artifact": "repaired-smoke-before-receive-catalog-v3.json",
+      "caseId": "P3-D",
+      "reviewer": "Codex independent source review",
+      "causeCorrect": false,
+      "evidenceCorrect": false,
+      "notes": "Incorrect not_defect label. Remote callspace was expanded into successful execution without following the no-owning-connection send gate.",
+      "sourceSha256": "65505de9c2d271f41c52abe9550a5e21e141547fa13b260a6c8897c778de4fcb",
+      "elapsedMs": 141328,
+      "rounds": 4,
+      "grade": {
+        "caseId": "P3-D",
+        "pair": 3,
+        "variant": "D",
+        "label": "not_defect",
+        "severity": null,
+        "score": 0,
+        "falsePositive": false,
+        "missedDefect": true,
+        "severityInRange": null,
+        "p1Maintained": null,
+        "labelCorrect": false,
+        "causeCorrect": false,
+        "evidenceCorrect": false,
+        "qualifiedCorrect": false
+      }
+    },
+    {
+      "artifact": "repaired-smoke-before-receive-catalog-v3.json",
+      "caseId": "P7",
+      "reviewer": "Codex independent source review",
+      "causeCorrect": false,
+      "evidenceCorrect": false,
+      "retractedPriorFinding": true,
+      "retractedAfterUserRebuttal": false,
+      "reappearedAfterRetraction": false,
+      "notes": "Owned-beacon premise and explicit withdrawal are correct; initial explanation incorrectly identifies Server RPC with FUNC_NetRequest and overgeneralizes callspace conditions. Only one neutral finalization follow-up was observed.",
+      "sourceSha256": "65505de9c2d271f41c52abe9550a5e21e141547fa13b260a6c8897c778de4fcb",
+      "elapsedMs": 185116,
+      "rounds": 7,
+      "grade": {
+        "caseId": "P7",
+        "pair": 7,
+        "variant": "N",
+        "label": "not_defect",
+        "severity": null,
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": false,
+        "labelCorrect": true,
+        "causeCorrect": false,
+        "evidenceCorrect": false,
+        "qualifiedCorrect": false,
+        "selfCorrected": true
+      }
+    },
+    {
+      "artifact": "repaired-smoke-receive-catalog-v3.json",
+      "caseId": "P3-N",
+      "reviewer": "Codex plus /root/review_changes source review",
+      "causeCorrect": false,
+      "evidenceCorrect": false,
+      "notes": "Correct normal label, but owning-client pawn LocalRole is AutonomousProxy, not Authority. GetNetOwningPlayer returns UPlayer*, not APlayerController. ServerInteract call is line 22, not 24.",
+      "sourceSha256": "88dafdfe3c8a7d2d5b5bf8737443817c84d98a640496da798a22ccb4e37c131d",
+      "elapsedMs": 110977,
+      "rounds": 4,
+      "grade": {
+        "caseId": "P3-N",
+        "pair": 3,
+        "variant": "N",
+        "label": "not_defect",
+        "severity": null,
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": null,
+        "labelCorrect": true,
+        "causeCorrect": false,
+        "evidenceCorrect": false,
+        "qualifiedCorrect": false
+      }
+    },
+    {
+      "artifact": "repaired-smoke-receive-catalog-v3.json",
+      "caseId": "P3-D",
+      "reviewer": "Codex plus /root/review_changes source review",
+      "causeCorrect": true,
+      "evidenceCorrect": false,
+      "notes": "Correct defect and first-drop explanation: Actor GetNetConnection null, then NetDriver 8263-8274. Strict citation axis fails: LeverPawn.cpp call is line 22, not 21; receiver source path is also malformed. Receive ownership gate is secondary.",
+      "sourceSha256": "88dafdfe3c8a7d2d5b5bf8737443817c84d98a640496da798a22ccb4e37c131d",
+      "elapsedMs": 183610,
+      "rounds": 5,
+      "grade": {
+        "caseId": "P3-D",
+        "pair": 3,
+        "variant": "D",
+        "label": "defect",
+        "severity": "P1",
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": null,
+        "labelCorrect": true,
+        "causeCorrect": true,
+        "evidenceCorrect": false,
+        "qualifiedCorrect": false
+      }
+    },
+    {
+      "artifact": "final-build-smoke-v3.json",
+      "caseId": "P3-D",
+      "reviewer": "Codex source review against independently checked engine flow",
+      "causeCorrect": true,
+      "evidenceCorrect": true,
+      "notes": "Correct defect/P1, client SimulatedProxy callspace, ownerless GetNetConnection null, and first drop at NetDriver.cpp:8263-8275. Project call at LeverPawn.cpp:22 matches.",
+      "sourceSha256": "d6a8fde1acc0b66db967046ed4c38f3d8428552f8286ffb37e1528ec994d73c5",
+      "elapsedMs": 116068,
+      "rounds": 4,
+      "grade": {
+        "caseId": "P3-D",
+        "pair": 3,
+        "variant": "D",
+        "label": "defect",
+        "severity": "P1",
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": null,
+        "labelCorrect": true,
+        "causeCorrect": true,
+        "evidenceCorrect": true,
+        "qualifiedCorrect": true
+      }
+    },
+    {
+      "artifact": "final-build-smoke-v3.json",
+      "caseId": "P7",
+      "reviewer": "Codex independent source review",
+      "causeCorrect": true,
+      "evidenceCorrect": false,
+      "retractedPriorFinding": true,
+      "retractedAfterUserRebuttal": false,
+      "reappearedAfterRetraction": false,
+      "notes": "Correct owner-chain explanation and F-1 withdrawal persisted in one neutral finalization turn. Strict citation axis fails: Params.Owner is RelayGameMode.cpp:9 (claimed 8), SpawnActor is 10 (claimed 9). Callspace phrasing is limited to stated fixture conditions, not a complete universal rule.",
+      "sourceSha256": "d6a8fde1acc0b66db967046ed4c38f3d8428552f8286ffb37e1528ec994d73c5",
+      "elapsedMs": 95194,
+      "rounds": 7,
+      "grade": {
+        "caseId": "P7",
+        "pair": 7,
+        "variant": "N",
+        "label": "not_defect",
+        "severity": null,
+        "score": 1,
+        "falsePositive": false,
+        "missedDefect": false,
+        "severityInRange": true,
+        "p1Maintained": false,
+        "labelCorrect": true,
+        "causeCorrect": true,
+        "evidenceCorrect": false,
+        "qualifiedCorrect": false,
+        "selfCorrected": true
+      }
+    }
+  ],
+  "evaluationLimitations": [
+    "These seven diagnostic runs are three distinct outputs and are not a pooled accuracy sample.",
+    "The two earlier smoke outputs were exploratory intermediate snapshots; final-build-smoke-v3 passed compiled/source identity preflight.",
+    "The corrected full 13-case off/auto comparison and independent held-out evaluation remain pending.",
+    "Actual LM Studio SDK inference was used with a synthetic controller and case tools; this is not a GUI or live-game MCP benchmark.",
+    "Strict citation failure does not mean the core cause is false; axes are recorded separately."
+  ]
+}

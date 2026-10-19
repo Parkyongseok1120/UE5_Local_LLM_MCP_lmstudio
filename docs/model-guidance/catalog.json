@@ -279,6 +279,80 @@
           ]
         },
         {
+          "id": "responsibility",
+          "topics": [
+            "design",
+            "lifecycle"
+          ],
+          "priority": 15,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "lifetime",
+          "topics": [
+            "lifecycle",
+            "design"
+          ],
+          "priority": 25,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "5.8"
+            ]
+          }
+        },
+        {
+          "id": "subsystems",
+          "topics": [
+            "lifecycle",
+            "design"
+          ],
+          "priority": 35,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "5.8"
+            ]
+          }
+        },
+        {
+          "id": "threads",
+          "topics": [
+            "lifecycle",
+            "debugging"
+          ],
+          "priority": 45,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "verification",
+          "topics": [
+            "core",
+            "debugging",
+            "multiplayer"
+          ],
+          "priority": 25,
+          "signals": [
+            "diagnostic_present",
+            "compilation_pending"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
           "id": "preference",
           "topics": [
             "code-style"
@@ -352,6 +426,40 @@
               }
             ]
           }
+        },
+        {
+          "id": "verification",
+          "topics": [
+            "core",
+            "debugging",
+            "multiplayer"
+          ],
+          "priority": 25,
+          "signals": [
+            "diagnostic_present",
+            "compilation_pending"
+          ],
+          "requires": [
+            "core/proof"
+          ]
+        },
+        {
+          "id": "verified-lifetime",
+          "topics": [
+            "design",
+            "debugging",
+            "lifecycle"
+          ],
+          "priority": 20,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "6000.3"
+            ]
+          }
         }
       ]
     },
@@ -400,6 +508,22 @@
       "file": "unreal-networking.md",
       "engine": "unreal",
       "sections": [
+        {
+          "id": "engine-defaults",
+          "topics": [
+            "multiplayer"
+          ],
+          "priority": 15,
+          "signals": [],
+          "requires": [
+            "core/proof"
+          ],
+          "applicability": {
+            "engineVersions": [
+              "5.8"
+            ]
+          }
+        },
         {
           "id": "authority",
           "topics": [

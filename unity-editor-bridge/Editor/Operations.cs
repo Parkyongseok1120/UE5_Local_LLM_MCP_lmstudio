@@ -23,7 +23,7 @@ namespace EvidenceFirst.UnityBridge
             foreach (var file in Directory.GetFiles(Journal, "*.json").Take(1001))
             {
                 PathSafety.CheckInternal(file);
-                var record = JObject.Parse(File.ReadAllText(file));
+                var record = ReadRecord(file);
                 if ((string)record["status"] == "running")
                 { record["status"] = "outcome_unknown"; record["result"] = new JObject { ["status"] = "outcome_unknown", ["operationId"] = record["operationId"], ["origin"] = ResponseMetadata.Origin(record), ["message"] = "Editor/domain ended before result was recorded; request will not be replayed" }; PathSafety.WritePrivate(file, record.ToString(Formatting.None)); }
             }
@@ -45,6 +45,15 @@ namespace EvidenceFirst.UnityBridge
             result["origin"] = record["origin"]?.DeepClone() ?? ResponseMetadata.Origin(result);
             return result;
         }
+        static JObject ReadRecord(string file)
+        {
+            // Journal JSON stores timestamps and user strings as strings.
+            // Json.NET's default date inference changes their JToken types on
+            // replay, so the retained result no longer equals the first one.
+            using (var stream = File.OpenText(file))
+            using (var reader = new JsonTextReader(stream) { DateParseHandling = DateParseHandling.None })
+                return JObject.Load(reader);
+        }
         internal static JObject Dispatch(string method, JObject args)
         {
             if (method == "unity_status") return Bridge.Status();
@@ -59,7 +68,7 @@ namespace EvidenceFirst.UnityBridge
             if (method == "unity_prefab" && (string)args["action"] == "overrides") return Prefab(args);
             if (method == "unity_prefab" && ((string)args["action"] == "read" || (string)args["action"] == "contents")) return Prefabs.Read(args);
             if (method == "unity_tests" && (string)args["action"] != "run") {
-                if ((string)args["action"] != "status" && (string)args["action"] != "results" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required");
+                if ((string)args["action"] != "status" && (string)args["action"] != "results" && (string)args["action"] != "list" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required: enable Tools/Evidence First/Allow Execute for this Editor session");
                 return TestExecution.Call(args);
             }
             if (method == "unity_scene" && (string)args["action"] == "list") return Scenes(args);
@@ -67,24 +76,31 @@ namespace EvidenceFirst.UnityBridge
             {
                 var file = OperationPath(Required(args, "operationId"));
                 if (!File.Exists(file)) return new JObject { ["status"] = "unknown", ["operationId"] = args["operationId"], ["message"] = "No retained execution record; do not infer non-execution after journal loss" };
-                var record = JObject.Parse(File.ReadAllText(file));
+                var record = ReadRecord(file);
                 if ((string)record["method"] == "unity_tests") {
                     if ((string)args["action"] == "cancel" && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission required");
                     return TestExecution.Call(new JObject { ["action"] = (string)args["action"] == "cancel" ? "cancel" : "status", ["operationId"] = args["operationId"] });
                 }
                 if ((string)args["action"] == "cancel") return new JObject { ["status"] = "not_cancelled", ["operationId"] = args["operationId"], ["currentStatus"] = record["status"], ["reason"] = "Synchronous operations cannot be safely interrupted; no running API was aborted" };
                 if ((string)args["action"] != "get") throw new BridgeException("invalid_arguments", "Unknown operation action");
-                return StoredResult(record);
+                var resolved = CompileResolution(record, StoredResult(record));
+                if ((string)resolved["status"] != "accepted") {
+                    record["result"] = resolved; record["status"] = resolved["status"];
+                    try { PathSafety.WritePrivate(file, record.ToString(Formatting.None)); }
+                    catch { resolved["journalPersistence"] = new JObject { ["status"] = "unavailable", ["errorCode"] = "journal_write_failed" }; }
+                }
+                return resolved;
             }
             bool edit = method == "unity_object_patch" || method == "unity_scene" || method == "unity_asset" || method == "unity_prefab";
             bool execute = method == "unity_editor" || method == "unity_debug_action" || method == "unity_tests";
             if (!edit && !execute) throw new BridgeException("capability_unavailable", "Operation is not implemented");
-            if (edit && !Bridge.EditAllowed || execute && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Enable the required permission in the Editor Tools/Evidence First menu");
+            if (edit && !Bridge.EditAllowed) throw new BridgeException("permission_denied", "Editor Edit permission is off: enable Tools/Evidence First/Allow Edit for this Editor session");
+            if (execute && !Bridge.ExecuteAllowed) throw new BridgeException("permission_denied", "Editor Execute permission is off: enable Tools/Evidence First/Allow Execute for this Editor session");
             string id = Required(args, "operationId"), filePath = OperationPath(id);
             string digest = Bridge.Digest(Bridge.ProjectId + Bridge.Session + method + Canonical(args));
             if (File.Exists(filePath))
             {
-                var previous = JObject.Parse(File.ReadAllText(filePath));
+                var previous = ReadRecord(filePath);
                 if ((string)previous["digest"] != digest) throw new BridgeException("operation_conflict", "operationId was already bound to different content or Editor session");
                 return StoredResult(previous);
             }
@@ -204,6 +220,15 @@ namespace EvidenceFirst.UnityBridge
                 }
                 page["consistency"] = "index_page_then_main_asset_observations";
             }
+            // A find that returns nothing (or one page) is a statement about this query only.
+            page["absenceVerified"] = false;
+            page["searchScope"] = kind == "types" ? "typecache_unityengine_object_derived"
+                : kind == "assets" ? "assetdatabase_filter" : "loaded_scene_objects";
+            page["limitations"] = kind == "types"
+                ? new JArray("Only UnityEngine.Object-derived types are searched; plain C# classes, structs, interfaces and enums are not find targets.", "A type not listed here is not proven absent.")
+                : kind == "assets"
+                    ? new JArray("Only the AssetDatabase filter result is listed; assets outside Assets/Packages or excluded by the filter are not searched.", "An asset not listed here is not proven absent.")
+                    : new JArray("Only objects in loaded scenes are searched; unloaded scenes and prefab assets are not.", "An object not listed here is not proven absent.");
             return page;
         }
         static JObject Scenes(JObject args)
@@ -309,9 +334,49 @@ namespace EvidenceFirst.UnityBridge
             var rows = mods.Select(m => new JObject { ["sourceTarget"] = Objects.Ref(m.target), ["propertyPath"] = m.propertyPath, ["value"] = m.value, ["objectReference"] = Objects.Ref(m.objectReference) }).ToList();
             return Objects.Page(rows, args, Bridge.Digest(new JArray(rows).ToString(Formatting.None)));
         }
+        // A compile request only asks Unity to compile. Its outcome is the next
+        // compilation the Bridge observed after the request, or none at all.
+        static JObject CompileResolution(JObject record, JObject result)
+        {
+            if ((string)record["method"] != "unity_editor" || (string)result["action"] != "compile" || (string)result["status"] != "accepted") return result;
+            int? sequenceAtRequest = (int?)result["compilationSequenceAtRequest"];
+            var first = sequenceAtRequest.HasValue ? Observations.FirstCompilationAfter(sequenceAtRequest.Value) : null;
+            string atRequest = (string)result["compilationIdAtRequest"] ?? "", current = (string)first?["id"] ?? "", outcome = (string)first?["outcome"] ?? "unknown";
+            var observed = new JObject { ["compilationIdAtRequest"] = atRequest, ["compilationId"] = current, ["compilationOutcome"] = outcome,
+                ["lastCompilationFinishedAt"] = first?["finishedAt"] };
+            result["observedCompilation"] = observed;
+            if ((string)record["origin"]?["editorSessionId"] != Bridge.Session)
+            {
+                result["status"] = "outcome_unknown"; observed["reason"] = "editor_session_changed";
+                return result;
+            }
+            if (!sequenceAtRequest.HasValue || first != null && (int?)first["sequence"] != sequenceAtRequest.Value + 1) {
+                result["status"] = "outcome_unknown"; observed["reason"] = "compilation_history_unavailable"; return result;
+            }
+            if (outcome == "compiling") { observed["state"] = "compiling"; return result; }
+            if (current.Length > 0 && current != atRequest)
+            {
+                result["status"] = outcome == "failed" ? "failed" : "completed";
+                observed["state"] = "finished";
+                observed["errorsObserved"] = outcome == "failed";
+                observed["logs"] = new JObject { ["tool"] = "unity_logs", ["args"] = new JObject { ["source"] = "compiler", ["compilationId"] = current } };
+                return result;
+            }
+            DateTime requestedAt;
+            bool known = DateTime.TryParse((string)record["origin"]?["observedAt"] ?? "", null, System.Globalization.DateTimeStyles.RoundtripKind, out requestedAt);
+            if (known && DateTime.UtcNow - requestedAt.ToUniversalTime() > TimeSpan.FromSeconds(15))
+            {
+                result["status"] = "no_compilation_observed";
+                observed["state"] = "not_started";
+                observed["message"] = "No compilation started after the request. Unity may have found no script changes; check unity_status and the compiler logs.";
+            }
+            else observed["state"] = "waiting_for_start";
+            return result;
+        }
         static JObject EditorAction(JObject args)
         {
-            string action = Required(args, "action");
+            string action = Required(args, "action"), compilationAtRequest = Observations.CompilationId;
+            int sequenceAtRequest = Observations.CompilationSequence;
             switch (action)
             {
                 case "play": if (!EditorApplication.isPlayingOrWillChangePlaymode) EditorApplication.isPlaying = true; break;
@@ -323,7 +388,7 @@ namespace EvidenceFirst.UnityBridge
                 case "compile": if (EditorApplication.isPlayingOrWillChangePlaymode) throw new BridgeException("editor_busy", "Compile request requires Edit Mode"); CompilationPipeline.RequestScriptCompilation(); break;
                 default: throw new BridgeException("capability_unavailable", "Unknown Editor action");
             }
-            return new JObject { ["status"] = "accepted", ["action"] = action, ["verification"] = "unknown", ["compilationIdAtRequest"] = Observations.CompilationId,
+            return new JObject { ["status"] = "accepted", ["action"] = action, ["verification"] = "unknown", ["compilationIdAtRequest"] = compilationAtRequest, ["compilationSequenceAtRequest"] = sequenceAtRequest,
                 ["playingAtReturn"] = EditorApplication.isPlaying, ["pausedAtReturn"] = EditorApplication.isPaused, ["message"] = "Request issued; inspect subsequent status/events for observed completion" };
         }
     }

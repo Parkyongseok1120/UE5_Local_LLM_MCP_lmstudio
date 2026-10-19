@@ -8,6 +8,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/config-defaults.ts",
   "src/generated-runtime-identity.ts",
   "src/generated-tool-contract.ts",
+  "src/generated-unity-tool-contract.ts",
   "src/tool-result-semantics.js",
   "src/interrupted-calls.js",
   "src/budget-broker.ts",
@@ -18,6 +19,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/generated-design-guidance.ts",
   "src/checkpoint-budget.js",
   "src/round-input.ts",
+  "src/resume-facts.ts",
   "src/semantic-handoff.ts",
   "src/context-manager.ts",
   "src/context-ports.ts",
@@ -38,6 +40,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/runtime-identity.ts",
   "src/tool-boundary.ts",
   "src/tool-capability-registry.ts",
+  "src/engine-profiles.js",
 
   "src/index.ts",
   "src/prediction-loop.ts",

@@ -4,7 +4,7 @@ import type { ReferenceSnapshot } from "./reference-context";
 export type GuidanceSupplement = Exclude<GuidanceTopic, "core">;
 export type GuidanceIntent = Readonly<{ primary: GuidanceTopic; secondary?: GuidanceSupplement; omitted?: boolean; reason: string }>;
 const rules: ReadonlyArray<readonly [GuidanceTopic, RegExp]> = [
-  ["multiplayer", /멀티플레이|서버\s*권한|(?:상태|변수|서버|네트워크)\s*복제|네트워크\s*예측|\b(?:multiplayer|rpc|replication|netcode|server authority)\b/iu],
+  ["multiplayer", /멀티플레이|네트워크|리플리케이션|레플리케이션|서버\s*권한|(?:상태|변수|서버)\s*복제|\b(?:multiplayer|rpcs?|replication|netcode|networking|networked|netmulticast|repnotify|onrep\w*|server authority)\b/iu],
   ["design", /구조|의존성|상태\s*소유자|\b(?:ssot|solid|architecture|dependencies|design patterns?)\b/iu],
   ["lifecycle", /수명|생명주기|타이머|이벤트\s*해제|구독\s*해제|늦은\s*(?:결과|콜백)|\b(?:lifecycle|lifetime|dispose|endplay|ondisable|unsubscribe)\b/iu],
   ["debugging", /컴파일\s*오류|빌드\s*오류|매크로|델리게이트|(?:심볼|타입|함수)\s*(?:정의|선언|계약)|헤더\s*(?:경로|오류)|\b(?:api|include|uproperty|ufunction|forceinline|delegate|enhanced input|serializefield|compiler? error|build error|header (?:path|error)|symbol definition|debug)\b/iu],
@@ -43,11 +43,22 @@ export function selectGuidanceIntent(objective: { text?: string; reason: string 
   }
   const topics = [...matched];
   if (topics.length === 1) return { primary: topics[0], reason: "explicit_task_topic" };
-  // At most two explicit topics; the catalogue still owns dependency closure
-  // and exact token admission. More complex requests keep the common fallback.
-  if (topics.length === 2) return { primary: topics[0], secondary: topics[1] as GuidanceSupplement,
-    reason: "explicit_task_topics" };
-  return { primary: "core", reason: topics.length ? "conflicting_topics" : "no_explicit_topic" };
+  // At most two explicit topics, taken in the order above (sentence, then rule
+  // order). The catalogue still owns dependency closure and exact admission.
+  if (topics.length >= 2) return { primary: topics[0], secondary: topics[1] as GuidanceSupplement,
+    reason: topics.length === 2 ? "explicit_task_topics" : "explicit_task_topics_limited" };
+  return { primary: "core", reason: "no_explicit_topic" };
+}
+
+/** A follow-up that names no topic of its own ("Die 없어…") keeps the topics
+ * of the previous user request. Exclusions, omissions and an explicit topic in
+ * the latest request always win; only an explicit earlier topic is carried. */
+export function selectFollowUpGuidanceIntent(latest: { text?: string; reason: string },
+  previous?: { text?: string; reason: string }): GuidanceIntent {
+  const current = selectGuidanceIntent(latest);
+  if (current.reason !== "no_explicit_topic" || !previous?.text) return current;
+  const earlier = selectGuidanceIntent(previous);
+  return earlier.reason.startsWith("explicit_task_topic") ? { ...earlier, reason: "previous_request_topic" } : current;
 }
 
 export function selectGuidanceTopics(intent: GuidanceIntent, snapshot: ReferenceSnapshot) {
@@ -56,11 +67,19 @@ export function selectGuidanceTopics(intent: GuidanceIntent, snapshot: Reference
   const diagnostic = !intent.omitted && intent.primary !== "debugging" && observed.length > 0;
   const apiObserved = (snapshot.autoSignals || []).filter(s => s.signal === "api_contract_observed" && s.order === "last_observation");
   const api = !intent.omitted && intent.primary !== "debugging" && apiObserved.length > 0;
-  const supplement = intent.omitted ? undefined : diagnostic || api && !intent.secondary ? "debugging" as const : intent.secondary;
+  // Any returned source still in the input counts, not only the last one, so
+  // the topic does not flip with each read (the instruction is in the system message).
+  const networkObserved = (snapshot.autoSignals || []).filter(s => s.signal === "network_contract_observed");
+  const network = !intent.omitted && !diagnostic && !intent.secondary && intent.primary !== "multiplayer"
+    && networkObserved.length > 0;
+  const supplement = intent.omitted ? undefined : diagnostic ? "debugging" as const : network ? "multiplayer" as const
+    : api && !intent.secondary ? "debugging" as const : intent.secondary;
   return { primary: intent.primary, supplement, omitted: intent.omitted === true,
     reasons: [intent.reason, ...(diagnostic ? ["returned_diagnostic_or_pending"] : []),
-      ...(api && !diagnostic && !intent.secondary ? ["returned_api_contract_context"] : []),
+      ...(network ? ["returned_network_contract_context"] : []),
+      ...(api && !diagnostic && !network && !intent.secondary ? ["returned_api_contract_context"] : []),
       ...(diagnostic && intent.secondary && intent.secondary !== "debugging" ? ["explicit_secondary_deferred_for_diagnostic"] : [])],
-    observationIds: [...new Set([...observed, ...(api && !diagnostic && !intent.secondary ? apiObserved : [])]
+    observationIds: [...new Set([...observed, ...(network ? networkObserved : []),
+      ...(api && !diagnostic && !network && !intent.secondary ? apiObserved : [])]
       .flatMap(s => s.observationIds))].slice(0, 4) };
 }

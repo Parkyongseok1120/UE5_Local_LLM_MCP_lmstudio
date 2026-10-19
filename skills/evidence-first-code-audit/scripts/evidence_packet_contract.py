@@ -102,6 +102,11 @@ def validation_scope_metadata() -> dict[str, Any]:
     }
 
 
+def validation_result_summary(structure_ok: bool) -> str:
+    """A passing packet is a well-formed packet, never a verified finding."""
+    return ("structure_valid" if structure_ok else "structure_invalid") + "; facts_not_verified"
+
+
 def model_guidance_prompt() -> str:
     return (
         "For code audit, architecture, refactor planning, or code generation, work evidence-first. "

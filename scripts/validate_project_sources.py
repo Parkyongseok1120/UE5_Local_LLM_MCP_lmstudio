@@ -18,7 +18,7 @@ from unreal_static_validate import (
     normalize_rel_path,
     resolve_scan_roots,
     resolve_write_scope_paths,
-    validate_unreal_readiness,
+    validate_unreal_readiness_report,
 )
 
 
@@ -30,6 +30,13 @@ class FindingPayload:
     code: str
     message: str
     blocking: bool
+    metadata: dict | None = None
+
+    def to_json(self) -> dict:
+        value = dict(self.__dict__)
+        if value["metadata"] is None:
+            del value["metadata"]
+        return value
 
 
 def resolve_project_root(path: Path) -> Path:
@@ -120,7 +127,7 @@ def main() -> int:
         scoped_file_count = len(scope)
         scan_mode = "scoped"
         scope_kind = "write_target"
-        findings = validate_unreal_readiness(root, scope_paths=scope)
+        report = validate_unreal_readiness_report(root, scope_paths=scope)
     elif scope_targets:
         scope_by_path: dict[Path, None] = {}
         for target in scope_targets:
@@ -130,9 +137,10 @@ def main() -> int:
         scoped_file_count = len(scope)
         scan_mode = "scoped"
         scope_kind = "task_slice"
-        findings = validate_unreal_readiness(root, scope_paths=scope)
+        report = validate_unreal_readiness_report(root, scope_paths=scope)
     else:
-        findings = validate_unreal_readiness(root)
+        report = validate_unreal_readiness_report(root)
+    findings = report.findings
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     has_errors = has_static_errors(findings)
@@ -194,6 +202,12 @@ def main() -> int:
         "hasBlockingErrors": has_blocking_errors,
         "deferredCount": deferred_count,
         "preExistingCount": pre_existing_count,
+        # What ran and what did not: an unavailable analysis is never a clean result.
+        "analysis": {
+            "analysisCoverage": report.analysisCoverage,
+            "engineIdentity": report.engineIdentity,
+            "contractRevision": report.contractRevision,
+        },
         "findings": [
             FindingPayload(
                 severity=f.severity,
@@ -201,6 +215,7 @@ def main() -> int:
                 line=f.line,
                 code=f.code,
                 message=f.message,
+                metadata=f.metadata,
                 blocking=(
                     f.severity == "error"
                     and normalize_rel_path(f.path) in blocking_paths
@@ -209,7 +224,7 @@ def main() -> int:
                         or f.code not in DEFERRED_WRITE_COUNTERPART_CODES
                     )
                 ),
-            ).__dict__
+            ).to_json()
             for f in findings
         ],
     }

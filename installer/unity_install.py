@@ -100,7 +100,16 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
     identity = hashlib.sha256(str(project).encode()).hexdigest()[:24]
     config_path = checked_path(args.unity_mcp_config or state / "unity" / identity / "mcp.json")
     node = str(getattr(args, "runtime_node", None) or shutil.which("node") or "")
-    report = {"ok": False, "components": ["unity"], "engine": "unity", "dryRun": args.dry_run,
+    # Server-side permissions are opt-in flags; each also needs its Editor menu toggle.
+    allow_write = bool(getattr(args, "unity_allow_write", False))
+    allow_commands = bool(getattr(args, "unity_allow_commands", False))
+    permissions = {
+        "serverWrite": allow_write, "serverCommands": allow_commands,
+        "editorMenus": ["Tools/Evidence First/Allow Edit for this Editor session",
+                        "Tools/Evidence First/Allow Execute for this Editor session"],
+        "howToEnable": "Reinstall with --unity-allow-write and/or --unity-allow-commands, then enable the matching Editor menu item.",
+    }
+    report = {"ok": False, "components": ["unity"], "engine": "unity", "dryRun": args.dry_run, "permissions": permissions,
               "project": str(project), "runtimeRoot": str(root), "mcpConfig": str(config_path), "sameHostRequired": True,
               "modelConnection": "not_verified", "ready": False, "externalActions": [],
               "rollbackScope": "project manifest and MCP/runtime configuration only; dependencies/compiled worker are not rolled back"}
@@ -126,7 +135,8 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
         run([node, "-e", "require('./src/server.js')"], cwd=adapter)
         dotnet, binary = worker(args, root, project, state, node, report["externalActions"])
         config = {"mcpServers": {"unity-tools": {"command": node, "args": [str(adapter / "src/server.js")], "env": {
-            "UNITY_PROJECT_ROOT": str(project), "WORKSPACE_CAPABILITIES": "1", "UNITY_DOTNET": str(dotnet), "UNITY_SYMBOL_WORKER": str(binary), "ALLOW_WRITE": "0", "ALLOW_COMMANDS": "0"}}}}
+            "UNITY_PROJECT_ROOT": str(project), "WORKSPACE_CAPABILITIES": "1", "UNITY_DOTNET": str(dotnet), "UNITY_SYMBOL_WORKER": str(binary),
+            "ALLOW_WRITE": "1" if allow_write else "0", "ALLOW_COMMANDS": "1" if allow_commands else "0"}}}}
         if config_path.exists():
             if config_path.stat().st_size > 1048576:
                 raise ValueError("MCP configuration exceeds 1 MiB")
@@ -143,7 +153,16 @@ def install_unity(args, root: Path, transaction_type, lock_type, *, transaction=
         tx.write_file(state / "runtime-python.path", (python + "\n").encode())
         check = run([node, str(root / "scripts/check_unity_install.js"), str(config_path)], cwd=root, timeout=45)
         report["verification"] = json.loads(check.stdout)
+        # The symbol worker stays required for installation; the check reports it.
+        if report["verification"].get("worker", "configured") != "configured":
+            raise ValueError("Unity C# symbol worker is not configured: " + str(report["verification"].get("workerRemedy", "")))
         report["ready"] = report["verification"].get("connection") == "connected"
+        if not report["ready"]:
+            # Installation is complete; the Editor side starts when Unity opens the project.
+            report["nextSteps"] = [
+                f"Open {project} in the Unity Editor and wait for script compilation to finish.",
+                "Reload the unity-tools MCP server in LM Studio, then call unity_status: connection should be connected.",
+            ]
         report["worker"] = str(binary)
         report["ok"] = True
         if transaction is None:

@@ -1,0 +1,252 @@
+{
+  "mode": "codegen",
+  "invariants": [
+    "Preserve the inherited working tree; do not commit, reinstall, reload a model, or change global PATH.",
+    "All multi-region edits use one prior version and reject ambiguity or overlap before publishing; existing CAS, locks and rollback remain authoritative.",
+    "Observed hashes and archived content never imply that oldText is still visible or that the disk version is unchanged.",
+    "Requested range completion is distinct from file-end and model-input projection completeness."
+  ],
+  "impactedSurfaces": [
+    "Unreal direct read/search/symbol/mutation tools and schemas",
+    "Python engine declaration lookup and trace metrics",
+    "Compactor continuity, bounded raw pins, repeat receipts and generated guidance",
+    "Integrated packaging module inventory and component versions"
+  ],
+  "validationPlan": [
+    "Sequential Unreal, Compactor, Python and shared-core Unity regression suites.",
+    "Focused failure tests for atomic multi-region edits, injected rollback, overlapping matches, schema budgets and projected completion metadata.",
+    "Check four generators, encoding and git diff whitespace; validate this packet structure separately from code correctness.",
+    "Real-model T1–T5 baseline/A-B is deferred: LM Studio HTTP connection refused and starting/loading a model is outside this execution's constraints."
+  ],
+  "claims": [
+    {
+      "claim": "Completed requested ranges omit nextStartLine; engine/large implicit whole reads require a targeted request, while explicit byte windows remain usable.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "observation": "readFile enforces the whole-read gate and readFileRange emits rangeComplete separately from moreLinesInFile."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/failure-guidance.test.js",
+          "observation": "End-to-end tool tests cover completed and truncated ranges, installed engine files, large project files and byte windows."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "symbol": "readFile / readFileRange"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "symbol": "installed_engine and wholeReadMaxBytes; requestedRangeComplete"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/failure-guidance.test.js",
+          "symbol": "runtime.callTool structuredContent assertions"
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "Multiple exact regions in single-file and bundle operations either commit together or preserve the prior files, including UTF-8 limit and publication-failure paths.",
+      "claimType": "behavior",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/safe-write.js",
+          "observation": "calculateReplacements resolves each unique non-overlapping region against the same original text; replaceWithCAS checks the version."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/multi-region-edit.test.js",
+          "observation": "Tests cover CRLF, line shifts, chained receipts, malformed/mixed/overlapping edits, self-overlapping text, aggregate bytes, multi-file preflight and injected rollback."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-bundle-capability.js",
+          "symbol": "applyEditBundle"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-bundle-capability.js",
+          "symbol": "validateProspective"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle.js",
+          "symbol": "applyDirectEditBundle"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-edit-bundle-commit.js",
+          "symbol": "commitBundle"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/multi-region-edit.test.js",
+          "symbol": "committed content, hashes and unchanged-file assertions"
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "claim": "Current-turn raw pins are bounded, expire at a new user turn and yield to measured input pressure; projected source-range completion remains distinguishable from omitted body text.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "WorkingContext.project preserves only bounded selected raw results and uses archive projections for the others."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "Pressure recovery passes pinnedWorkingSetMaxChars=0."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-set-pin.test.cjs",
+          "observation": "Five tests verify edited/narrow pin behavior, expiration, budget bounds and sourceFacts versus bodyComplete."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": []
+    },
+    {
+      "claim": "Repeat receipt reuse is limited to successful raw observations in the actual input and requires matching tool arguments including project and byteBudget.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "presentRepeatReceipts excludes archived and projected kinds."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+          "observation": "Receipt lookup uses arguments after read-budget reservation."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-approval.test.cjs",
+          "observation": "Guard tests verify exact identity and changed-budget behavior."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "Input receipt collection tests cover projection exclusion."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": []
+    },
+    {
+      "claim": "Bounded lexical declaration views report incomplete signatures; engine_local signature view omits definition bodies while retaining proven implementation range suggestions.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_header_evidence.py",
+          "observation": "_declaration_end and _bounded_declaration distinguish a proven terminator from a fallback window and the 1800-character cap."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_engine_header_evidence_identity.py",
+          "observation": "Tests cover nested parameter parentheses, trailing qualifiers, length caps and unterminated signatures."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_lexical_owner_regions.py",
+          "observation": "Shared fixture parity with the Node lexical-owner-region tests."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_engine_definition_evidence.py",
+          "observation": "Signature-view test verifies omitted implementation text and exact source start/end range suggestions; 103 related Python tests pass after this final correction."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": [
+        "Lexical evidence does not verify overload resolution, macro expansion, inheritance traversal or callability."
+      ]
+    },
+    {
+      "claim": "Trace metrics distinguish byte windows, unreturned edits and receipt-bearing repeated reads.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/trace_lmstudio_run.py",
+          "observation": "read_shape and _request_fingerprint keep full read arguments but exclude repeatReceipt from read identity."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_trace_lmstudio_run.py",
+          "observation": "Twelve focused tests pass, including byte windows, unreturned edits, distinct views and receipt-bearing repeated reads."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": ["Necessary lines and actual editing time cannot be inferred from recorded calls alone."]
+    },
+    {
+      "claim": "Real-model reductions in reading or editing cost remain unmeasured.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Narrow_Read_Implementation_20261019.md",
+          "observation": "Records T1–T5 tasks and the absent real-model baseline/A-B; no performance improvement is asserted."
+        }
+      ],
+      "counterEvidence": [],
+      "behaviorPath": [],
+      "unknowns": [
+        "The configured LM Studio HTTP endpoint refused connection. No model was started or reloaded.",
+        "Correctness tests and a small semantic-guard timing sample cannot establish the plan's 10% performance gate."
+      ]
+    }
+  ]
+}

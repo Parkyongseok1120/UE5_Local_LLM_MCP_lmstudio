@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from unreal_source_extensions import (
     UNREAL_CPP_IMPLEMENTATION_SUFFIXES,
@@ -40,6 +41,20 @@ class Finding:
     line: int
     code: str
     message: str
+    # Optional trailing metadata; the five positional fields stay compatible.
+    # Keys: ruleId, contractRevision, contractIds, analysisKind (how it was
+    # analysed), confidence (how sure), evidenceRefs, assumptions, limitations.
+    # severity remains the impact; none of these substitute for each other.
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass
+class ValidationReport:
+    """Whole-run result: findings plus what was and was not analysed."""
+    findings: list[Finding]
+    analysisCoverage: dict[str, Any]
+    engineIdentity: dict[str, Any] | None
+    contractRevision: str | None
 
 __all__ = [
     'CPP_SOURCE_SUFFIXES',
@@ -48,4 +63,5 @@ __all__ = [
     'SOURCE_ONLY_SUFFIXES',
     'IGNORED_PROJECT_DIRS',
     'Finding',
+    'ValidationReport',
 ]

@@ -14,9 +14,38 @@ namespace EvidenceFirst.UnityBridge
     {
         internal sealed class Entry { internal string Id, Method, Digest, StateDigest, Summary, State; internal JObject Args; internal DateTime Until; }
         static readonly Dictionary<string, Entry> Entries = new Dictionary<string, Entry>();
+        const string PendingKey = "EvidenceFirst.PendingApprovals";
+        static bool restored;
+        static void Restore() {
+            if (restored || String.IsNullOrEmpty(Bridge.Session)) return; restored = true;
+            try {
+                var saved = JsonConvert.DeserializeObject<JObject>(SessionState.GetString(PendingKey, "{}"), new JsonSerializerSettings { DateParseHandling = DateParseHandling.None });
+                if ((string)saved["session"] != Bridge.Session || !(saved["entries"] is JArray entries)) return;
+                foreach (var row in entries.OfType<JObject>().Take(32)) {
+                    var args = row["args"] as JObject;
+                    if (args == null || !DateTime.TryParse((string)row["until"], null, System.Globalization.DateTimeStyles.RoundtripKind, out var until)) continue;
+                    var entry = new Entry { Id = (string)row["id"], Method = (string)row["method"], Args = args,
+                        Digest = (string)row["digest"], StateDigest = (string)row["stateDigest"], Summary = (string)row["summary"],
+                        State = (string)row["state"], Until = until.ToUniversalTime() };
+                    if (String.IsNullOrEmpty(entry.Id)) continue;
+                    if (entry.Until <= DateTime.UtcNow) entry.State = "expired";
+                    // A domain change retains the exact pending request, but requires
+                    // renewed user review for an approval issued in the old domain.
+                    else if (entry.State == "approved") entry.State = "pending";
+                    Objects.RestoreApprovalReceipt(row["receipt"] as JObject);
+                    Entries[entry.Id] = entry;
+                }
+            } catch { Entries.Clear(); }
+        }
+        static void Persist() {
+            SessionState.SetString(PendingKey, new JObject { ["session"] = Bridge.Session,
+                ["entries"] = new JArray(Entries.Values.Select(e => new JObject { ["id"] = e.Id, ["method"] = e.Method,
+                    ["args"] = e.Args, ["digest"] = e.Digest, ["stateDigest"] = e.StateDigest, ["summary"] = e.Summary,
+                    ["state"] = e.State, ["until"] = e.Until.ToString("O"), ["receipt"] = Objects.RetainApprovalReceipt((string)e.Args["receipt"]) })) }.ToString(Formatting.None));
+        }
         internal static bool Required(string method, JObject args) => method == "unity_scene" && ((string)args["action"] == "delete" || (string)args["action"] == "remove_component") || method == "unity_asset" && (string)args["action"] == "delete" || method == "unity_prefab" && (string)args["action"] == "revert";
         static string Canonical(JToken t) => t is JObject o ? "{" + String.Join(",", o.Properties().OrderBy(p => p.Name, StringComparer.Ordinal).Select(p => JsonConvert.ToString(p.Name) + ":" + Canonical(p.Value))) + "}" : t is JArray a ? "[" + String.Join(",", a.Select(Canonical)) + "]" : t.ToString(Formatting.None);
-        static string Binding(string method, JObject args) { var clean = (JObject)args.DeepClone(); clean.Remove("approvalId"); return Bridge.Digest(Bridge.ProjectId + Bridge.Session + Bridge.Generation + method + Canonical(clean)); }
+        static string Binding(string method, JObject args) { var clean = (JObject)args.DeepClone(); clean.Remove("approvalId"); return Bridge.Digest(Bridge.ProjectId + Bridge.Session + method + Canonical(clean)); }
         internal static string Validate(string method, JObject args, out string summary) {
             if (!Required(method, args)) throw new BridgeException("invalid_approval_scope", "Only explicit delete/remove-component/revert requests need destructive approval");
             if (EditorApplication.isPlayingOrWillChangePlaymode) throw new BridgeException("runtime_edit_disabled", "Destructive edits require Edit Mode");
@@ -38,9 +67,12 @@ namespace EvidenceFirst.UnityBridge
             return Prefabs.TreeDigest(target);
         }
         internal static JObject Call(JObject args) {
+            Restore();
             foreach (var e in Entries.Values) if (e.Until <= DateTime.UtcNow && (e.State == "pending" || e.State == "approved")) e.State = "expired";
             if ((string)args["action"] == "status") {
-                if (!Entries.TryGetValue((string)args["approvalId"] ?? "", out var found)) throw new BridgeException("approval_unknown", "Approval absent or Editor/domain session ended");
+                if (!Entries.TryGetValue((string)args["approvalId"] ?? "", out var found)) {
+                    throw new BridgeException("approval_unknown", "Approval absent or Editor/domain session ended");
+                }
                 return Result(found);
             }
             if ((string)args["action"] != "request" || !Bridge.EditAllowed) throw new BridgeException("permission_denied", "Enable Editor Edit before requesting approval");
@@ -50,23 +82,28 @@ namespace EvidenceFirst.UnityBridge
             if (operation == null || operation["approvalId"] != null || operation.ToString(Formatting.None).Length > 16000) throw new BridgeException("invalid_arguments", "Provide bounded final operation arguments without approvalId");
             string state = Validate(method, operation, out var summary);
             var entry = new Entry { Id = Guid.NewGuid().ToString("N"), Method = method, Args = (JObject)operation.DeepClone(), Digest = Binding(method, operation), StateDigest = state, Summary = summary, State = "pending", Until = DateTime.UtcNow.AddMinutes(2) };
-            Entries.Add(entry.Id, entry); return Result(entry);
+            Entries.Add(entry.Id, entry); Persist();
+            // Bring the review window up for the user; it never approves by itself.
+            EditorApplication.delayCall += DestructiveApprovalWindow.OpenForReview;
+            var requested = Result(entry); requested["approvalSurfaceOpened"] = false; requested["approvalSurfaceScheduled"] = true; return requested;
         }
         static JObject Result(Entry e) => new JObject { ["status"] = e.State, ["approvalId"] = e.Id, ["expiresAt"] = e.Until.ToString("O"), ["summary"] = e.Summary, ["approvalSurface"] = "Unity menu: Tools/Evidence First/Review destructive requests", ["oneUse"] = true };
-        internal static IEnumerable<Entry> Pending() => Entries.Values.Where(e => (e.State == "pending" || e.State == "approved") && e.Until > DateTime.UtcNow).ToArray();
+        internal static IEnumerable<Entry> Pending() { Restore(); return Entries.Values.Where(e => (e.State == "pending" || e.State == "approved") && e.Until > DateTime.UtcNow).ToArray(); }
         // Called only from the trusted Editor window, never dispatched from MCP.
         internal static void Decide(string id, bool approve) {
+            Restore();
             if (!Entries.TryGetValue(id, out var entry) || entry.State != "pending" || entry.Until <= DateTime.UtcNow) throw new BridgeException("approval_expired", "Approval no longer pending");
-            if (!approve) { entry.State = "denied"; return; }
+            if (!approve) { entry.State = "denied"; Persist(); return; }
             if (!Bridge.EditAllowed || Validate(entry.Method, entry.Args, out _) != entry.StateDigest) throw new BridgeException("approval_conflict", "Target changed; request fresh approval");
-            entry.State = "approved";
+            entry.State = "approved"; Persist();
         }
         internal static void Check(string method, JObject args) {
+            Restore();
             if (!Entries.TryGetValue((string)args["approvalId"] ?? "", out var e) || e.State != "approved" || e.Until <= DateTime.UtcNow) throw new BridgeException("approval_required", "User approval for this exact operation is required");
             if (e.Digest != Binding(method, args) || Validate(method, args, out _) != e.StateDigest) throw new BridgeException("approval_conflict", "Approval content or target state changed");
         }
         internal static void Consume(string method, JObject args) {
-            Check(method, args); Entries[(string)args["approvalId"]].State = "consumed";
+            Check(method, args); Entries[(string)args["approvalId"]].State = "consumed"; Persist();
         }
         internal static JObject Delete(string method, JObject args) {
             Validate(method, args, out _); var target = Objects.Resolve(args["target"]); Consume(method, args);
@@ -83,8 +120,9 @@ namespace EvidenceFirst.UnityBridge
         Vector2 scroll;
         [MenuItem("Tools/Evidence First/Review destructive requests")]
         static void Open() { GetWindow<DestructiveApprovalWindow>("Destructive approvals"); }
+        internal static void OpenForReview() { Open(); }
         void OnGUI() {
-            EditorGUILayout.HelpBox("Only approve operations you recognize. Approval is bound to the exact request, target state, Editor/domain and expires after 2 minutes. This window does not execute the operation.", MessageType.Warning);
+            EditorGUILayout.HelpBox("Only approve operations you recognize. Approval is bound to the exact request, target state, Editor session and expires after 2 minutes. This window does not execute the operation.", MessageType.Warning);
             scroll = EditorGUILayout.BeginScrollView(scroll);
             foreach (var entry in Approvals.Pending()) {
                 EditorGUILayout.LabelField(entry.Summary, EditorStyles.wordWrappedLabel);

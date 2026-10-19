@@ -11,25 +11,27 @@ import { createAttachmentContext } from "./attachment-tools";
 import { BudgetBroker, readBudgetFeedback } from "./budget-broker";
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
-import { prepareRoundInput } from "./round-input";
+import { prepareRoundInput, type GuidanceRetention } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
-import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController } from "./delivery-controller";
-import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
+import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
+  partialSearchScopeNotice, verificationScopeNotice } from "./delivery-controller";
+import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, presentRepeatReceipts, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
-import { selectGuidanceIntent } from "./guidance-topic-selection";
+import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote } from "./execution-contracts";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
+import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted } from "./resume-facts";
 import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
-import { classifyRawToolIntent, containsUnresolvedToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
+import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
-import { decideReasoningRecovery } from "./reasoning-recovery";
+import { decideReasoningRecovery, reasoningRecoveryOutputCap } from "./reasoning-recovery";
 import { runtimeInstallationIdentity } from "./runtime-identity";
 import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
 import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
@@ -106,8 +108,14 @@ export function createPredictionLoopHandler(
       && config.designGuidanceMaxTokens > 0 && (config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto");
     const guidanceMessages = focusedReferences && config.designGuidanceMode === "auto"
       ? normalizeHistory(originalHistory).map((message, index) => ({ ...message, index })) : null;
-    const guidanceIntent = guidanceMessages ? selectGuidanceIntent(objectiveContinuity.guidanceObjective(
-      guidanceMessages, continuityState.extractPriorContinuityState(guidanceMessages))) : undefined;
+    const guidanceObjectiveOf = (messages: NonNullable<typeof guidanceMessages>) =>
+      objectiveContinuity.guidanceObjective(messages, continuityState.extractPriorContinuityState(messages));
+    // The previous request is read through the same objective owner, from the
+    // history before the latest user message.
+    const latestUserIndex = guidanceMessages ? guidanceMessages.map(m => m.role).lastIndexOf("user") : -1;
+    const earlierMessages = guidanceMessages && latestUserIndex > 0 ? guidanceMessages.slice(0, latestUserIndex) : [];
+    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjectiveOf(guidanceMessages),
+      earlierMessages.some(m => m.role === "user") ? guidanceObjectiveOf(earlierMessages) : undefined) : undefined;
     const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
       || focusedReferences ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
@@ -180,6 +188,10 @@ export function createPredictionLoopHandler(
     }
     const restoredWindow = workingContext?.restore(originalHistory);
     evidenceManager.restoreReferences();
+    // Version-checked engine guidance needs an engine identity; an earlier turn's
+    // observation applies under the same invalidation rules as a live one.
+    if (!config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0)
+      evidenceManager.seedPriorEngineIdentity(originalHistory, scope, executionId);
     const objectiveFingerprint = modelNotes.objectiveFingerprint(originalHistory.getMessagesArray());
     const originalMessages = originalHistory.getMessagesArray();
     const noteScope = { objectiveFingerprint, projectDescriptor: scope.projectIdentity };
@@ -229,7 +241,26 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation", string>();
+    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "projection" | "prior_turn", string>();
+    // Data blocks sent in this execution, by anchor. Earlier blocks are resent
+    // unchanged so each model input extends the previous one; discarded with
+    // the execution.
+    const shownDataBlocks = new Map<string, readonly string[]>();
+    // Admitted reference text for this execution only; discarded with it, so
+    // the next user turn selects again.
+    const guidanceRetention: GuidanceRetention = {};
+    // Resume view: what the restored input carries only in part, and whether
+    // the previous turn stopped before it reported. Derived, never stored.
+    const resumeProjection = partialProjectionFact(workingHistory.getMessagesArray());
+    const resumedAfterInterruption = priorTurnInterrupted(originalHistory.getMessagesArray());
+    if (!config.observeOnly) {
+      if (resumeProjection.fact) runtimeFacts.set("projection", resumeProjection.fact);
+      if (resumedAfterInterruption) runtimeFacts.set("prior_turn", PRIOR_TURN_INTERRUPTED_FACT);
+    }
+    if (config.showDebugInfo) ctl.debug({ event: "resume_state", executionId,
+      priorTurnInterrupted: resumedAfterInterruption, restoredWindow: restoredWindowApplied,
+      toolResults: workingHistory.getMessagesArray().reduce((n, m) => n + m.getToolCallResults().length, 0),
+      partialProjections: resumeProjection.count });
     const persistTerminalNote = () => {
       const result = notes.persist(activeNote, visibleTranscript.snapshot().getMessagesArray());
       if (result.status !== "skipped" && config.showDebugInfo) ctl.debug({ event: "assistant_note_persistence", ...result,
@@ -324,7 +355,7 @@ export function createPredictionLoopHandler(
         let roundOutputReserve = finalizing
           ? finalLimits.maxTokens
           : researchRecoveryRound ? recoveryCoordinator.outputReserve
-            : reasoningRecoveryRound ? Math.min(131072, config.maxOutputReserve * 2) : config.maxOutputReserve;
+            : reasoningRecoveryRound ? reasoningRecoveryOutputCap(config.maxOutputReserve) : config.maxOutputReserve;
         const requestedOutputCap = roundOutputReserve;
         let outputCapSource: "configured" | "headroom_clamp" = "configured";
         const roundScopeInstructions = finalizing
@@ -356,9 +387,11 @@ export function createPredictionLoopHandler(
           reasoningRecovery: reasoningRecoveryRound,
           guidanceDocuments,
           guidanceIntent,
-          guidanceScope: focusedReferences ? scope : undefined,
+          guidanceRetention,
+          guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           getRuntimeFacts: () => [...runtimeFacts.values()],
+          shownDataBlocks,
           finalizationTrigger: execution.finalizationTrigger,
           reportContinuation,
           projectionApplied, executionId, modelInputId, roundIndex,
@@ -413,6 +446,9 @@ export function createPredictionLoopHandler(
             modelInputId, releasedCount: released.length });
           evidenceManager.captureExposure(modelInput, modelInputId, false);
         }
+        // This input is final: its new data block, if any, is now part of what was sent.
+        if (modelComposition && "dataBlock" in modelComposition && modelComposition.dataBlock)
+          shownDataBlocks.set(modelComposition.dataBlock.anchor, modelComposition.dataBlock.parts);
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
           {
 model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"), contextLength: finalMeasurement.contextLength,
@@ -425,6 +461,25 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
         const retainedIndexLimit = 64;
         const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
+        if (!config.observeOnly) {
+          // Kept current for the next input: a projection made for this round
+          // is listed from the next round on.
+          const projectionView = partialProjectionFact(modelInput.getMessagesArray());
+          if (projectionView.fact) runtimeFacts.set("projection", projectionView.fact);
+          else runtimeFacts.delete("projection");
+        }
+        if (config.showDebugInfo) {
+          // What the model input actually carries per tool result (no body text):
+          // which results are partial projections, and whether each still has its
+          // partial notice and a read handle to page the archived original.
+          const projections = inputEvidence.results.filter(result => result.kind === "archived_tool_result_projection");
+          ctl.debug({ event: "model_input_evidence_summary", executionId, modelInputId, roundIndex,
+            toolResults: inputEvidence.results.length, projections: projections.length,
+            partialProjections: projections.filter(result => result.bodyComplete === false).slice(0, 32).map(result => ({
+              toolCallId: result.toolCallId, bodyTotalChars: result.bodyTotalChars, bodyOmittedChars: result.bodyOmittedChars,
+              noticePresent: result.noticePresent === true,
+              readHandlePresent: Boolean((result.archiveRef as { readHandle?: unknown } | undefined)?.readHandle) })) });
+        }
         const serializedCounts = compactionCheckpoint
           ? serializedCheckpointCounts(compactionCheckpoint.checkpoint)
           : serializedCheckpointCounts("");
@@ -675,7 +730,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             },
             guardToolCall: createToolGuard({
 ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
-              toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy
+              toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy,
+              inputRepeatReceipts: presentRepeatReceipts(modelInput),
 }),
           },
           { maxTokens: roundOutputReserve },
@@ -768,12 +824,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (budgetFeedback && budgetFeedback !== lastBudgetFeedback && !config.observeOnly) {
           runtimeFacts.set("budget", budgetFeedback); lastBudgetFeedback = budgetFeedback;
         }
-        evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId, focusedReferences);
+        evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
+          !config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0);
         const outputLimitStage = classifyOutputLimitStage(captured, finalizing, generationAtRoundEnd);
         if (toolPlanningRetryRound) execution.finishReplan();
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
         const rawIntentText = visibleTextFromMessages(captured.messages);
-        const finalRawToolIntent = containsUnresolvedToolIntent(rawIntentText, captured.messages);
+        const finalRawToolIntent = hasRawToolIntent(rawIntentText, captured.messages);
         const rawIntent = classifyRawToolIntent(rawIntentText, allModelTools, registeredModelTools);
         const { catalogueCorrectionAllowed, archiveOnlyRecoveryAllowed, retryTools, retryInstruction }
           = planReadRecovery(historyBeforeRound, workingHistory, rawIntent, modelTools);
@@ -1019,6 +1076,16 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
           const stagnation = toolStagnation.observe(captured.messages, recoveryProgress);
+          const failure = stagnation.repeatedFailure;
+          if (failure?.firstNotice) {
+            // Advisory only: no pause, no added permissions. The model learns the
+            // identical request already failed, and what would change the outcome.
+            runtimeFacts.set("repeated_failure", `Runtime evidence observation: ${failure.toolName} failed with `
+              + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
+              + "change the path, scope or budget the error names, or report the item as unverified.");
+            if (config.showDebugInfo) ctl.debug({ event: "tool_repeated_failure", roundIndex, toolName: failure.toolName,
+              errorCode: failure.errorCode, count: failure.count });
+          }
           if ((stagnation.count >= config.toolStagnationRounds || stagnation.cycleDetected) && stagnation.firstWarning) {
             toolStagnation.acknowledge(stagnation.warningKey);
             stagnationWarnings += 1;
@@ -1078,7 +1145,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             execution.finalizationTrigger, recoveryCoordinator.noProgressRounds);
           const finalDelivery = evaluated.delivery;
           const { deliveryState } = finalDelivery;
-          const safePartialReport = evaluated.partial;
+          // A fresh planning retry replaces this round's text; delivering a thin partial report first
+          // would show the user a final-looking answer that the retry then contradicts.
+          const retryPending = finalDelivery.deliveryState !== "complete"
+            && finalDelivery.reportState === "unresolved_tool_intent" && freshToolPlanningRetryEligible;
+          const safePartialReport = retryPending ? undefined : evaluated.partial;
           if (safePartialReport) {
             const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
             block.appendText(safePartialReport.text);
@@ -1200,7 +1271,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             sourceModelInputId: modelInputId,
             recoveryModelInputId: `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}`,
             attempt: execution.reasoningRecoveryAttempts, toolCount: roundTools.length,
-            requestedMaxTokens: config.maxOutputReserve, partialReasoningPreservedInGui: true });
+            requestedMaxTokens: reasoningRecoveryOutputCap(config.maxOutputReserve), partialReasoningPreservedInGui: true });
           roundIndex += 1;
           continue;
         }
@@ -1289,6 +1360,14 @@ event: decision.trigger === "research_recovery_exhausted"
             text: "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.",
           });
         }
+        if (hasUnexecutedRawToolSyntax(rawIntentText) && structuredToolRequestCount === 0
+          && !captured.continueAfterTools && !boundedAudit && !config.observeOnly) {
+          // The research path ends with only unexecuted tool text and no retry left or allowed:
+          // hand the user the evidence already gathered instead of the raw text alone.
+          if (!toolPlanningRetryRound) ctl.createStatus({ status: "canceled",
+            text: "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다." });
+          deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
+        }
         if (!captured.continueAfterTools) break;
         if (boundedAudit && (
           roundIndex + 1 >= config.auditResearchRounds || Date.now() >= researchDeadlineAt
@@ -1301,6 +1380,18 @@ event: decision.trigger === "research_recovery_exhausted"
           execution.finishResearch("research_round_limit");
         }
         roundIndex += 1;
+      }
+      // The visible recorder owns both the delivered prefix and its automatic
+      // continuation, plus validation exchanges that working compaction may omit.
+      const scopeNotice = verificationScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      if (scopeNotice) {
+        visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(scopeNotice);
+        if (config.showDebugInfo) ctl.debug({ event: "verification_scope_notice", executionId });
+      }
+      const searchNotice = partialSearchScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      if (searchNotice) {
+        visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(searchNotice);
+        if (config.showDebugInfo) ctl.debug({ event: "partial_search_scope_notice", executionId });
       }
     } catch (error) {
       executionFailure = error;

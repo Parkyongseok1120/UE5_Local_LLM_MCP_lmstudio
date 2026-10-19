@@ -103,6 +103,13 @@ export function hasUnexecutedRawToolSyntax(text: string): boolean {
   });
 }
 
+/** Closed wrappers, structured requests and unclosed opening tags (a truncated
+ * `<tool_call>` or `<function=`) are all unexecuted tool intent. One predicate,
+ * so retry, delivery and output-limit decisions cannot disagree about it. */
+export function hasRawToolIntent(text: string, messages: Array<ChatMessage>): boolean {
+  return containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
+}
+
 export function visibleTextFromMessages(messages: Array<ChatMessage>): string {
   return messages
     .filter(message => message.isAssistantMessage())
@@ -121,7 +128,8 @@ export type RawToolIntentClassification = {
 };
 
 export function rawToolIntentNames(text: string): Array<string> {
-  if (!containsUnresolvedToolIntent(text, [])) return [];
+  // An unclosed opening tag still names the tool the model meant to call.
+  if (!hasUnexecutedRawToolSyntax(text)) return [];
   const functionNames = [...text.matchAll(/<function=([A-Za-z0-9_.:-]+)>/gu)].map(match => match[1]);
   const jsonNames = [...text.matchAll(/["']name["']\s*:\s*["']([A-Za-z0-9_.:-]+)["']/gu)]
     .map(match => match[1]);
