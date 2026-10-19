@@ -1,21 +1,41 @@
-# 엔진 소스 범위 읽기·근거 재사용·파일 수정 작업 관리 개선 계획
+# 엔진 소스 범위 읽기·근거 재사용·판단 정확도·프롬프트 처리 지연 개선 계획
 
-작성일: 2026-10-18, Asia/Seoul  
-전달 대상: Claude Opus 5.5  
-검토 기준 HEAD: `fbff059979edc8980eab970e7a7bba9e0b1d5181`  
-저장소: `UE5_Local_LLM_MCP_lmstudio`  
-추가 검토: Swift 1.5 수정 전 로그 1,829줄, SSOT·SOLID·계약·수명 경계, Claude Code 공식 자료와 파일 수정·작업 순서 조사 반영.  
-현재 상태: 코드 재검토 및 계획 작성 완료. 아래 개선의 구현·설치·실모델 성능 평가는 아직 수행하지 않음. 커밋 없음.
+작성일: 2026-10-18, Asia/Seoul
+
+전달 대상: Claude Opus 5.5
+
+개정일: 2026-10-19, Asia/Seoul
+
+개정 검토 HEAD: `12dddcc935d5635f5c3df1737f509c000462d3a2` (`Develop`)
+
+저장소: `UE5_Local_LLM_MCP_lmstudio`
+
+추가 검토: 수정 전 Swift 로그와 기존 설계 조사에 최종 대화·구조화된 실행 기록·LM Studio 서버 타이밍, 사용자 제공 K=`Q8` / V=`Q5_1` 설정을 반영.
+
+현재 상태: 좁은 읽기 P0–P5의 선행 구현·설치와 CI 수정은 완료되어 있다. **이번 개정의 판단 품질 보완·prefill 원인 분리·최적화는 계획 단계이며 제품 코드를 수정하지 않았다.** 기존 구현의 효과를 입증하는 동일 조건 A/B는 아직 없다.
+
+**최신 실행 순서는 [최종 실행 계획](Harness_Behavior_Latency_Final_Plan_20261019.md)을 따른다.** 아래 E0–E7은 그 문서 §2의 분류(유지/완료/제외/조건부)로 읽는다.
+
+이 문서는 10월 18일 계획의 개정본이다. §2.1–2.3과 기존 E1–E6은 당시 조사·후보의 이력을 포함하므로 현재 미구현 목록으로 일괄 해석하지 않는다. 현재 상태는 [구현 기록](Harness_Narrow_Read_Implementation_20261019.md), 새 관찰은 §2.4, 추가 실행 순서는 E7을 따른다. 구현 기록의 “미설치” 문장은 그 기록 작성 시점의 상태다.
 
 ## 1. 실행자에게 전달할 목적과 범위
 
 사용자는 모델이 관련 파일 전체와 대형 엔진 소스를 한꺼번에 읽고, 컨텍스트 압축 후 같은 내용을 다시 읽어 정확도와 속도가 함께 나빠지는 상황을 개선하려 한다. Claude Code의 공식 탐색·컨텍스트 관리 방식을 참고하되, 현재 LM Studio + Unreal RAG MCP + 파일/실행 MCP + Compactor의 책임 구분을 유지한다.
 
-이번 코드 재검토로 초기 제안을 좁혔다. **새 Compactor, 작업 메모리, 범용 근거 묶음 도구를 추가하지 않는다. 기존 엔진 조회의 실패 후 탐색과 잘린 구현의 다음 읽기를 구체화하고, 압축 안내를 현재 질문에 필요한 근거만 확보하도록 수정하는 것이 1차 범위다.** Swift 1.5 로그에서 드러난 근거 없는 심각도 판단, 반박된 가설의 재등장, 완료 범위 과장과 보고 지연도 기존 가이던스·복구 경로의 평가 대상으로 추가한다. 새로운 상태 계층이나 복구 루프를 만드는 근거로 삼지 않는다. 성능 개선은 가설이며 동일 조건의 실모델 비교로 확인한다.
+이번 코드 재검토로 초기 제안을 좁혔다. **새 Compactor, 작업 메모리, 범용 근거 묶음 도구를 추가하지 않는다.** 이미 구현한 좁은 읽기·편집 계약을 기준으로 실제 입력과 판단을 평가한다. 최신 실행에서 확인한 긴 입력의 반복 처리와 잘못된 네트워크 결론을 함께 개선 대상으로 삼는다. 새로운 상태 계층이나 복구 루프를 만드는 근거로 삼지 않으며 성능 효과는 동일 조건의 실모델 비교로 확인한다.
+
+| 현재 구분 | 확인한 상태 | 다음 실행의 의미 |
+|---|---|---|
+| 선행 기능 | 범위 완료 계약, engine/대형 whole-read 제한, signature/member 조회, 위치 기반 편집 복구, 다중 영역 편집, hash/receipt 재사용, 제한된 현재 턴 pinning 구현 | 되풀이 구현하지 않는다. 새 로그에서 모델이 실제로 쓴 요청과 입력을 대조한다. |
+| 배포·CI | Unreal `0.3.27`, Compactor `0.4.78` / revision `125`; 최신 실행의 loaded/installed build 일치. Develop CI 수정 후 15개 job 성공 | 구버전 설치를 이번 지연의 원인으로 단정하지 않는다. CI는 실모델 정확도·속도 증거가 아니다. |
+| 새 문제 | 보고는 전달됐으나 잘못된 Client RPC P1이 남았고 서버 prefill이 모델 처리 시간의 약 74% | E0에 최신 기준을 추가한 뒤 E7-1 관측·E7-2 원인 분리, E4/E5 판단 평가를 먼저 진행한다. |
+| 이번 변경 | 계획 MD와 파생 분석·근거 JSON만 갱신 | 코드 구현·재설치·모델 재로드·추가 추론·커밋은 수행하지 않는다. |
+
+CI 근거: [Develop GitHub Actions 실행](https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio/actions/runs/39150010260). 다음 구현자는 당시 완료한 기능과 기존 E1–E6의 남은 후보를 함수·소비자 단위로 대조해 필요한 부분만 선택한다.
 
 실행 시 지킬 사용자 조건:
 
-- 커밋하지 않는다. 마지막에 실제 최종 변경에 맞는 커밋 제목과 본문 초안만 제공한다.
+- 이번 개정은 계획 문서만 변경한다. 과거에 승인되어 완료된 커밋·푸시·설치를 되돌리지 않으며, 후속 구현의 원격 반영·설치를 자동 단계로 추가하지 않는다.
 - 기존 권한·프로젝트 바인딩·Unity 쓰기 명령 설정을 유지한다. 이 계획은 재설치나 실행 중인 MCP/Compactor의 교체를 요구하지 않는다.
 - 기존 변경을 되돌리거나 관련 없는 정리를 하지 않는다. 이 문서의 기준 HEAD와 현재 작업 트리가 달라졌다면 해당 함수와 테스트만 다시 대조한다.
 - Unreal 코드에 네임스페이스를 가능한 한 추가하지 않는 사용자 지침을 따른다.
@@ -95,6 +115,47 @@
 - [Latency_MultiCombat.cpp:6](../../UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Latency_MultiCombat.cpp:6)의 `IMPLEMENT_PRIMARY_GAME_MODULE`은 모듈 루트에 있다. `Private/` 경로 실패나 다른 매크로 이름의 검색 0건은 등록 누락 증명이 아니다.
 
 이번 추가 분석의 결론은 **읽기량 축소만으로 충분하지 않다**는 것이다. 정확한 근거 선택 → 반박된 가설 재사용 → 증명 수준에 맞는 판단 → 보고 전달까지 함께 평가한다. 모델의 추론 능력·tool-call 형식 적합성, 가이던스, 출력 한도, 압축 후 근거 선택이 각각 대안 원인이다. 하네스 문구 변경의 효과와 모델 고유 한계를 실측으로 구분한다.
+
+### 2.4 최종 실행 분석 — 판단 품질과 반복 prefill
+
+이번 근거는 수정 전 S1–S10과 별도다. 첨부 대화 `daa348b0-7b02-48b4-8739-2a7ddaf38526`(70,499 bytes / 818줄), 서버 로그 `e4b9b7e2-502f-4dd0-a608-ff8cbad1b4b9`(99,103 bytes / 1,051줄), 로컬 대화 JSON의 선택된 버전을 대조했다. 원문은 배포하지 않으며 해시·라운드별 수치·제약은 [파생 분석 JSON](evidence/harness-prefill-analysis-20261019.json)에 보관한다. 실행 ID는 `cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7`다.
+
+**판단 품질:** 최종 보고에서 존재하지 않는 엔진 기본 `Health`/`Die()` 가정을 철회했다. 사용자 반박을 반영한 성과지만, 자율적으로 처음부터 올바르게 검증한 사례는 아니다. 더 큰 문제는 `ClientConfirmHit()`를 서버에서 일반 RPC 함수로 호출하면 서버에서만 실행된다는 가정을 P1로 유지하고 `ProcessRemoteEvent` 또는 Multicast 변경을 권한 점이다.
+
+[UE 5.7 공식 RPC 실행 표](https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-procedure-calls-in-unreal-engine?application_version=5.7)는 서버에서 호출한 Client RPC가 해당 Actor의 owning client에서 실행되는 경우를 명시한다. 서버 소유·소유 연결 없음은 별도 경우다. 설치 소스 `Actor.cpp`의 `AActor::GetFunctionCallspace`도 유효한 원격 연결, 로컬 플레이어, 연결 없음/종료 조건을 나눈다. **서버의 일반 Client RPC 호출 자체는 결함 근거가 아니다.** 이 반박은 실제 게임에서 모든 패킷이 도착한다는 런타임 증명과는 다르다. 실제 소유 관계·복제 여부·Unreliable 손실·호출 시점은 별도로 확인해야 한다.
+
+`DeathCount`가 `OnRep_KillCount`를 지정하는 것도 이름 차이만으로 RepNotify 계약 위반이 되지는 않는다. 현재 프로젝트의 해당 함수 본문은 주석뿐이다(`PlayerState.cpp:41`). [공식 속성 복제 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/replicate-actor-properties-in-unreal-engine?application_version=5.7)는 `ReplicatedUsing`으로 콜백을 지정하며 속성과 다른 이름의 예시를 제공한다. 의도된 공용 갱신인지, 필요한 후속 동작이 빠졌는지 확인해야 하며 현재 관찰은 유지보수 제안과 기능 결함을 분리할 근거다. SSOT도 상태 사본이 둘이라는 이유만으로 확정하지 않고 writer·동기화·갱신 시점의 실제 충돌을 확인한다.
+
+구조화된 기록에는 마지막 `eosFound`, `reportDelivered:true`, `reportCompleted:true`가 있다. 첨부 텍스트가 P1 설명 초반에서 끝난다는 사실로 전체 실행도 미완료라고 결론 내리지 않는다. **보고 전달은 완료됐고, 잘못된 P1은 최종 보고에도 남았다.** `objectiveSatisfied:null` / `taskCompleted:false`도 별도 필드다. 형식 검증기의 `structure_valid; facts_not_verified`는 사실 확인이나 감사 완료 인증이 아니다.
+
+**시간과 입력량:** 서버 첨부의 완료 작업 10건은 전체 SDK 12회 중 후반 10회와 순서·고유 출력 토큰 수·유사 duration으로 대응시켰다. 공유 request ID가 없으므로 이 대응은 추정 join으로 표시한다. 취소된 다른 실행은 합계에서 제외했다.
+
+| 측정 경계 | 관찰값 | 해석 |
+|---|---:|---|
+| SDK 전체 실행 | 12회 / 24분 02.6초 | 이 실행의 작업 시간. 이전 로그 대비 개선률은 계산 불가 |
+| SDK 첫 토큰 대기 합계 | 17분 48.2초 | 기존 `modelPrefillMs`는 첫 토큰/fragment callback까지의 대기. 순수 서버 prefill과 같지 않음 |
+| SDK 첫 토큰 이후 합계 | 6분 04.6초 | elapsed에서 첫 토큰 대기를 뺀 값. 순수 GPU decode 시간과 구별 |
+| 서버 완료 작업 10건의 prompt eval | 14분 59.5초 / 처리 토큰 447,693 | 서버가 보고한 모델 처리 시간의 74.3%; 요청당 39,959–52,020 처리 토큰 |
+| 같은 10건의 생성 | 5분 10.8초 / 13,207토큰 | 출력도 비용이 있지만 이번 주된 대기 구간은 입력 처리 |
+| 요청당 서버 prompt eval | 중앙값 90.60초 / 범위 74.19–102.18초 | 짧은 응답도 오래 기다림. 122토큰 생성 2.88초 전에 입력 처리 90.24초 |
+| 입력 처리 가중 평균 | 약 497.7 tokens/s | 이 입력·설정의 관찰값. GPU 일반 성능이나 다른 문맥 길이의 보장값 아님 |
+| SDK 전체 시간 − 라운드 모델 시간 합 | 9.851초 | 모델 대기 밖의 집계 차이. 전부 특정 도구·측정 API 비용이라고 배정하지 않음 |
+
+`round-loop.ts:281`은 `promptProcessingMs`를 첫 토큰 시각 − act 시작으로 계산한다. 이후 계측에서 SDK 대기와 서버 prompt eval의 이름·출처를 분리하고, 기존 필드의 의미를 조용히 바꾸지 않는다. 모델 생성 한도를 줄이는 것만으로 긴 입력 대기는 해결되지 않는다. 반박된 가설을 길게 재검토한 라운드의 4,805토큰 / 115.94초 생성도 두 번째 개선 대상이다.
+
+**캐시 재사용의 단서와 한계:**
+
+- 대응한 앞 5회는 SDK 입력 토큰과 서버 처리 토큰의 차이가 각각 8,969였고 뒤 5회는 차이가 0이었다. 뒤 5회 각각 직전에 prompt cache의 가장 오래된 항목을 비우는 경고가 있었으며 항목 크기는 1,904.567–2,554.672 MiB였다. 반복 대용량 처리와 캐시 회수는 관찰됐지만 차이값을 검증된 KV hit 수로 이름 붙이지 않는다.
+- `f_sim_best` / `f_keep`는 slot 선택 단서이고 `graphs reused`도 KV hit 비율이 아니다. 실제 `cachedPrefixTokens`는 SDK 기록에서 계속 `unknown`이다. 첨부에 `forcing full prompt re-processing`의 명시적 원인 문구는 없다. cache 경고만으로 GPU OOM·캐시 버그·Compactor 단독 원인을 확정하지 않는다.
+- 현재 코드 `context-manager.ts:238,262–270`은 note/ref/task/runtime 데이터를 마지막 사용자 메시지 **앞**에 둔다. 길게 이어지는 같은 턴에서 refs 등이 바뀌면 그 뒤 도구 이력의 재사용에 영향을 줄 수 있다. 실제 templated 입력의 첫 변경 위치를 재현해야 하는 후보이며, 과거 턴 prefix를 지키려던 기존 설계 목적도 보존해야 한다.
+- 이 실행은 `inputAvailability=observe`, 주입 metadata 0자/0토큰이다. `inject` 경로의 가변 `modelInputId`를 이번 원인으로 지목하면 안 된다. assistant note 본문도 없었지만, note protocol의 available refs는 별도이므로 전체 가변 데이터가 없었다는 뜻은 아니다.
+- tool schema는 12회 모두 38개 / 6,335토큰으로 fingerprint가 같았다. `getLoadConfig`와 `applyPromptTemplate`가 각각 59번 찍혔지만 이는 모델 추론 59회가 아니다. 별도 요약 모델 호출은 0회였다. 새 요약기를 줄이는 처방이나 measurement cache와 inference KV cache의 혼동을 피한다.
+
+**환경 기준:** 실행 기록의 모델 ID는 `swift-1.5-qwen3.8-27b`, context는 84,224, working target/trigger는 40,000/56,000이다. 분석 중 먼저 성공한 읽기 전용 모델 API 조회는 architecture=`qwen35`, 가중치 `Q4_K_S`, batch 2,048 / physical batch 512, parallel 4, Flash Attention·GPU KV offload 활성, context checkpoints 32, MTP 활성 상태를 보였다. 이는 조회 시점의 관찰이며 모두 당시 실행값이라고 소급 확정하지 않는다. 뒤의 API 재확인은 연결 거부여서 추가 추론 실험을 하지 않았다.
+
+사용자 확인 K=`Q8`, V=`Q5_1`을 기준 설정으로 기록한다. 정확한 backend enum·실제 할당 형식은 load log로 대조할 항목이다. [LM Studio 설정 문서](https://lmstudio.ai/docs/typescript/api-reference/llm-load-model-config)는 KV 양자화의 메모리/품질 tradeoff와 batch의 메모리 비용을 설명한다. 이미 양자화·Flash Attention이 설정되어 있으므로 이를 새 해결책처럼 반복 권고하지 않는다. RTX 3090 24GiB에서 분석 중 관찰한 VRAM 23,457MiB는 실행 후 snapshot이며 당시 CPU offload나 OOM 증거가 아니다.
+
+[llama.cpp의 hybrid prompt 재처리 논의](https://github.com/ggml-org/llama.cpp/issues/20643)와 [체크포인트·cache 옵션](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)은 원인 분리 실험의 참고 자료다. upstream 현재 코드와 설치된 LM Studio runtime의 동일성은 미확인이다. 버전·checkpoint 복원·cache 용량을 확인하기 전에 특정 버그나 업데이트 효과를 확정하지 않는다. E7에서 prefix 변경, cache 회수, hybrid checkpoint, 하드웨어 배치를 분리한다.
 
 ## 3. 기존 소유자와 근거 위치
 
@@ -193,6 +254,7 @@
 5. S1–S10의 로그 원문 위치와 해시를 고정한다. 서술 기반 fixture와 실제 SDK 이벤트 replay를 구분한다. 없는 request/result·finish reason·모델 입력을 만들어 채우지 않는다.
 6. Swift 1.5를 우선 비교 대상으로 삼되 실제 모델 식별자·양자화·컨텍스트·출력/추론 설정·하네스 버전은 실행 전 확인한다. 확인할 수 없으면 동일 실행 재현을 주장하지 않는다. 다른 모델로 조용히 대체하지 않는다.
 7. 현재 게임의 위 네 파일은 관련 함수와 hash만 비교 기준으로 사용한다. 실제 프로젝트를 수정하지 않는 작은 fixture로 owner 혼동, 모듈 매크로 변형, 권한 분기 사례를 만든다.
+8. 최신 기준은 §2.4의 revision `125` 실행과 파생 JSON이다. K=`Q8` / V=`Q5_1` 사용자 설정, 실제 backend 형식의 미확인, SDK 첫 토큰 대기와 서버 prefill의 차이, cache 회수 5건을 기록한다. 기존 P0–P5와 겹치는 구현은 제외하고 E7의 관측부터 진행한다. 최종 보고의 false P1과 사용자 교정 전/후를 품질 정답 세트에 등록한다.
 
 완료 조건: baseline 실패/제약과 기대 변경을 분리해서 기록한다. 현재 기능의 테스트 성공을 개선 효과로 보고하지 않는다.
 
@@ -252,7 +314,7 @@
 - 기존 `inputAvailabilityMode=inject`를 기본으로 켜지 않는다. 현재 개별 projection notice와 제한된 runtime 요약의 역할은 유지하되, 새 중복 계층이나 availability 기본 주입을 추가하지 않는다.
 - 필요한 근거를 찾았거나 후보가 반박됐으면 기존 note의 decisions/rejectedHypotheses/openQuestions에 근거 참조와 남은 질문을 짧게 남긴다. note는 가설 상태이며 원문 증명을 대체하지 않는다. 4항목/1500자 계약을 유지하고 장문의 분석을 복사하지 않는다.
 - `held_reservations_insufficient` 후에는 이미 반환된 결과를 먼저 사용한다. 거절된 읽기가 여전히 필요하면 다음 라운드에 그 읽기만 재시도한다. 같은 단독 재시도에 추가 읽기를 묶지 않는다. 이 로그만으로 broker·예산 추정·기본 한도는 바꾸지 않는다.
-- 새 원문 pinning, 함수별 archive 인덱스, 재요약 루프는 추가하지 않는다. 이 단계의 문구가 실제 모델 행동을 바꾸는지는 E5에서 판단한다.
+- 선행 P4의 현재 턴 pinning은 이미 존재한다. 별도 pinning/함수별 archive 인덱스/재요약 루프를 추가하지 않고 기존 한도·압박 시 해제 경계를 유지한다. 이 단계의 문구가 실제 모델 행동을 바꾸는지는 E5에서 판단한다.
 
 완료 조건: 부분 원문과 과거 원문의 경계가 유지되고, 필요한 근거 선택 기준이 짧게 전달된다. deterministic 테스트는 문구·입력 연결을 증명하며 실제 재읽기 감소는 증명하지 않는다.
 
@@ -269,6 +331,8 @@
 8. 현재 미해결 질문에 필요한 새 근거가 없다면 이미 반박한 결함을 다시 찾는 대신 결과 작성으로 진행한다. 예산/선택된 audit 모드의 기존 종료 조건을 따르면 partial/final 상태를 정확히 전달한다. 전체 감사를 임의의 작은 읽기 횟수로 중단시키지 않는다.
 9. S8/S10은 기존 raw-tool-intent 및 reasoning recovery 계약의 fixture/replay를 먼저 보강한다. structured request → dispatch → paired result가 없는 XML은 근거 취득 성공으로 취급하지 않는다. 현재 경로가 이미 한 번의 재시도·partial delivery를 제공하므로 새 XML 실행기·추론 재시도 루프·기본 bounded 모드 변경은 하지 않는다. 실제 trace에서 결함이 재현될 때만 해당 기존 함수의 최소 수정안을 별도로 확정한다.
 10. `core.md`/`design.md`의 SSOT·SOLID·수명 기준이 이미 같은 의미를 제공하면 중복 경고를 계속 붙이지 않는다. E5에서 실제 주입 여부와 모델 준수 여부를 구분한다. reasoning recovery가 전체 재분석으로 흐르는지 확인하되 추론 한도를 무조건 올리는 처방은 하지 않는다.
+11. 네트워크 판단은 RPC specifier·일반 wrapper 호출과 `_Implementation` 직접 호출·호출 머신·Actor 복제·owning connection·결과 관찰을 구분한다. `HasAuthority()`만으로 원격 실행을 부정하는 가상 생성 코드를 쓰지 않는다. 서버에서 Client RPC를 호출했다는 이유로 저수준 전송/Multicast를 권하지 않는다. 반대로 소유권이 없는 실제 호출 실패도 놓치지 않도록 양성·음성 사례를 함께 평가한다.
+12. RepNotify 이름 불일치와 상태 사본을 자동 버그 규칙으로 만들지 않는다. 콜백 body·소비자·의도된 갱신과 실제 writer/동기화 실패를 확인한다. 검증기 반환을 이미 설명하는 문구가 있다면 중복 system 경고를 덧붙이지 말고, 현재 전달 경로·모델 오해를 replay로 확인한다. 형식 검증 통과 뒤 source 사실의 confidence나 severity가 자동 승격되지 않아야 한다.
 
 완료 조건: 공개 설명, 실제 응답, Compactor 관찰, 생성 계약이 일치하고 필수 검사에서 drift가 없다. 로그만으로 runtime 버그를 단정해 변경 범위를 확대하지 않는다.
 
@@ -290,6 +354,8 @@
 10. XML 호출 모방과 structured 실행을 구분하며 허용된 재계획/partial 상태로 종료함.
 11. 추론 한도 복구 뒤 이미 확인된 분석 전체를 반복하지 않고 작은 다음 단계나 보고로 진행함.
 12. 동일 질문에 필요한 근거가 충분해졌을 때 보고서 작성으로 진행하고, 압축/출력 중단 뒤에도 확인된 내용과 미확인 범위를 보존함.
+13. 원격 소유 Client RPC, 서버 소유/연결 없음, `_Implementation` 직접 호출, 실제 Server RPC 소유권 위반을 섞어 판정함. dedicated/listen 환경과 C++/Blueprint RepNotify의 차이는 해당 버전의 별도 정답 근거로 검사한다.
+14. 빈 공용 RepNotify·실제로 잘못된 콜백 body·동기화된 상태 사본·실제 충돌하는 두 writer를 구분함. 사용자 반박 없이도 없는 엔진 Health/Die 가정을 철회하고, 형식 검증 후 잘못된 P1을 유지하지 않음.
 
 각 작업은 E0에서 식별한 Swift 1.5의 같은 모델·양자화·컨텍스트·추론/출력 설정·하드웨어·도구 권한으로 baseline/new를 비교한다. 모델이 없거나 설정을 확인할 수 없으면 해당 비교는 미실시/재현 불가로 표시하고 다른 모델 결과는 별도 평가로 둔다. 가능하면 사례별 최소 3회 교차 실행하고 중앙값과 범위를 적는다. source catalog 및 모델 캐시의 cold/warm 조건을 구분한다. 모델이 바뀌면 비교를 섞지 않는다.
 
@@ -300,6 +366,7 @@
 - 모델에게 반복 전달된 **동일 버전·겹치는 소스 범위**의 양. 서버 내부 디스크 읽기와 분리한다.
 - 실제 이벤트에 근거한 검색 범위 확대, 읽기 호출, budget denial, 압축, archive 복원, reasoning recovery 횟수. XML/읽기 의도/모델 서술은 실제 호출 횟수에서 제외한다.
 - 측정 가능한 요약 시간·모델 prefill/생성 시간. 제공되지 않는 값은 unavailable로 둔다.
+- E7의 라운드별 SDK 첫 토큰 대기·서버 prompt eval/처리 토큰·첫 prefix 변경 위치·cache/checkpoint·측정 API 비용을 출처별로 연결한다. token 차이·slot similarity를 실제 KV hit로 변환하지 않는다. 보고 완료 상태와 내용의 정답률도 별도다.
 - 정답 근거, 잘못된 owner 재사용, 반박된 결함의 재등장, 조건과 결론의 불일치, 근거 없는 P0/P1, 누락, 근거 없는 완료/부재 주장.
 - 필요한 원문 재획득과 무관한 전체 재수집을 분리한 비율, 복구 후 첫 행동, 실제 request/dispatch/result 짝과 proposed/executed 인자 차이. 기존 trace 필드를 재사용하며 없는 항목만 좁게 보완한다.
 - 파일 수정 작업도 단일 함수 수정, 선언/구현 2파일 동시 변경, 4파일 이상 의존 변경, 중간 압축·외부 변경·부분 실패·취소를 포함한다. 전체 고유 파일 수/호출당 파일·patch 수/변경 줄·bytes/재읽기량/충돌·복구/검증 대기와 결과의 source identity를 따로 측정한다.
@@ -330,6 +397,56 @@ python -X utf8 -m pytest -q
 공통 schema/계약에 영향을 준 경우 Unity MCP 테스트도 실행한다. 실제 파일 삭제나 외부 프로젝트 변경이 필요한 테스트는 임시 fixture와 기존 격리 runner로 수행한다. 테스트가 사용자 설정을 건드리지 않는지 확인한다.
 
 최종 인계에는 변경 파일과 이유, 실제 테스트 결과/skip 이유, 실모델 A/B 설정과 결과, 남은 한계, 커밋 제목·본문 초안을 포함한다. 커밋·재설치·MCP 재로드는 이 계획의 자동 마지막 단계가 아니다.
+
+### E7. 반복 prefill의 원인을 분리한 뒤 최소 변경을 선택한다 — 이번 개정의 우선 작업
+
+§2.4는 병목 관찰이고 아래는 아직 실행하지 않은 후속 계획이다. **먼저 계측·재현하고, 원인이 확인된 기존 소유자만 수정한다.** 속도를 위해 정답 근거·권한·exact-fit·first-consumer·취소 경계를 낮추지 않는다. 사용자 모델 설정은 현재 값으로 고정하며 이 문서 개정 자체로 재로드하지 않는다.
+
+#### E7-1. 기존 관측에서 빠진 비용과 identity만 보완
+
+주 소유자 후보는 기존 `trace_lmstudio_run.py`와 `context-manager.ts` / 라운드 관측이다. 입력 조립·정확 토큰 측정은 계속 context-manager가 맡고 새 cache manager나 ledger를 만들지 않는다.
+
+1. SDK의 execution/modelInputId/round, provider request ID(제공 시), backend task/slot, model/runtime/build를 연결한다. 공유 ID가 없으면 시간·순서·출력 토큰 수의 추정 join으로 남기고 중첩 실행·애매한 대응은 unknown으로 처리한다. 취소/partial/요약 모델을 완료 research 호출과 합치지 않는다.
+2. 기존 `modelPrefillMs`의 첫 토큰 대기 의미를 보존하고 출처를 명시한다. 서버 prompt eval, 실제 처리 토큰, post-first-token elapsed, 전체 작업 시간, 요약/측정 API 시간을 별도로 수집한다. 59개 template 호출을 59개 생성으로 세지 않는다. 기존 measurement-cache의 hit는 입력 측정 재사용이고 inference KV hit와 다르다.
+3. 최종 SDK 입력의 정확한 template/token 비교가 가능할 때만 이전 라운드와의 최장 공통 prefix·첫 변경 위치·변경 역할/구성요소를 측정한다. tools/system/history/refs/task/runtime facts/optional guidance/projection/template를 구분한다. 기존 fingerprint는 동일성 확인에 쓰고, hash만으로 변경 위치를 추정하지 않는다.
+4. 원문·token ID·개인 소스는 일반 로그에 내보내지 않는다. 필요한 비교는 실행 안에서 인접 입력만 제한 보관하고 종료/취소 때 해제한다. 영속 결과는 길이·hash·구성요소·숫자 위치로 제한한다. 계측이 꺼져 있을 때 불필요한 template/count 호출을 늘리지 않는다.
+5. load 설정의 K=`Q8` / V=`Q5_1`과 backend의 effective 타입, GPU/CPU 할당, prompt cache 한도·회수된 entry·checkpoint 위치/복원 결과를 확인한다. 없는 정보는 unknown이다. cache entry 회수, KV precision, GPU VRAM은 각각 별도 항목이다. upstream default 8GiB 등을 설치본 값으로 대입하지 않는다.
+
+완료 조건: 현재 12회/10건 수치를 재생할 수 있고 단위·경계·추정 join이 명시된다. 관측 추가의 시간·메모리 비용을 측정하며 source truth나 host 입력 확인 수준을 과장하지 않는다.
+
+#### E7-2. 같은 입력으로 prefix 변경과 backend 재사용을 분리
+
+긴 실제 감사부터 반복하지 않고, 기존 평가 runner에 짧은 고정 replay를 추가한다. 실제 프로젝트·도구 부작용 없이 source hash·도구 schema·model template를 고정한다. 이전 대화가 포함된 경우와 새 세션을 구분하고 각 변형은 별도 동일 기준에서 준비한다.
+
+| 변형 | 고정/변경 | 확인할 원인 |
+|---|---|---|
+| A: 동일 입력 재전송 | template·tools·messages 완전 동일, 짧고 동일한 생성 한도 | backend 자체의 warm 재사용 가능 여부. 완전 캐시 hit를 가정하지 않음 |
+| B: 끝에만 추가 | 이전 source history의 prefix를 그대로 두고 완결된 tool exchange를 추가 | 정상 도구 루프에서 prefix를 보존하는 기준 비용 |
+| C: 가변 데이터만 변경 | refs/task/runtime facts의 실제 위치를 현재 방식과 후보 위치로 비교 | 같은 턴 초반의 변경이 재사용 길이를 줄이는지 |
+| D: projection 전/후 | 압축 경계가 동일한 고정 입력에서 한 번의 history 변환만 변경 | 줄어든 총 입력과 잃은 prefix/체크포인트의 비용을 함께 측정 |
+| E: template 변환 | 동일 메시지에서 과거 reasoning 보존/제거 등 실제 template 동작을 확인 | 하네스 조립 뒤 backend template가 과거 prefix를 바꾸는지 |
+| F: cache/checkpoint | 동일 replay에서 runtime 지원이 확인된 한 설정만 비교 | 항목 회수·복원 가능 위치·hybrid/recurrent 경로의 영향 |
+
+실제 K/V·batch·parallel·MTP는 우선 그대로 둔다. SDK/LM Studio template와 runtime 버전을 적어 upstream current 동작을 설치본에 대입하지 않는다. [Qwen hybrid의 중간 prompt 변경 사례](https://github.com/ggml-org/llama.cpp/issues/20643)는 통제 실험의 참고이며 이번 원인 확정 자료가 아니다. 동일 입력 A에서도 재사용하지 못하면 prompt 문구만 수정해 해결했다고 보고하지 않는다. cache 회수 경고가 사라져도 처리 토큰·시간이 그대로이면 개선으로 채택하지 않는다.
+
+완료 조건: warm/cold, 모델 cache와 source catalog cache, A/B 순서를 구분한 최소 3회 AB/BA 비교가 있다. 준비 요청·warmup 시간과 측정 시간을 분리하고 같은 GPU에서 동시 실행하지 않는다. raw replay 입력은 로컬 격리 파일로 관리하고 공유 근거에는 hash·설정·수치만 남긴다.
+
+#### E7-3. 원인별 개선 후보와 채택 순서
+
+1. **불필요한 조사 라운드·대형 근거부터 줄인다.** E4/E5의 false RPC·Health 가설과 이미 반박한 후보를 회귀로 고정한다. 모델이 왜 아직 좁은 기능 대신 파일 전체를 골랐는지 실제 request/result를 확인하고, 필요 없는 중복 schema 설명·과거 prose·무관 근거가 들어온 기존 선택 지점만 줄인다. 필요한 부모·조건·현재 oldText까지 없애거나 임의의 호출 수로 감사를 중단하지 않는다.
+2. **실제 prefix 변경이 확인되면 가변 assistant 데이터 위치를 비교한다.** `composeModelHistory`의 기존 system 안정성과 note authority를 보존한다. 완결된 tool request/result 그룹을 나누지 않는 뒤쪽 data slot 후보를 replay하고, 최신 사용자 요청의 우선순위·과거 note 무효화·도구 ID·report continuation을 검사한다. assistant 데이터를 system/user 명령으로 승격하거나 라운드마다 과거 스냅샷을 누적하지 않는다. `observe`와 `inject`는 별도 사례이며 이번 실행에 꺼진 inject 경로를 원인으로 고치지 않는다.
+3. **working target을 별도 실험한다.** 현재 40k/56k와 32k·24k 후보를 비교한다. 16k는 해당 입력의 mandatory floor가 허용할 때만 후보로 둔다. 현재 floor는 일부 라운드에서 19k를 넘으므로 16k 강제 절단은 불가하다. 더 잦은 projection으로 cache를 잃거나 근거 재획득이 늘어날 수 있어 총 prefill·전체 시간·정답을 함께 본다. load context 84,224와 working target은 서로 다른 설정이다.
+4. **backend cache/checkpoint 문제가 재현된 경우에만 설정/runtime 후보를 평가한다.** 실제 cache 용량·RAM 여유·checkpoint 복원 위치를 확인하고 한 항목씩 비교한다. checkpoint 수/parallel 변경이나 cache RAM 확대를 무조건 처방하지 않는다. 현재 Flash Attention·GPU KV offload와 KV 양자화는 이미 활성 기준이다. quantization 교체·MTP on/off·batch 변경·runtime 업데이트는 필요성이 남을 때 별도 실험하며 모두 같은 변경에 섞지 않는다. 로드가 필요한 실험은 설정을 저장하고 복구 가능하게 준비한다.
+5. **측정 API 호출 축소는 실제 비용이 남을 때만 진행한다.** 기존 실행 범위 measurement cache와 정확 입력 검사를 재사용한다. profile 조립 과정에서 필요한 정확 측정을 생략하거나, 9.851초의 집계 차이만으로 15분짜리 병목 해결이라고 주장하지 않는다.
+
+가이드 추가만으로 RPC 오판이 재현되면 모델의 한계도 결과로 남긴다. 모든 호출에 엔진 원문·장문 경고를 강제 주입하거나 검증 통과를 사실 인증으로 바꾸는 해결책은 채택하지 않는다. 기존 engine contract를 보완할 경우 출처·버전·적용 범위와 토큰 비용을 함께 검증한다.
+
+#### E7-4. 성능과 정확도의 공동 채택 기준
+
+- 실험 전에 평가 과제·정답 근거·읽어야 할 범위·설정·표본 수·측정 지표를 고정한다. baseline도 잘못된 P1을 포함하므로 “baseline보다 나쁘지 않음”만으로 품질 통과시키지 않는다. 정상 RPC/RepNotify를 결함으로 단정하지 않고, 심어 둔 실제 권한·콜백 동작 오류를 찾아야 한다.
+- 성능의 초기 목표는 동일 과제의 **누적 서버 prompt eval 중앙값 25% 이상 감소, 전체 시간 10% 이상 감소**로 제안한다. 관측된 개선이나 보장값이 아니다. 후보 탐색 3회 교차, 채택 후보 5회로 확대하고 중앙값·범위·실패를 모두 보고한다. backend timing이 없으면 이 지표는 미측정이며 SDK TTFT로 조용히 대체하지 않는다.
+- 정확도·필수 근거 coverage·변경 권한·미확인 보고가 통과해야 한다. 읽기 토큰만 감소하고 최종 false P1, 실제 결함 누락, 파일 수정 충돌 또는 전체 시간이 악화되면 기각한다. 순수 replay의 cache 향상과 end-to-end 감사 향상을 별도 보고한다.
+- 실패 후보를 새 상태 계층으로 보완하지 않는다. 결과가 부족하면 미확인과 다음 한 실험을 기록하며 완료·성능 향상으로 표시하지 않는다.
 
 ## 5. 필수 회귀 사례
 
@@ -366,10 +483,28 @@ python -X utf8 -m pytest -q
 | R29 | 4파일 의존 변경을 2파일 이하 호출로 나누고 중간 압축 | 총 범위 유지, receipt 연속성, 여러 호출을 하나의 atomic transaction으로 보고하지 않음 |
 | R30 | baseline/build/test와 같은 파일·생성물 동시 변경 | 입력 snapshot/source identity가 같은 결과만 해당 변경의 검증으로 인정; 생성기와 같은 산출물 writer는 순차화 |
 | R31 | 계획 완료 체크·background 시작/취소·실제 test 결과 불일치 | 계획 상태/프로세스 상태/검증 상태 분리; 진행 중을 완료로 올리지 않고 재개 시 필요한 부분만 확인 |
+| R32 | 원격 client 소유 Actor에서 서버의 일반 Client RPC 호출 | 정상 경로를 P1로 판정하거나 Multicast/저수준 전송으로 교체하지 않음; 소유권·replication·Unreliable 도달 여부를 별도 판단 |
+| R33 | 서버 소유/소유 연결 없음/타 client 소유와 `_Implementation` 직접 호출 | 로컬·원격·drop 가능 조건을 해당 엔진 정답과 대조; 모든 Client RPC가 원격 또는 로컬이라는 일괄 규칙 금지 |
+| R34 | 공용 빈 RepNotify·실제 잘못된 callback body·두 writer 충돌 | 이름/사본 수와 실제 동작 오류를 구분; 정상 사례의 false positive와 심은 결함의 누락을 함께 검사 |
+| R35 | `structure_valid; facts_not_verified` 뒤 잘못된 가설 | 형식 검증을 source truth·심각도·전체 감사 완료로 승격하지 않음; 실제 반대 근거로 재판정 |
+| R36 | 동일 입력·끝 추가·refs/runtime facts 변경·projection 전후 | 정확한 template/token prefix의 첫 변경 위치와 구성요소 기록; tool request/result 쌍·역할·사용자 우선순위·note 무효화 보존 |
+| R37 | availability observe와 inject, note absent/protocol enabled | observe metadata 0을 그대로 기록; 꺼진 inject의 modelInputId를 실행 원인으로 삼지 않음; available refs는 별도 확인 |
+| R38 | SDK TTFT·서버 prompt eval·token 차이·slot similarity | 지표 출처/단위 보존; cachedPrefix unknown을 유지하고 token 차이·graphs reuse를 hit율로 창작하지 않음 |
+| R39 | cache 항목 회수·hybrid checkpoint 복원·같은 prefix | 회수와 재처리의 상관/인과를 구분; cache RAM·KV 양자화·VRAM을 혼동하지 않음; 설치 runtime 미확인 상태로 upstream 버그 확정 금지 |
+| R40 | 순서가 겹치는 실행·취소/partial·59회 template API | 애매한 SDK/backend 대응은 unknown; 완료 추론/요약/측정 호출 분리; 선택되지 않은 conversation version을 중복 집계하지 않음 |
+| R41 | 40k target와 32k/24k/16k 후보·mandatory floor 초과 | 정확 fit/필수 근거/현재 oldText 보존; target 미달성·재읽기·prefix 손실까지 측정; 강제 절단 금지 |
+| R42 | 계측 off·오류·취소·다른 프로젝트/모델 재개 | 추가 raw prompt 유출·영속 비교 cache·늦은 상태 게시 없음; 이전 실행 비교 데이터 해제와 기존 수명 경계 유지 |
+| R43 | 텍스트 첨부 중단·구조화된 최종 report 완료·false P1 잔존 | 보고 전달·task/objective 상태·사실 정확성 분리; 텍스트 끝이나 형식 통과만으로 완료/정답을 결정하지 않음 |
 
 추가 Swift·설계·작업 관리 사례의 검사 방식: R14의 예산/실행 상태, R21의 raw intent, R23의 복구 허용 조건은 기존 deterministic 테스트와 이벤트 replay로 계약을 확인한다. R15–R20의 판단 품질 및 R22의 보고 수렴은 정답 근거가 있는 실모델 평가가 필요하다. 단순 문자열 assertion 통과를 모델 행동 개선으로 표시하지 않는다. R24–R31은 바뀌는 경계에 맞춰 기존 생성물·수명·transaction·검증 provenance 사례를 재사용하고, 여러 파일 수정의 진행 품질은 실모델 결과와 함께 평가한다. 기존 `prediction-loop.test.cjs`, `report-continuation.test.cjs`, `recovery-state.test.cjs`, `execution-outcome.test.cjs` 등의 관련 사례를 재사용한다.
 
+R32–R35는 공식/설치 엔진 정답과 synthetic 정상·결함 쌍을 준비한 실모델 판정 평가다. R36–R43의 지표·역할·수명은 기존 harness/input/availability/continuity/trace 테스트와 replay를 재사용하고, cache 효과는 별도 runtime 실측으로 확인한다. 이 문서에 사례를 등록한 것과 제품 테스트를 구현·통과한 것을 구분한다.
+
 ## 6. 이번 재검토에서 수행한 검증과 한계
+
+2026-10-19 개정에서는 최신 첨부 두 개와 선택된 구조화 대화, 입력 조립/라운드 타이밍 소스, 설치 엔진의 좁은 범위를 읽고 파생 수치를 계산했다. 완료 backend 10건·SDK 12회, 입력 토큰 차이 패턴과 cache 회수 5건을 대조했다. 이번 변경은 이 계획과 두 분석/근거 JSON뿐이다. 검증은 JSON 수치·근거 패킷 구조·문서 링크·encoding·공개 경로 위생에 한정하며 제품 build/전체 suite/신규 추론 A/B의 대체가 아니다. 이전 회귀 성공·설치 완료·CI 성공은 §1과 선행 구현 기록에서 구분한다.
+
+이번 개정 검증: 파생 합계·추정 join·모드·회수 패턴 검사를 통과했다. 로컬 링크 80개가 존재하며 공개 경로 위생 테스트 4건, 추적 파일 1,182개의 encoding 검사와 새 JSON 2개의 UTF-8/BOM 검사가 통과했다. 근거 패킷은 4개 claim에 대해 `structure_valid; facts_not_verified`(오류·경고 0)를 반환했다. 이 결과를 RPC 사실·실모델 정확도·성능 개선의 자동 인증으로 사용하지 않는다.
 
 제품 파일은 수정하지 않았다. 아래 테스트는 **Swift 로그 추가 분석 이전의 계획 검토에서 수행한 결과**다. Swift 추가 요청에서는 로그 1,829줄, 관련 하네스 함수와 게임 함수를 대조했다. 후속 요청에서는 현재 SSOT/가이던스 생성·note 복원·실행/라운드/예산/쓰기 수명과 수정 상한, Claude Code 공식 자료를 추가 조사해 계획·근거 JSON을 갱신했다. 제품 테스트/빌드/실모델 실행은 다시 수행하지 않았다. 문서의 근거 JSON 형식·로컬 링크·줄 번호 검사는 별도로 수행한다.
 
@@ -411,7 +546,7 @@ python -X utf8 -m pytest -q
 
 ### 8.1 전체 파일 수, 한 계약의 변경 묶음, 한 번의 도구 호출을 구분
 
-현재 계획의 **우선 변경 검토 대상은 핵심 구현 4개 + 직접 회귀 후보 4개 + 파생 identity 1개 = 9개**다. 모두 반드시 수정한다는 확정 수가 아니다. 기존 테스트로 충분하면 테스트 파일은 수정하지 않고, 구현 후 실제 고유 변경 파일 수를 보고한다. 버전·가이던스·평가 runner의 조건부 파일까지 포함한 최종 수는 E0/E4에서 확정한다. 정확도를 희생하는 임의의 전체 파일 수 상한은 두지 않는다.
+아래 9개는 **10월 18일 E1–E4의 우선 검토 목록**이다. 선행 P0–P5 뒤에도 모두 수정해야 한다는 뜻이 아니다. 이번 추가의 첫 대상은 기존 trace의 누락 지표와 정확도 평가이며, E7의 prefix/runtime 실험 결과에 따라 나머지 파일을 고른다. 기존 테스트로 충분하면 새 테스트 파일도 만들지 않는다. 실제 고유 변경 파일 수와 조건부 추가 이유는 계약 단위로 기록하고 정확도를 희생하는 임의의 상한은 두지 않는다.
 
 | 분류 | 우선 대상 | 이유/순서 |
 |---|---|---|
@@ -428,10 +563,13 @@ python -X utf8 -m pytest -q
 - `direct_rag_contract.py`, manifest/공개 계약·소비자: 실제 schema/effect/예산 의미가 바뀔 때. 단순 suggestion 개선에 불필요한 공개 옵션을 추가하지 않음.
 - `working-context.js`, 관련 archive/notes/lifecycle tests: notice 또는 해당 계약을 실제로 변경할 때. 원칙 추가만을 이유로 상태 소유자를 수정하지 않음.
 - `core.md`/`unreal.md`/`design.md`/catalog/engine contract와 생성 bundle: 기존 규칙에 실제 누락·충돌이 있을 때 정본부터 변경. 같은 문장을 여러 파일에 반복하지 않음.
-- 기존 eval/trace runner: R14–R31의 측정에 필요한 도구/이벤트가 없을 때만 확장. 별도 scheduler/benchmark framework는 만들지 않음.
+- 기존 eval/trace runner: R14–R43의 측정에 필요한 도구/이벤트가 없을 때만 확장. `trace_lmstudio_run.py` / `test_trace_lmstudio_run.py`의 기존 selected-version·tool/request identity 계약을 보존. 별도 scheduler/benchmark framework는 만들지 않음.
+- E7 관측: `context-manager.ts` / `round-loop.ts` / `prediction-loop.ts`는 실제 빠진 지표가 있을 때만, 입력 위치 변경은 `composeModelHistory`에서 원인이 재현된 경우만 포함한다. prefix 비교 데이터의 수명은 기존 execution/round 소유자에 둔다.
+- E7 입력 선택: `round-input.ts`, `continuity-model-notes.js`, optional guidance 선택 경로는 각각 실제 refs/runtime/선택 변화가 원인인 경우만 포함한다. 새 note 저장소·writer·도구 catalog를 만들지 않는다.
+- E7 회귀: 기존 `harness-stability.test.cjs`, `input-availability.test.js`, `continuity-model-notes.test.js`, `prediction-loop.test.cjs`, recovery/report 테스트 중 변경 계약과 직접 연결되는 사례를 확장한다. 새 TS build 후 검사하며 실모델 평가와 역할을 구분한다.
 - 구성 요소 버전: `VERSIONING.md` 기준으로 Compactor package/manifest, 일치해야 하는 lock metadata 등 실제 관련 파일만 갱신. RAG 측 배포 identity 경로는 E0에서 소비자를 확인한 뒤 결정. 제품/Unity 버전을 일괄 올리지 않음.
 
-Unreal MCP의 현재 source hard cap은 [direct-mutation-limits.js:3](../lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js:3)에서 **호출당 최대 2파일·2개 patch operation, patch 새 본문 32줄, bundle 변경량 64줄**이며 문자·byte 상한도 함께 있다. 환경 설정은 이를 더 낮출 수 있다. 이는 전체 작업에서 고칠 수 있는 파일 수가 아니며 Claude Code의 Edit 도구 상한도 아니다. 설치본의 실제 설정은 실행 전에 확인하고 기존 권한·상한을 임의로 올리지 않는다.
+Unreal MCP의 source hard cap은 [direct-mutation-limits.js:3](../lmstudio-unreal-agent-mcp/src/direct-mutation-limits.js:3)에서 **bundle 최대 2파일·2개 operation, 영역별 patch 32줄, bundle 변경량 64줄**이며 문자·byte 상한도 함께 있다. 선행 P3의 `edits[]`는 파일당 최대 8영역을 같은 기준 hash에서 처리하므로 2 operations를 2개 텍스트 영역으로 오해하지 않는다. 환경 설정은 한도를 더 낮출 수 있다. 이는 전체 작업 파일 수나 Claude Code Edit 상한이 아니다. 실제 설정·합계 계약을 확인하고 권한·상한을 임의로 올리지 않는다.
 
 파일 수만으로 배치 크기를 정하지 않는다. 함수 크기, 선언/구현 의존성, patch match/expectedHash, payload, 공유 읽기 예산, 복구 범위를 함께 본다. “4파일이니 2번이면 끝”이라고 계산할 수 없다. 한 파일에 여러 patch가 필요할 수 있고 생성·검증이 별도다. 이 상한 때문에 실제 지연이 발생하는지 E5에서 측정하되 이번 연구만으로 상한 완화나 우회 수정을 도입하지 않는다.
 
@@ -440,9 +578,11 @@ Unreal MCP의 현재 source hard cap은 [direct-mutation-limits.js:3](../lmstudi
 | 순서 | 작업과 선행 조건 | 함께 진행해도 되는 일 | 순차로 유지할 일/종료 증거 |
 |---|---|---|---|
 | W0 / E0 | 기준 HEAD·dirty diff·설정·실제 build identity·수정 후보/검사 목록 고정 | 공식 문서/관련 소스의 읽기, 별도 fixture 설계 | baseline이 읽는 트리 수정 금지. 동일 snapshot과 명령/결과를 남긴 뒤 baseline 완료. |
+| W0a / E7-1–2 | 최신 로그 집계와 SDK/backend 관측 보완, 정상/결함 네트워크 평가 fixture 고정 | 원문을 바꾸지 않는 수치·근거 검토 | 먼저 같은 입력 replay로 prefix/cache 원인을 분리. 현재 문서 개정에서는 실험을 실행하지 않음. |
 | W1 / E1–E2 | Python 엔진 후보→응답 안내 변경 | 수정 파일을 쓰지 않는 조사/독립 테스트만 | `engine_header_evidence` 계약→RAG 소비자→focused 회귀. 같은 `direct_rag_engine_local.py` 동시 수정 금지. |
 | W2 / E3 | 복원 안내와 반복/복구 지침 정합성 | W1과 파일·출력·fixture가 분리된 경우 조사/검토 가능 | `resume-facts`와 instructions 수정→새 TS build→관련 입력/복원 검사. 기본은 단일 구현자가 W1 후 진행. |
 | W3 / E4 | 구현 결과에 필요한 가이던스·계약·버전 반영 | 읽기 전용 리뷰 | 원본 계약/MD→generator→runtime identity→build. 동일 generated 파일에 여러 writer 금지. |
+| W3a / E7-3 | 원인이 재현된 기존 입력 조립/선택 또는 runtime 후보 하나 | 별도 로그 분석 | prefix 위치·working target·cache·K/V·MTP·batch를 한 변경에 섞지 않음. E1–E4는 필요한 미완료 부분만 선택. |
 | W4 / E5 | baseline/new가 식별된 고정 build로 준비됨 | 격리된 로그 분석 | 같은 GPU/모델 자원을 쓰는 A/B는 교차 순차 실행. 측정 중 모델/설정/소스 교체 금지. |
 | W5 / E6 | 관련 회귀와 범위 통합 | 독립 출력 디렉터리·읽기만 하는 suite는 동시 가능 | 공유 dist/build/install/fixture를 쓰는 검사 순차화. 최종 diff·검사 입력 identity·결과 확인 후 전달. 커밋/설치는 하지 않음. |
 
@@ -455,7 +595,7 @@ Unreal MCP의 현재 source hard cap은 [direct-mutation-limits.js:3](../lmstudi
 
 ### 8.3 작업 상태를 잃지 않으면서 컨텍스트를 적게 쓰는 방법
 
-Opus 실행자는 사용 가능한 기존 Task 도구가 있으면 쓰고, 없으면 이 MD의 E0–E6 진행 표를 갱신한다. 아래 한 줄 단위를 유지하며 모든 파일 원문·분석을 메모에 복사하지 않는다.
+Opus 실행자는 사용 가능한 기존 Task 도구가 있으면 쓰고, 없으면 이 MD의 E0–E7 진행 표를 갱신한다. 아래 한 줄 단위를 유지하며 모든 파일 원문·분석을 메모에 복사하지 않는다. 최신 우선순위는 W0 → W0a → 원인에 맞는 W1–W3a → W4 → W5이며, 과거 계획 순서만 보고 이미 끝난 기능을 재구현하지 않는다.
 
 ```text
 작업 ID | 목적/계약 | 선행 작업 | 대상 파일·함수 | planned/in_progress/applied/verified/blocked | 근거·검사 결과 | 남은 질문
@@ -473,8 +613,19 @@ Opus 실행자는 사용 가능한 기존 Task 도구가 있으면 쓰고, 없�
 4. 2파일/2patch·문자/줄 제한과 파일 재읽기가 다중 파일 작업에서 각각 얼마의 지연을 만드는가? 필요한 범위 읽기·receipt 재사용·검증 묶음만으로 줄일 수 있는가?
 5. 계획 상태·background 실행·검증 결과를 어떤 기존 수단으로 연결하는가? baseline 중 소스 수정, stale dist 테스트, generator 동시 실행을 어떻게 방지하고 재현할 것인가?
 6. 수정이 끝난 뒤에도 같은 문제가 남으면 모델 한계, 실제 입력, 도구 계약, 실행 복구 중 어느 근거가 있는가? 새로운 scheduler/ledger/요약 계층 없이 해결되는 대안을 먼저 비교했는가?
+7. K=`Q8` / V=`Q5_1` 기준에서 긴 prompt의 첫 변경 위치, backend 처리 토큰, cache 회수·checkpoint 복원은 각각 어떻게 연결되는가? 실제 runtime 버전과 cache 용량을 모르는 채로 GPU/KV 문제라고 결론 내리지는 않았는가?
+8. 형식 검증을 통과한 잘못된 RPC 판정과 이름만 다른 정상 RepNotify를 false positive로 검출하는가? 실제 소유권·콜백 동작 결함도 찾으며 속도와 정확도를 함께 통과시키는가?
 
 ## 9. 최종 완료 기준
+
+아래 체크는 후속 구현/평가의 완료 조건이다. 선행 구현 사실은 §1의 상태표와 구현 기록을 기준으로 하며, 이 미체크 목록을 전부 미구현이라는 뜻으로 사용하지 않는다.
+
+- [x] 최신 대화·서버 로그·구조화된 실행을 구분하고 12회/10건의 파생 수치·추정 join·한계를 기록했다.
+- [x] K=`Q8` / V=`Q5_1` 사용자 정보를 반영하고 실행 로그의 실효 형식 미확인을 남겼다.
+- [ ] R32–R35의 정상/결함 짝 평가에서 false RPC P1·형식 검증 오해·명명만의 결함 판정을 방지했다.
+- [ ] E7에서 SDK TTFT와 서버 prompt eval, 측정 cache와 inference cache, cache 회수와 VRAM/KV 형식을 분리해 관측했다.
+- [ ] prefix/압축/template/runtime 원인을 통제 replay로 구분하고 필요한 최소 변경만 선택했다.
+- [ ] 성능 후보를 정확도·coverage·권한과 함께 E7-4 기준으로 비교했으며 미실시를 개선으로 보고하지 않았다.
 
 - [ ] E0의 기준 실행과 재현 사례가 남아 있다. Swift 1.5라는 사용자 지정과 실제 모델 metadata를 구분했다.
 - [ ] S1–S10/R14–R23의 로그 관찰과 실행 증거를 구분하고, 서술을 실제 호출/압축/토큰 수로 집계하지 않았다.
@@ -493,3 +644,5 @@ Opus 실행자는 사용 가능한 기존 Task 도구가 있으면 쓰고, 없�
 - [ ] 사용자 설정·권한을 유지했고 커밋하지 않았다.
 
 검토 근거 기록: [harness-targeted-engine-read-plan-20261018.json](../docs/evidence/harness-targeted-engine-read-plan-20261018.json)
+
+2026-10-19 개정 근거: [prefill 파생 분석](evidence/harness-prefill-analysis-20261019.json), [판단·지연 계획 근거 패킷](evidence/harness-behavior-latency-plan-20261019.json). 원본 첨부와 로컬 대화 JSON은 배포하지 않는다.

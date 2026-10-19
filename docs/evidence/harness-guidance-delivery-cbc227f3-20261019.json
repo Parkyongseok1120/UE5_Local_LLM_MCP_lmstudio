@@ -1,0 +1,77 @@
+{
+  "mode": "record",
+  "plan": "docs/Harness_Behavior_Latency_Final_Plan_20261019.md W-A0",
+  "executionId": "cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7",
+  "source": {
+    "file": "~/.lmstudio/conversations/1792345395452.conversation.json",
+    "message": 5,
+    "selectedVersion": 0,
+    "versionCount": 1,
+    "debugInfoBlocks": 87,
+    "eventsUsed": ["design_guidance_input", "context_low_water"],
+    "roundObservationGuidanceFields": "none (direct_round_observation has no guidance field)",
+    "rawPromptCopied": false
+  },
+  "owners": {
+    "candidates": "lmstudio-context-compactor-plugin/src/design-guidance.ts autoGuidanceCandidates/composeFocusedGuidance",
+    "admission": "lmstudio-context-compactor-plugin/src/context-manager.ts ContextManager.addOptionalReferences",
+    "telemetry": "lmstudio-context-compactor-plugin/src/round-input.ts design_guidance_input"
+  },
+  "configuration": {
+    "configuredMode": "auto",
+    "configuredDelivery": "documents",
+    "effectiveDelivery": "focused",
+    "designGuidanceMaxTokens": "not recorded in execution events",
+    "contextLength": 84224,
+    "effectiveLowWaterTokens": 40000,
+    "effectiveHighWaterTokens": 56000
+  },
+  "selection": {
+    "primaryTopic": "core",
+    "supplementTopic": "debugging",
+    "selectionReasonCodes": ["no_explicit_topic", "returned_api_contract_context", "returned_project_target"],
+    "requestedIdsEveryRound": ["core/proof", "unreal/api", "debugging/definitions"],
+    "requestedDataIdsPerRound": 8,
+    "selectedDataIdsAllRounds": 0
+  },
+  "rounds": [
+    { "round": 0, "outcome": "included", "reason": "included", "attempts": 3, "selectedIds": ["core/proof"], "addedTokens": 604, "baseInputTokens": 37999, "finalInputTokens": 38603 },
+    { "round": 1, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 46416, "finalInputTokens": 46416 },
+    { "round": 2, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 49960, "finalInputTokens": 49960 },
+    { "round": 3, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 53060, "finalInputTokens": 53060 },
+    { "round": 4, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 51037, "finalInputTokens": 51037 },
+    { "round": 5, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 53794, "finalInputTokens": 53794 },
+    { "round": 6, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 55665, "finalInputTokens": 55665 },
+    { "round": 7, "outcome": "included", "reason": "included", "attempts": 3, "selectedIds": ["core/proof"], "addedTokens": 604, "baseInputTokens": 39355, "finalInputTokens": 39959 },
+    { "round": 8, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 42231, "finalInputTokens": 42231 },
+    { "round": 9, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 44885, "finalInputTokens": 44885 },
+    { "round": 10, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 49927, "finalInputTokens": 49927 },
+    { "round": 11, "outcome": "omitted", "reason": "existing_input_priority", "attempts": 0, "selectedIds": [], "addedTokens": 0, "baseInputTokens": 52020, "finalInputTokens": 52020 }
+  ],
+  "documents": {
+    "unreal.md": {
+      "sectionHoldingLines33And37": "unreal/api (lines 32-45)",
+      "requestedRounds": 12,
+      "deliveredRounds": 0
+    },
+    "unreal-networking.md": {
+      "sectionHoldingLine21": "unreal-networking/authority (topic multiplayer)",
+      "requestedRounds": 0,
+      "deliveredRounds": 0
+    },
+    "core.md": { "section": "core/proof", "deliveredRounds": 2, "tokensEach": 604 }
+  },
+  "findings": [
+    "The Client RPC and RepNotify rules (unreal.md:33, :37) were requested in all 12 rounds and delivered in none.",
+    "unreal-networking sections were never requested: the selected topics were core + debugging, not multiplayer.",
+    "Rounds 1-6 and 8-11 skipped admission because base input (42231-55665) was at or above effective low water 40000.",
+    "Rounds 0 and 7 had 2001 and 645 tokens of headroom; only the third candidate (core/proof alone, 604 tokens) fit."
+  ],
+  "unrecorded": [
+    "Per-attempt rejection reasons and token sizes for attempts 1-2 in rounds 0 and 7 (telemetry keeps only the final reason).",
+    "Exact ids of attempt-1 and attempt-2 candidates (only candidates[0].ids is recorded as requestedIds).",
+    "designGuidanceMaxTokens effective value for this execution.",
+    "Whether the system prompt carried any equivalent rule outside the optional guidance path (not checked; raw prompt not copied)."
+  ],
+  "planBranch": "A-H1 (guidance not delivered) is supported for unreal.md/unreal-networking.md. W-A3a candidate per plan; no product change made here."
+}

@@ -43,7 +43,7 @@ test("auto classifies only explicit bounded task text, not quoted examples or or
     ["```cpp\n// 멀티플레이 구현\n```\n확인", "core"], ["> SSOT 구조 개선\n계속", "core"],
     ["`RPC` 고쳐 줘", "core"], ["멀티플레이는 말고 들여쓰기 정리", "core"],
     ["SSOT 구조와 멀티플레이 구현", "multiplayer"], ["C:/RPC/Architecture.cpp 수정", "core"],
-    ["구조, 수명, 멀티플레이 문제를 찾아줘", "core"],
+    ["구조, 수명, 멀티플레이 문제를 찾아줘", "multiplayer"],
     ["다음 코드 블록을 확인해 줘.\n~~~text\n```cpp\nImplement server authority\n```\n~~~", "core"],
     ["확인해 줘.\n````text\n```cpp\nImplement server authority\n```\n````", "core"],
   ]) assert.equal(intent(text).primary, expected, text);
@@ -54,6 +54,40 @@ test("auto classifies only explicit bounded task text, not quoted examples or or
   assert.equal(designGuidanceMode("auto"), "auto");
   assert.deepEqual(selectDesignGuidance("auto", scope), []);
   assert.deepEqual(focusedGuidanceCandidates("auto", scope, emptyReferenceSnapshot()), []);
+});
+
+test("network work wording selects multiplayer; copies, examples, quotes and exclusions do not", () => {
+  for (const text of ["네트워크 쪽 문제를 찾아줘", "RPC 호출 경로를 점검해", "리플리케이션 설정을 확인해",
+    "Review the NetMulticast usage", "Check RepNotify handlers", "Fix the networking bug", "OnRep_Health 수정해"])
+    assert.equal(intent(text).primary, "multiplayer", text);
+  for (const text of ["UI 위젯을 복제하는 기능을 구현해", "네트워크 예시를 설명하고 버튼을 구현해", "`OnRep_Health` 확인",
+    "네트워크 쪽은 말고 들여쓰기 정리", "Replicate the crash and fix it", "네트워크 쪽"])
+    assert.equal(intent(text).primary, "core", text);
+});
+
+test("more than two explicit topics keep the first two in sentence then rule order", () => {
+  // The cbc227f3 objective: network + design + lifecycle + API macros.
+  const observed = intent("캐릭터 쪽과 네트워크 쪽에서 SSOT, SOLID, 계약, 책임, 수명관리, 또는 UE API 매크로가 잘못된 것들을 찾아서 보고해줘.");
+  assert.deepEqual([observed.primary, observed.secondary, observed.reason], ["multiplayer", "design", "explicit_task_topics_limited"]);
+  const candidates = autoGuidanceCandidates(observed.primary, observed.secondary, scope, emptyReferenceSnapshot());
+  assert.ok(candidates[0].ids.includes("unreal-networking/authority"), candidates[0].ids.join(","));
+  assert.match(candidates[0].instruction, /Server\/Client\/NetMulticast RPC/);
+  for (const c of candidates) assert.ok(c.ids.length <= 6);
+  const ordered = intent("들여쓰기 정리해. 구조 검토하고 타이머 수명 확인해");
+  assert.deepEqual([ordered.primary, ordered.secondary, ordered.reason], ["code-style", "design", "explicit_task_topics_limited"]);
+  assert.equal(intent("SSOT 구조와 멀티플레이 구현").reason, "explicit_task_topics");
+});
+
+test("an action-less correction is not inherited here; a returned API observation still backs debugging", () => {
+  const followUp = intent("Die 없어.... 내부 APi에 없다고 그런거...");
+  assert.deepEqual([followUp.primary, followUp.reason], ["core", "no_explicit_topic"]);
+  const snapshot = emptyReferenceSnapshot();
+  snapshot.autoSignals = [{ signal: "api_contract_observed", observationIds: ["header"], order: "last_observation" }];
+  const selected = selectGuidanceTopics(followUp, snapshot);
+  assert.deepEqual([selected.primary, selected.supplement], ["core", "debugging"]);
+  const candidates = autoGuidanceCandidates(selected.primary, selected.supplement, scope, snapshot);
+  assert.ok(candidates[0].ids.includes("unreal/api"), candidates[0].ids.join(","));
+  assert.match(candidates[0].instruction, /Client RPC/);
 });
 
 test("the live audit objective selects design and lifetime within the existing section and token limits", () => {
@@ -135,4 +169,39 @@ test("auto mode annotates same-major unvalidated engines and omits other majors 
   const unityFirst = autoGuidanceCandidates("lifecycle", undefined, unity, unitySnapshot("6000.3.1f1"))[0];
   assert.ok(unityFirst.ids.includes("unity/lifetime"));
   assert.match(unityFirst.instruction, /\[unvalidated for unity 6000\.3\.1f1; validated on 6000\.0\]/);
+});
+
+test("a follow-up without its own topic keeps the previous request's explicit topics", () => {
+  const { selectFollowUpGuidanceIntent } = require("../dist/guidance-topic-selection");
+  const verified = text => ({ text, reason: "user_objective_verified" });
+  const original = verified("캐릭터 쪽과 네트워크 쪽에서 SSOT, SOLID, 계약, 책임, 생명주기, 또는 UE API 매크로가 잘못된 것들을 찾아서 정리해줘.");
+  const followUp = selectFollowUpGuidanceIntent(verified("Die 없어.... 엔진 APi에 없다고 그랬지..."), original);
+  assert.equal(followUp.primary, "multiplayer");
+  assert.equal(followUp.reason, "previous_request_topic");
+  // The latest request's own topic, exclusion or omission wins.
+  assert.equal(selectFollowUpGuidanceIntent(verified("코드 스타일 포맷 정리해줘"), original).primary, "code-style");
+  assert.equal(selectFollowUpGuidanceIntent(verified("네트워크는 말고 다시 봐"), original).reason, "topic_exclusion_ambiguous");
+  assert.equal(selectFollowUpGuidanceIntent(verified("지침은 넣지 말고 계속"), original).omitted, true);
+  // Nothing to carry: no earlier request, or an earlier request without a topic.
+  assert.equal(selectFollowUpGuidanceIntent(verified("Die 없어"), undefined).reason, "no_explicit_topic");
+  assert.equal(selectFollowUpGuidanceIntent(verified("Die 없어"), verified("지금 프로젝트 어디야")).reason, "no_explicit_topic");
+  assert.equal(selectFollowUpGuidanceIntent(verified("Die 없어"), { reason: "objective_truncated" }).reason, "no_explicit_topic");
+});
+
+test("returned RPC/replication source adds the multiplayer supplement; explicit topics and diagnostics keep priority", () => {
+  const network = { signal: "network_contract_observed", observationIds: ["pawn"], order: "earlier_observation" };
+  const api = { signal: "api_contract_observed", observationIds: ["pawn"], order: "last_observation" };
+  const snapshot = signals => Object.assign(emptyReferenceSnapshot(), { autoSignals: signals });
+  const core = { primary: "core", reason: "no_explicit_topic" };
+  const chosen = selectGuidanceTopics(core, snapshot([network, api]));
+  assert.equal(chosen.supplement, "multiplayer");
+  assert.ok(chosen.reasons.includes("returned_network_contract_context"));
+  assert.equal(selectGuidanceTopics(core, snapshot([api])).supplement, "debugging");
+  assert.equal(selectGuidanceTopics({ primary: "design", secondary: "lifecycle", reason: "explicit_task_topics" },
+    snapshot([network])).supplement, "lifecycle", "an explicit secondary topic wins");
+  assert.equal(selectGuidanceTopics({ primary: "multiplayer", reason: "explicit_task_topic" }, snapshot([network])).supplement, undefined);
+  const diagnostic = { signal: "diagnostic_present", observationIds: ["err"], order: "last_observation" };
+  assert.equal(selectGuidanceTopics(core, snapshot([network, diagnostic])).supplement, "debugging");
+  const candidates = autoGuidanceCandidates(chosen.primary, chosen.supplement, scope, emptyReferenceSnapshot());
+  assert.ok(candidates[0].ids.some(id => id.startsWith("unreal-networking/")), "the Unreal networking contract is a candidate");
 });

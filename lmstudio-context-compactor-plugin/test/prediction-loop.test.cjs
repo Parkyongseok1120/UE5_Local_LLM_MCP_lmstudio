@@ -5027,7 +5027,9 @@ test('design references reach each measured prediction once and preserve ordinar
   const references = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
   assert.equal(references.length, 2);
   for (let i = 0; i < 2; i++) {
-    assert.equal(references[i].reason, 'included');
+    assert.equal(references[i].reason, i === 0 ? 'included' : 'sticky_kept');
+    assert.equal(references[i].outcome, 'included');
+    assert.equal(references[i].admissionWater, 'high');
     assert.equal(references[i].finalInputTokens, measured[i].finalInputTokens);
     assert.equal(measured[i].finalExactMeasurement, true);
   }
@@ -5196,6 +5198,10 @@ test('Auto adopts returned engine guidance without rebinding later explicit tool
   await handlePredictionLoop(ctl);
   assert.equal(calls, 3);
   assert.doesNotMatch(original.toString(), /Derived reference data/);
+  // Returned engine evidence is the one input that may select again in-turn.
+  const guidance = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.deepEqual(guidance.map(e => [e.reason, e.stickyCause]),
+    [['included', undefined], ['included', 'scope_changed'], ['sticky_kept', undefined]]);
 });
 
 for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {
@@ -5265,6 +5271,95 @@ for (const delivery of ['documents', 'focused']) test(`Auto uses a bounded focus
   const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
   assert.equal(event.primaryTopic, 'design'); assert.equal(event.configuredDelivery, delivery);
   assert.equal(event.effectiveDelivery, 'focused'); assert.ok(event.attempts <= 4);
+  assert.equal(event.admissionWater, 'high');
+});
+
+test('Auto core fallback without a request topic or returned observation keeps low-water admission', async () => {
+  const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 3); },
+    async act(_chat, _tools, options) { completeRecoveryReply(options, 'Summary.'); } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '지금 프로젝트 어디야' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
+  await handlePredictionLoop(ctl);
+  const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.deepEqual([event.primaryTopic, event.supplementTopic, event.admissionWater], ['core', undefined, 'low']);
+});
+
+// One execution writes per round; input size is charged per round so it moves
+// between low and high water while the evidence history itself stays small.
+function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
+  const { readConfig } = require('../dist/execution-config');
+  const { BudgetBroker } = require('../dist/budget-broker');
+  const systems = [], abort = new AbortController();
+  let calls = 0;
+  const tool = { name: 'write_file', description: 'Write', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } } } };
+  const model = { identifier: 'sticky-guidance', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) {
+      const round = text.split('WRITE_RESULT_').length - 1;
+      return bases[Math.min(round, bases.length - 1)] + (text.includes('[Optional design reference]') ? guidanceTokens : 0);
+    },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt()).getText());
+      if (n === abortAtCall && abortAtCall > 0) { abort.abort(new Error('user stopped generation')); throw abort.signal.reason; }
+      if (n >= bases.length - 1) { completeRecoveryReply(options, 'Done.'); return; }
+      const request = { type: 'function', id: `sticky-${n}`, name: 'write_file', arguments: { path: `A${n}.cpp`, content: `code ${n}` } };
+      await options.guardToolCall(0, 7300 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `A${n}.cpp`, message: `WRITE_RESULT_${n}` }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '멀티플레이 RPC 코드를 수정해' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
+  ctl.abortSignal = abort.signal;
+  ctl.guardAbort = () => { if (abort.signal.aborted) throw abort.signal.reason; };
+  const config = readConfig(ctl);
+  const water = new BudgetBroker(config).watermarks({ contextLength: 38912, outputReserve: config.maxOutputReserve,
+    inputTokens: 0, exact: true }, 0, false, 0);
+  const events = () => ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  return { ctl, systems, water, events };
+}
+const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
+
+test('admitted guidance keeps one system text across rounds, and a drop is final for the execution', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  assert.ok(high - low > 1000);
+  const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
+  assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
+  assert.equal(run.systems.length, 5);
+  assert.match(run.systems[0], /\[Optional design reference\]/);
+  assert.equal(run.systems[1], run.systems[0]);
+  assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
+  assert.equal(run.systems[3], run.systems[2]);
+  assert.equal(run.systems[4], run.systems[2]);
+});
+
+test('the next user turn selects again, and a canceled execution leaves no retained guidance behind', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const handler = createPredictionLoopHandler();
+  const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
+  await handler(dropped.ctl);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
+  const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
+  await handler(next.ctl);
+  assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);
+  const canceled = stickyGuidanceRun({ bases: [low - 2000, low - 1000, low - 1000], abortAtCall: 1 });
+  await assert.rejects(handler(canceled.ctl), /user stopped generation/);
+  assert.deepEqual(canceled.events().map(e => e.reason), ['included', 'sticky_kept']);
+  const afterCancel = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
+  await handler(afterCancel.ctl);
+  assert.deepEqual(afterCancel.events().map(e => e.reason), ['included', 'sticky_kept']);
+  assert.match(afterCancel.systems[0], /\[Optional design reference\]/);
 });
 
 for (const variant of ['excluded', 'observe', 'zero', 'final']) test(`Auto ${variant} respects existing omission boundaries`, async () => {

@@ -258,6 +258,7 @@ function isDeleteAllowedPath(targetAbsPath, workspaceRoot, activeProjectPath) {
 module.exports = {
   PATCH_ONLY_EXTENSIONS,
   SOURCE_EXTENSIONS,
+  isSourceLikeExt,
   isPatchOnlyExistingFile,
   isDeniedPath,
   deletionCandidateIdentity,

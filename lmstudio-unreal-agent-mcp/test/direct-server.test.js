@@ -98,7 +98,7 @@ test("read envelope byte budgets preserve UTF-8, escaped text and contiguous who
     assert.equal(p.nextStartLine,p.endLine+1); start=p.nextStartLine;
   }
   assert.deepEqual(delivered,lines);
-  const response=await f.runtime.callTool('read_file',{path:f.sourceFile,byteBudget:4096});
+  const response=await f.runtime.callTool('read_file',{path:f.sourceFile,offsetBytes:0,byteBudget:4096});
   const p=payloadOf(response); assert.equal(p.ok,true); assert.ok(Buffer.byteLength(response.content[0].text)<=4096);
   assert.equal(Buffer.byteLength(p.content),p.nextOffsetBytes); assert.doesNotMatch(p.content,/\ufffd/);
 });

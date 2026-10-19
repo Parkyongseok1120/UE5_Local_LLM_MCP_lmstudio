@@ -165,7 +165,7 @@
     {
       "id": "small_byte_budget",
       "failureKind": "partial_result",
-      "prompt": "project://Source/Game/Game.Build.cs 를 read_file로 byteBudget 2048을 지정해 읽고, 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
+      "prompt": "project://Source/Game/Game.Build.cs 를 read_file로 offsetBytes 0, byteBudget 2048을 지정해 읽고, 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
       "faultCall": {
         "tool": "read_file",
         "pathIncludes": "Game.Build.cs"
@@ -199,7 +199,7 @@
       "id": "partial_projection",
       "failureKind": "partial_result",
       "simulation": "The first read returns a partial-projection shaped result (notice, bodyComplete:false). This simulates, but is not, a real compaction projection.",
-      "prompt": "project://Source/Game/Game.Build.cs 를 읽고 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
+      "prompt": "project://Source/Game/Game.Build.cs 를 read_file로 offsetBytes 0을 지정해 읽고 파일 끝의 마지막 주석에 적힌 표식을 그대로 보고하라.",
       "faultCall": {
         "tool": "read_file",
         "pathIncludes": "Game.Build.cs",

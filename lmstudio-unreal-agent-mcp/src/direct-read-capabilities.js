@@ -10,6 +10,7 @@ const { readStableFileWindow, readStableTextFile } = require("./direct-file-snap
 const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
+const { isSourceLikeExt } = require("./write-guards.js");
 
 const { lexicalDeclarationWindow, lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
@@ -27,6 +28,14 @@ function createReadCapabilities(context) {
     projectScopedSuggestionArgs,
     resolveToolPath,
   } = context;
+
+  // Locate-first reads: one list for the whole-read refusal and completed source ranges.
+  function locateAlternatives(args) {
+    return [
+      { tool: "search_files", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, query: "<symbol>", contextLines: 3 }) },
+      { tool: "read_symbol", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, symbol: "<symbol>", view: "declaration" }) },
+    ];
+  }
 
   // The one advisory search for a missing path. For engine:// it searches the
   // owning module (or the nearest existing readable ancestor) inside the
@@ -154,16 +163,19 @@ function createReadCapabilities(context) {
     }
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const explicitWindow = args.offsetBytes !== undefined || args.maxBytes !== undefined;
-    if (!explicitWindow && (resolution.resolvedRootType === "installed_engine"
-      || initialStat.size > limits.wholeReadMaxBytes)) {
+    // Source is located first at any size; only small non-source files read whole.
+    const wholeReadRefusal = explicitWindow ? null
+      : resolution.resolvedRootType === "installed_engine" ? "engine source requires a targeted read"
+        : isSourceLikeExt(path.extname(resolution.absolutePath)) ? "source files are located first, not read whole"
+          : initialStat.size > limits.wholeReadMaxBytes ? `files over ${limits.wholeReadMaxBytes} bytes require a targeted read` : null;
+    if (wholeReadRefusal) {
       return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
-        `${args.path} is ${initialStat.size} bytes; engine source and large files require a targeted read. `
+        `${args.path} is ${initialStat.size} bytes; ${wholeReadRefusal}. `
         + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
           retryAllowed: true, retryMode: "different_arguments",
           suggestion: { tool: "read_file_range", args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 20 }) },
           details: { size: initialStat.size, alternatives: [
-            { tool: "search_files", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, query: "<symbol>", contextLines: 3 }) },
-            { tool: "read_symbol", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, symbol: "<symbol>", view: "declaration" }) },
+            ...locateAlternatives(args),
             { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },
           ] },
         });
@@ -221,6 +233,7 @@ function createReadCapabilities(context) {
     const maximumEnd = Math.min(requestedEnd, start + 3999, lines.length);
     const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
     const numbered = args.lineNumbers !== false;
+    const sourceFile = isSourceLikeExt(path.extname(resolution.absolutePath));
     const makePayload = (end) => success({
       path: displayPath(resolution),
       ...pathMetadata(resolution),
@@ -245,6 +258,9 @@ function createReadCapabilities(context) {
       ...version,
       ...(end < requestedEnd ? { suggestion: { tool: "read_file_range",
         args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: end + 1, endLine: requestedEnd })) } } : {}),
+      // A completed source range does not owe the rest of the file: locate, don't sweep to EOF.
+      ...(end >= requestedEnd && end < lines.length && sourceFile
+        ? { afterRange: { owed: false, locateNext: locateAlternatives(args) } } : {}),
     });
     let low = start;
     let high = maximumEnd;

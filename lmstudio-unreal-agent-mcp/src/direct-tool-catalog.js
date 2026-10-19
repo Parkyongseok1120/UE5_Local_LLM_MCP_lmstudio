@@ -201,7 +201,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file",
-      description: "UTF-8; whole project ≤64 KiB. Engine/large files need ranges or explicit byte windows.",
+      description: "UTF-8 small non-source files. Source: locate first (search/read_symbol/range); explicit byte window for recovery.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),

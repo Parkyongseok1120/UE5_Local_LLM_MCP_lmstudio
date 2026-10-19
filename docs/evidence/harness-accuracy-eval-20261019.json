@@ -1,0 +1,1278 @@
+{
+ "schema": "harness-accuracy-eval/v1",
+ "date": "2026-10-19",
+ "plan": "docs/Harness_Behavior_Latency_Final_Plan_20261019.md §5 / W-A2",
+ "runner": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs",
+ "fixture": "lmstudio-context-compactor-plugin/scripts/ue-accuracy-fixture.cjs",
+ "model": "swift-1.5-qwen3.8-27b (qwen35, Q4_K_S, context 84224)",
+ "groups": {
+  "off": "designGuidanceMaxTokens 0",
+  "auto": "designGuidanceMode auto"
+ },
+ "note": "Each rep ran a different harness state, so reps are not repeated samples of one configuration. Temperature 0 with fixed seeds still varied between reps for unchanged off runs.",
+ "reps": [
+  {
+   "rep": 1,
+   "condition": "guidance core only (sticky round-0 selection)",
+   "summary": {
+    "off": [
+     {
+      "normalFalsePositives": 1,
+      "normalCount": 6,
+      "defectsDetected": 5,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 11,
+      "maxScore": 13,
+      "pass": false
+     }
+    ],
+    "auto": [
+     {
+      "normalFalsePositives": 1,
+      "normalCount": 6,
+      "defectsDetected": 5,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 11,
+      "maxScore": 13,
+      "pass": false
+     }
+    ]
+   },
+   "cases": [
+    {
+     "caseId": "P1-N",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 11,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 162407
+    },
+    {
+     "caseId": "P1-N",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 159670
+    },
+    {
+     "caseId": "P1-D",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 0,
+     "falsePositive": false,
+     "missedDefect": true,
+     "rounds": 5,
+     "toolCalls": 11,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 341618
+    },
+    {
+     "caseId": "P1-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 107674
+    },
+    {
+     "caseId": "P2-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 67130
+    },
+    {
+     "caseId": "P2-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 83976
+    },
+    {
+     "caseId": "P2-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 53126
+    },
+    {
+     "caseId": "P2-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 42055
+    },
+    {
+     "caseId": "P3-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 103875
+    },
+    {
+     "caseId": "P3-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 182566
+    },
+    {
+     "caseId": "P3-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 83490
+    },
+    {
+     "caseId": "P3-D",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 0,
+     "falsePositive": false,
+     "missedDefect": true,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 110053
+    },
+    {
+     "caseId": "P4-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 36357
+    },
+    {
+     "caseId": "P4-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 50282
+    },
+    {
+     "caseId": "P4-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 63241
+    },
+    {
+     "caseId": "P4-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 45633
+    },
+    {
+     "caseId": "P5-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 92940
+    },
+    {
+     "caseId": "P5-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 129725
+    },
+    {
+     "caseId": "P5-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 85967
+    },
+    {
+     "caseId": "P5-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 122655
+    },
+    {
+     "caseId": "P6-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 85055
+    },
+    {
+     "caseId": "P6-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 68448
+    },
+    {
+     "caseId": "P6-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 56612
+    },
+    {
+     "caseId": "P6-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 57004
+    },
+    {
+     "caseId": "P7",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 6,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 78836
+    },
+    {
+     "caseId": "P7",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 88087
+    }
+   ]
+  },
+  {
+   "rep": 2,
+   "condition": "+ network evidence signal and topic reselection; engine version unknown",
+   "summary": {
+    "off": [
+     {
+      "normalFalsePositives": 0,
+      "normalCount": 6,
+      "defectsDetected": 6,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 13,
+      "maxScore": 13,
+      "pass": true
+     }
+    ],
+    "auto": [
+     {
+      "normalFalsePositives": 1,
+      "normalCount": 6,
+      "defectsDetected": 5,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 11,
+      "maxScore": 13,
+      "pass": false
+     }
+    ]
+   },
+   "cases": [
+    {
+     "caseId": "P1-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 9,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 181619
+    },
+    {
+     "caseId": "P1-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 156709
+    },
+    {
+     "caseId": "P1-D",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 0,
+     "falsePositive": false,
+     "missedDefect": true,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 160759
+    },
+    {
+     "caseId": "P1-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 107420
+    },
+    {
+     "caseId": "P2-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 72929
+    },
+    {
+     "caseId": "P2-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 40913
+    },
+    {
+     "caseId": "P2-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 60575
+    },
+    {
+     "caseId": "P2-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 3,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 48626
+    },
+    {
+     "caseId": "P3-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 102211
+    },
+    {
+     "caseId": "P3-N",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 115029
+    },
+    {
+     "caseId": "P3-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 50152
+    },
+    {
+     "caseId": "P3-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 69295
+    },
+    {
+     "caseId": "P4-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 36102
+    },
+    {
+     "caseId": "P4-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 84162
+    },
+    {
+     "caseId": "P4-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 51917
+    },
+    {
+     "caseId": "P4-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 45477
+    },
+    {
+     "caseId": "P5-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 89189
+    },
+    {
+     "caseId": "P5-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 50978
+    },
+    {
+     "caseId": "P5-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 82328
+    },
+    {
+     "caseId": "P5-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 122362
+    },
+    {
+     "caseId": "P6-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 85130
+    },
+    {
+     "caseId": "P6-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 67601
+    },
+    {
+     "caseId": "P6-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 36967
+    },
+    {
+     "caseId": "P6-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 57099
+    },
+    {
+     "caseId": "P7",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 78929
+    },
+    {
+     "caseId": "P7",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 168122
+    }
+   ]
+  },
+  {
+   "rep": 3,
+   "condition": "+ earlier-turn engine lookup (5.8) in history",
+   "summary": {
+    "off": [
+     {
+      "normalFalsePositives": 2,
+      "normalCount": 6,
+      "defectsDetected": 5,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 10,
+      "maxScore": 13,
+      "pass": false
+     }
+    ],
+    "auto": [
+     {
+      "normalFalsePositives": 1,
+      "normalCount": 6,
+      "defectsDetected": 5,
+      "defectCount": 6,
+      "pair7P1Maintained": 0,
+      "pair7Count": 1,
+      "score": 11,
+      "maxScore": 13,
+      "pass": false
+     }
+    ]
+   },
+   "cases": [
+    {
+     "caseId": "P1-N",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 124749
+    },
+    {
+     "caseId": "P1-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 7,
+     "toolCalls": 13,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 229619
+    },
+    {
+     "caseId": "P1-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 95477
+    },
+    {
+     "caseId": "P1-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 185209
+    },
+    {
+     "caseId": "P2-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 127831
+    },
+    {
+     "caseId": "P2-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 81006
+    },
+    {
+     "caseId": "P2-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 66333
+    },
+    {
+     "caseId": "P2-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 68288
+    },
+    {
+     "caseId": "P3-N",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 10,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 237615
+    },
+    {
+     "caseId": "P3-N",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 0,
+     "falsePositive": true,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 100411
+    },
+    {
+     "caseId": "P3-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 8,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 82803
+    },
+    {
+     "caseId": "P3-D",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 0,
+     "falsePositive": false,
+     "missedDefect": true,
+     "rounds": 4,
+     "toolCalls": 7,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 59272
+    },
+    {
+     "caseId": "P4-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 53703
+    },
+    {
+     "caseId": "P4-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 37955
+    },
+    {
+     "caseId": "P4-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 58627
+    },
+    {
+     "caseId": "P4-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P1",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 4,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 59854
+    },
+    {
+     "caseId": "P5-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 64476
+    },
+    {
+     "caseId": "P5-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 81180
+    },
+    {
+     "caseId": "P5-D",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 0,
+     "falsePositive": false,
+     "missedDefect": true,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 89897
+    },
+    {
+     "caseId": "P5-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 3,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 56718
+    },
+    {
+     "caseId": "P6-N",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 85756
+    },
+    {
+     "caseId": "P6-N",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 43656
+    },
+    {
+     "caseId": "P6-D",
+     "group": "auto",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 5,
+     "toolCalls": 6,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification"
+     ],
+     "elapsedMs": 68224
+    },
+    {
+     "caseId": "P6-D",
+     "group": "off",
+     "label": "defect",
+     "severity": "P2",
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 4,
+     "toolCalls": 5,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 43766
+    },
+    {
+     "caseId": "P7",
+     "group": "off",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 6,
+     "toolCalls": 10,
+     "guidanceSelectedIds": [],
+     "elapsedMs": 81820
+    },
+    {
+     "caseId": "P7",
+     "group": "auto",
+     "label": "not_defect",
+     "severity": null,
+     "score": 1,
+     "falsePositive": false,
+     "missedDefect": false,
+     "rounds": 6,
+     "toolCalls": 10,
+     "guidanceSelectedIds": [
+      "core/proof",
+      "unreal/verification",
+      "unreal-networking/authority"
+     ],
+     "elapsedMs": 143420
+    }
+   ]
+  }
+ ],
+ "findings": [
+  "The original defect reproduced: a normal server-to-owning-client Client RPC (P1-N) was judged a defect in 2 of 3 off runs and 1 of 3 auto runs.",
+  "No rep met the §5 pass criteria for auto; off met them once (rep 2).",
+  "The version-checked engine-defaults section (with ue.net.client-rpc-callspace) was never admitted in the real loop: engine identity from an earlier turn is not applied to the current execution.",
+  "Guidance delivery did not show a reliable accuracy gain; recorded as a model limit per plan W-A3."
+ ]
+}

@@ -37,8 +37,9 @@ function createDirectRuntimeContext(options = {}) {
   const limits = {
     ...resolveMutationLimits(env),
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
-    // Larger engine:// files are read by symbol, search hit or line range, not whole.
-    wholeReadMaxBytes: clamp(env.DIRECT_WHOLE_READ_MAX_BYTES, 64 * 1024, 1024, 2 * 1024 * 1024),
+    // Implicit whole reads cover small non-source files only; source and engine
+    // files are read by symbol, search hit or line range.
+    wholeReadMaxBytes: clamp(env.DIRECT_WHOLE_READ_MAX_BYTES, 8 * 1024, 1024, 2 * 1024 * 1024),
     maxSourceBytes: clamp(env.DIRECT_MAX_SOURCE_FILE_BYTES, 8 * 1024 * 1024, 64 * 1024, 64 * 1024 * 1024),
     commandTimeoutMs: clamp(env.COMMAND_TIMEOUT_MS, 10 * 60 * 1000, 1000, 60 * 60 * 1000),
     maxResponseChars: clamp(env.DIRECT_MAX_RESPONSE_CHARS, DEFAULT_MAX_RESPONSE_CHARS, 16_000, 1_000_000),

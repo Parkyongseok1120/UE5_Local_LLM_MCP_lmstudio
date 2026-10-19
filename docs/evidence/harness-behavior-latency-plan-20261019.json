@@ -1,0 +1,314 @@
+{
+  "schemaVersion": "1.1.2",
+  "mode": "codegen",
+  "date": "2026-10-19",
+  "baselineHead": "12dddcc935d5635f5c3df1737f509c000462d3a2",
+  "scope": "Plan revision only: source observations and proposed existing-owner changes; no product implementation or new inference benchmark",
+  "plan": "docs/Harness_Targeted_Engine_Read_Plan_20261018.md",
+  "metrics": "docs/evidence/harness-prefill-analysis-20261019.json",
+  "validationMeaning": "Packet structure and reasoning-record consistency only; facts and whole task are not certified by the validator",
+  "sourceSnapshots": [
+    {
+      "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+      "sha256": "bf47164ada05c5b657f0b80305fcb7947d6878a68372295d1aca8edb0fd95870",
+      "scope": "Current read-only source snapshot, not proof of historical binary"
+    },
+    {
+      "path": "Source/Latency_MultiCombat/Public/LatencyMultiCombatPlayerState.h",
+      "sha256": "a955ce8a81c9c7262bea10b189d56e41e882e64539d9970a87312e24b3face68",
+      "scope": "Current read-only source snapshot, not proof of historical binary"
+    },
+    {
+      "path": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp",
+      "sha256": "66dbdb502723f72c834bf30eba8538cf6fb02540d5ac3d02762f230194aac4c3",
+      "scope": "Current read-only source snapshot, not proof of historical binary"
+    }
+  ],
+  "invariants": [
+    "Keep existing source/contract/guidance owners; no new orchestrator, ledger, persistent cache, summary model or permission writer.",
+    "Keep model settings including user-reported K=Q8 / V=Q5_1 unchanged during this analysis; effective historical backend types remain unverified.",
+    "Preserve role authority, latest user intent, complete tool exchange groups, exact input fit, source version/hash/receipt and first-consumer boundaries.",
+    "Keep runtime comparison data execution-scoped and bounded; release on cancellation/end and export hashes/counts only.",
+    "Do not turn structure-valid evidence, report-delivered status or upstream issue reports into verified source facts.",
+    "Adopt a speed change only with correct normal and faulty network cases, evidence coverage, no new unauthorized effects, and measured end-to-end benefit."
+  ],
+  "impactedSurfaces": [
+    {
+      "owner": "scripts/trace_lmstudio_run.py and tests/test_trace_lmstudio_run.py",
+      "condition": "Only missing timing/identity/join observations; preserve selected-version and call identity semantics"
+    },
+    {
+      "owner": "context-manager.ts composeModelHistory / createInputAssembler",
+      "condition": "Instrument final rendered prefix first; move mutable data only after replay proves relevance"
+    },
+    {
+      "owner": "round-loop.ts / prediction-loop.ts existing observations",
+      "condition": "Clarify TTFT versus backend timing without silently changing existing field semantics"
+    },
+    {
+      "owner": "round-input.ts / continuity-model-notes.js / optional guidance",
+      "condition": "Change only a demonstrated source of mutable prefix or unnecessary data; no new state owner"
+    },
+    {
+      "owner": "docs/model-guidance and existing engine contracts/generators",
+      "condition": "Only missing/conflicting guidance; measure tokens and actual delivery; avoid duplicate warnings"
+    },
+    {
+      "owner": "Existing eval and harness/input/continuity/recovery tests",
+      "condition": "Replay prefix/cache variants and ground-truth network normal/fault pairs"
+    },
+    {
+      "owner": "LM Studio runtime/load settings",
+      "condition": "Separate later controlled comparison if needed; no automatic reload or update in this task"
+    }
+  ],
+  "validationPlan": [
+    "Recompute all ten backend timing rows, twelve selected SDK rounds, inferred joins, five eviction warnings and source hashes from local originals.",
+    "Validate this packet, UTF-8 without BOM, changed document links, public path hygiene and git diff whitespace; do not rerun product suites for documentation only.",
+    "Future E7-1: retain unknown cache counters and ambiguous join status; test cancellation, overlapping tasks, versions, partial runs and endpoint-versus-generation counts.",
+    "Future E7-2: same-input, append-only, mutable-data, projection, template, and cache/checkpoint isolated replay; fix model/runtime/template/source/tool identities and warm/cold conditions.",
+    "Future quality: normal remote-owned Client RPC, local/no-owner cases, implementation direct calls, valid shared RepNotify versus actual callback/ownership faults; reject fabricated Health/Die and fact-certification claims.",
+    "Future implementation: focused tests on changed owners after fresh TS build, then relevant suites and generated-contract checks; preserve lifecycle and exact-fit regressions.",
+    "Future adoption: exploratory median cumulative backend prompt eval reduction 25% and task time reduction 10%, three alternating trials then five for selected candidate; accuracy/coverage/effect gates mandatory; unmeasured means unmeasured."
+  ],
+  "claims": [
+    {
+      "claim": "This execution is dominated by repeated large prompt evaluation; which client-prefix, runtime-cache or hardware condition causes the work still needs controlled proof.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "attachment:e4b9b7e2-502f-4dd0-a608-ff8cbad1b4b9:62-1038",
+          "observation": "Ten completed tasks: prompt 899485.19 ms, generation 310809.44 ms, timed total 1210294.62 ms; about 74.3% prompt eval."
+        },
+        {
+          "kind": "runtime",
+          "location": "1792345395452.conversation.json:selected:cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7",
+          "observation": "Twelve rounds, execution 1442634 ms, SDK first-token wait 1068226 ms, no summary-model calls; loaded build equals installed revision 125."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:146-159,279-282",
+          "observation": "Existing promptProcessingMs/modelPrefillMs is time to first token/fragment callback, not isolated server GPU prefill."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:44,121",
+          "symbol": "prepareRoundInput / assembleModelInput"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:136",
+          "symbol": "tokenSource.act"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:937-964",
+          "symbol": "direct_round_observation and executionCost"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:backendTasks",
+          "symbol": "server print_timing summaries"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:sdkSummary",
+          "observation": "Only 9851 ms difference between full execution and summed model-round time; this is not evidence that template API calls caused the long waits."
+        },
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:backendTasks",
+          "observation": "One 4805-token generation took 115943.73 ms, so output/reasoning is also a secondary cost."
+        }
+      ],
+      "unknowns": [
+        "Actual cached prefix count; shared request identity for authoritative SDK/backend joins",
+        "Runtime build and effective historical hardware/cache allocation",
+        "Identical baseline/candidate replay and speed effect of a proposed change"
+      ]
+    },
+    {
+      "claim": "Mutable assistant data before the latest user message, projection/template changes, and hybrid/cache capacity are distinct candidate causes; availability inject metadata was not active in the observed run.",
+      "claimType": "data_flow",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:238,262-270",
+          "observation": "Available refs and runtime data are recomposed before the latest user message; a change can precede the current-turn tool history."
+        },
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:inferredBackendRoundJoins",
+          "observation": "First five matched input-minus-processed counters are 8969 each; last five are zero."
+        },
+        {
+          "kind": "runtime",
+          "location": "attachment:e4b9b7e2-502f-4dd0-a608-ff8cbad1b4b9:518,601,680,839,946",
+          "observation": "Five oldest prompt-cache entry evictions immediately precede the last five task launches; this is correlation, not proof of a sole cause."
+        },
+        {
+          "kind": "official_docs",
+          "location": "https://github.com/ggml-org/llama.cpp/issues/20643",
+          "observation": "Primary upstream discussion describes hybrid mid-prompt-change/checkpoint constraints; installed runtime equivalence remains unverified."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:215",
+          "symbol": "composeModelHistory"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:238-265",
+          "symbol": "renderAvailableRefs and runtimeParts"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:267-272",
+          "symbol": "composed SDK chat before latest user"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:sdkRounds",
+          "observation": "Availability observe mode has zero injected metadata; assistant note content is absent; tool schema fingerprint is stable for twelve rounds."
+        },
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:backendSummary",
+          "observation": "No explicit forcing-full-reprocessing reason in attachment; slot heuristics are not actual KV hit counters."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:257-261",
+          "observation": "Existing placement intentionally preserves earlier-turn prefix and assistant-data authority; moving it can regress prompt semantics."
+        }
+      ],
+      "unknowns": [
+        "Actual first changed token and template reasoning transformation",
+        "Checkpoint positions/restores and prompt-cache capacity",
+        "Effective K/V backend types versus user setting Q8 / Q5_1",
+        "Whether any data-position or runtime-setting change improves end-to-end quality and latency"
+      ]
+    },
+    {
+      "claim": "The final report universal premise that a normal server-side Client RPC call only runs locally is wrong, and callback-name mismatch alone does not establish a replication defect.",
+      "claimType": "framework_semantics",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "official_docs",
+          "location": "https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-procedure-calls-in-unreal-engine?application_version=5.7",
+          "observation": "Client RPC table: server call on remotely client-owned actor executes on owning client; standard RPC wrapper invocation is the documented path."
+        },
+        {
+          "kind": "framework_source",
+          "location": "Engine/Source/Runtime/Engine/Private/Actor.cpp:5412-5614",
+          "observation": "GetFunctionCallspace distinguishes valid owning remote connection, local owner and absent/shutdown connection instead of authority-always-local."
+        },
+        {
+          "kind": "official_docs",
+          "location": "https://dev.epicgames.com/documentation/en-us/unreal-engine/replicate-actor-properties-in-unreal-engine?application_version=5.7",
+          "observation": "ReplicatedUsing specifies a named callback, with property/callback names that differ in the examples."
+        },
+        {
+          "kind": "project_source",
+          "location": "Source/Latency_MultiCombat/Public/LatencyMultiCombatPlayerState.h:25;Private/LatencyMultiCombatPlayerState.cpp:41-44",
+          "observation": "DeathCount references OnRep_KillCount, whose current body has a comment only; naming concern is not proof of wrong runtime effect."
+        },
+        {
+          "kind": "runtime",
+          "location": "1792345395452.conversation.json:selected:cbc227f3-40dd-4da0-93e7-a4e25fbe8dd7:final_report",
+          "observation": "Delivered report still contains false universal RPC P1 and unnecessary low-level/multicast workaround despite a structure-valid packet."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "Engine/Source/Runtime/Engine/Private/Actor.cpp:5549-5611",
+          "observation": "Local/no-connection/shutdown cases differ; not all Client RPC calls necessarily reach a remote client."
+        },
+        {
+          "kind": "official_docs",
+          "location": "https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-procedure-calls-in-unreal-engine?application_version=5.7",
+          "observation": "Replication/ownership requirements and Unreliable delivery must still be considered."
+        },
+        {
+          "kind": "runtime",
+          "location": "1792345395452.conversation.json:execution_outcome",
+          "observation": "Report completion is true while objectiveSatisfied is null and taskCompleted false; delivery is not content correctness."
+        }
+      ],
+      "unknowns": [
+        "Actual project packet delivery or multiplayer behavior was not tested",
+        "Intended future RepNotify consumers and shared callback policy are not established",
+        "This is a report-premise finding, not a complete game-network audit"
+      ]
+    },
+    {
+      "claim": "Extend existing telemetry/evaluation, isolate prefix and backend causes, then choose a minimal owner-local change with joint quality and speed acceptance gates.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P3",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "User request: final logs, slow prompt-processing gauge, revise existing plan; latest network-quality assessment and K/V clarification",
+          "observation": "User requests analysis and plan revision; no runtime implementation or model-setting change in this phase."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/trace_lmstudio_run.py:33-36,241-264",
+          "observation": "Existing selected-version trace and event filtering can host narrowly added observations."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:45-115,292-365",
+          "observation": "Existing exact measurement cache and input assembly own relevant facts; a new cache/ledger is unnecessary."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "docs/evidence/harness-prefill-analysis-20261019.json:loadConfigurationEvidence",
+          "observation": "Q8/Q5_1 user setting and already enabled Flash Attention/GPU KV do not prove quantization or memory is the root cause."
+        },
+        {
+          "kind": "requirement",
+          "location": "docs/Harness_Targeted_Engine_Read_Plan_20261018.md:E7",
+          "observation": "Targets are prospective; smaller working input can cause more projection/prefix loss or missing evidence, and runtime changes need separate controlled trials."
+        }
+      ],
+      "unknowns": [
+        "Candidate speed benefit and ground-truth network accuracy",
+        "Which conditional product files actually need modification after replay",
+        "Live server refused follow-up read-only query; no new inference experiment was run"
+      ]
+    }
+  ]
+}

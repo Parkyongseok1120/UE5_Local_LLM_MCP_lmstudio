@@ -1,7 +1,7 @@
 import { Chat, type PredictionLoopHandlerController } from "@lmstudio/sdk";
 import { minimumReadResultTokens } from "./budget-broker";
 import { resolveGenerationBudget } from "./context-budget";
-import { buildCompactedHistory, composeModelHistory, ContextManager, createInputAssembler,
+import { buildCompactedHistory, composeModelHistory, ContextManager, createInputAssembler, type ShownDataBlocks,
   measureContext, prepareWorkingInput } from "./context-manager";
 import { updateSemanticContext } from "./semantic-handoff";
 import { workingContextModule } from "./context-ports";
@@ -16,6 +16,8 @@ import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-sele
 import type { ToolScope } from "./tool-scope";
 import { referenceGuidanceScope } from "./reference-context";
 
+/** Optional reference text admitted earlier in this execution, or a drop. */
+export type GuidanceRetention = { kept?: { ids: readonly string[]; instruction: string; selectionScope: string }; dropped?: boolean };
 type RoundInputOptions = {
   ctl: PredictionLoopHandlerController; config: DirectConfig;
   tokenSource: Awaited<ReturnType<PredictionLoopHandlerController["tokenSource"]>>;
@@ -32,9 +34,13 @@ type RoundInputOptions = {
   reportContinuation?: string;
   guidanceDocuments?: readonly GuidanceDocument[];
   guidanceIntent?: GuidanceIntent;
+  /** Execution-scoped; the caller discards it with the execution. */
+  guidanceRetention?: GuidanceRetention;
   guidanceScope?: ToolScope;
   referenceRecovery?: boolean;
   getRuntimeFacts?: () => string[];
+  /** Data blocks this execution already sent (owned by the prediction loop). */
+  shownDataBlocks?: ShownDataBlocks;
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -64,7 +70,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   const assembleModelInput = createInputAssembler({ tokenSource, config, roundTools,
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
-    getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache });
+    getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
+    shownDataBlocks: options.shownDataBlocks });
   const assembleRecoveryCandidate = async (sourceHistory: Chat, tools: RemoteToolLike[], instruction: string,
     candidateModelInputId: string) => {
     const desiredMaxTokens = Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
@@ -261,6 +268,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery)) {
     let candidates: GuidanceCandidate[] = [];
     let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
+    let selectionScope = "unscoped";
     // A malformed optional catalogue/selector omits guidance. Cancellation and
     // baseline measurement still belong to their existing execution owners.
     ctl.guardAbort();
@@ -268,24 +276,58 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       if (focused && options.guidanceScope) {
         const snapshot = evidenceManager.referenceSnapshot(workingHistory);
         const guidanceScope = referenceGuidanceScope(options.guidanceScope, snapshot);
+        selectionScope = JSON.stringify([guidanceScope.engine, guidanceScope.source, snapshot.applicability]);
         if (config.designGuidanceMode === "auto") {
           selection = selectGuidanceTopics(options.guidanceIntent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
           candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, guidanceScope, snapshot);
+          // A new topic from returned evidence may select once more, like a new scope.
+          selectionScope = JSON.stringify([selectionScope, selection.primary, selection.supplement || null]);
         } else candidates = focusedGuidanceCandidates(config.designGuidanceMode, guidanceScope, snapshot);
       } else if (!focused) {
         const snapshot = evidenceManager.referenceSnapshot(workingHistory);
-        candidates = designGuidanceCandidates(options.guidanceScope
-          ? selectDesignGuidance(config.designGuidanceMode, referenceGuidanceScope(options.guidanceScope, snapshot),
-            undefined, snapshot.applicability)
+        const guidanceScope = options.guidanceScope ? referenceGuidanceScope(options.guidanceScope, snapshot) : undefined;
+        if (guidanceScope) selectionScope = JSON.stringify([guidanceScope.engine, guidanceScope.source, snapshot.applicability]);
+        candidates = designGuidanceCandidates(guidanceScope
+          ? selectDesignGuidance(config.designGuidanceMode, guidanceScope, undefined, snapshot.applicability)
           : options.guidanceDocuments || []);
       }
     } catch { ctl.guardAbort(); }
+    // A topic from the request, a returned observation or the configured mode
+    // backs the material; the bare core fallback stays generic.
+    const topicBacked = config.designGuidanceMode === "auto"
+      ? Boolean(selection && (selection.primary !== "core" || selection.supplement))
+      : config.designGuidanceMode !== "core";
+    // The admitted instruction joins the system message, so changing it
+    // between rounds discards the server's reusable prefix. Within one
+    // execution the first admitted instruction is re-admitted unchanged while
+    // it fits (only the per-round reference data, kept outside the system
+    // message, follows the current observations); once dropped it stays out.
+    // Newly returned engine/version evidence or a topic it adds (the selection
+    // scope) is the one input that may select again. Catalogue/generator output and runtime
+    // identity are assumed fixed for the execution.
+    const retention = options.guidanceRetention;
+    const rescoped = Boolean(retention?.kept && retention.kept.selectionScope !== selectionScope);
+    const kept = rescoped ? undefined : retention?.kept;
+    const keptCandidates = kept ? [...new Map([...candidates, {}].map(({ referenceData, dataIds }: Partial<GuidanceCandidate>) =>
+      [referenceData, { ids: kept.ids, instruction: kept.instruction, referenceData, dataIds }])).values()] : [];
     const guidance = await contextManager.addOptionalReferences(assembledInput,
-      candidates,
+      kept ? keptCandidates : retention?.dropped ? [] : candidates,
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
-        minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort() });
+        minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
+        admissionWater: kept || topicBacked ? "high" : "low" });
     assembledInput = guidance.assembled;
+    const telemetry: typeof guidance.telemetry & { stickyCause?: string } = { ...guidance.telemetry };
+    const included = telemetry.reason === "included";
+    if (retention?.dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
+    else if (retention && (kept || rescoped) && !included) {
+      Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: (rescoped ? "scope_changed:" : "") + telemetry.reason });
+      retention.kept = undefined; retention.dropped = true;
+    } else if (kept) telemetry.reason = "sticky_kept";
+    else if (retention && included && guidance.selectedInstruction !== undefined) {
+      if (rescoped) telemetry.stickyCause = "scope_changed";
+      retention.kept = { ids: telemetry.selectedIds, instruction: guidance.selectedInstruction, selectionScope };
+    }
     if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
       configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
@@ -294,7 +336,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
         selectionReasonCodes: [...selection.reasons, ...(candidates[0]?.omissionReasons || [])],
-        selectionObservationIds: selection.observationIds } : {}), ...guidance.telemetry });
+        selectionObservationIds: selection.observationIds } : {}), ...telemetry });
   } else if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
     configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
     effectiveDelivery: focused ? "focused" : "documents", outcome: "not_attempted",

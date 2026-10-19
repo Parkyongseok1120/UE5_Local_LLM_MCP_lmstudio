@@ -113,6 +113,46 @@ test("allowance and shared budget omit documents without shrinking evidence or t
   assert.equal(priority.telemetry.attempts, 0);
 });
 
+test("topic-backed admission may use space up to high water; generic material keeps low water", async () => {
+  const probe = fixture();
+  const water = probe.manager.broker.watermarks((await probe.assemble(probe.history)).measurement, 0, true, 2048);
+  assert.ok(water.effectiveHighWaterTokens - water.effectiveLowWaterTokens > 2000);
+  const between = water.effectiveLowWaterTokens + 500;
+  const at = (base, added, maxTokens) => fixture({ maxTokens,
+    charge: text => text.includes("[Optional design reference]") ? base + added : base });
+  const generic = await at(between, 600).add();
+  assert.deepEqual([generic.telemetry.reason, generic.telemetry.attempts, generic.telemetry.admissionWater],
+    ["existing_input_priority", 0, "low"]);
+  const f = at(between, 600);
+  const before = f.history.toString();
+  const backed = await f.add(undefined, { admissionWater: "high" });
+  assert.deepEqual([backed.telemetry.reason, backed.telemetry.addedTokens, backed.telemetry.admissionWater], ["included", 600, "high"]);
+  assert.match(backed.assembled.history.toString(), /\[Optional design reference\][\s\S]*CURRENT_OBJECTIVE/);
+  assert.equal(backed.assembled.measurement.outputReserve, f.config.maxOutputReserve);
+  assert.equal(f.history.toString(), before);
+  // The admitted reference sits in the leading system message, ahead of every
+  // history message, so later rounds that admit it again keep the same prefix.
+  const next = Chat.from([{ role: "system", content: "USER_SYSTEM" },
+    { role: "user", content: "CURRENT_OBJECTIVE\nActual compiler error and source evidence." },
+    { role: "assistant", content: "ROUND_ONE_ANSWER" }, { role: "user", content: "FOLLOW_UP" }]);
+  const later = await f.manager.addOptionalReferences(await f.assemble(next), candidates("multiplayer"),
+    text => f.assemble(next, { instructions: ["REQUIRED_SCOPE", text] }), { ...f.options, admissionWater: "high" });
+  assert.equal(later.telemetry.reason, "included");
+  const system = result => result.assembled.history.getMessagesArray()[0];
+  assert.ok(system(backed).isSystemPrompt());
+  assert.equal(system(later).getText(), system(backed).getText());
+  // Over high water, over the allowance, or a base already at high water: the measured base stays.
+  for (const [base, added, maxTokens, reason, attempts] of [
+    [water.effectiveHighWaterTokens - 100, 600, 8192, "budget_omitted", 1],
+    [between, 1500, 1000, "budget_omitted", 1],
+    [water.effectiveHighWaterTokens, 10, 8192, "existing_input_priority", 0],
+  ]) {
+    const omitted = await at(base, added, maxTokens).add(candidates("core"), { admissionWater: "high" });
+    assert.deepEqual([omitted.telemetry.reason, omitted.telemetry.attempts, omitted.telemetry.selectedIds], [reason, attempts, []]);
+    assert.equal(omitted.assembled.measurement.inputTokens, base);
+  }
+});
+
 test("optional reference failure or inexact measurement keeps the already measured input", async () => {
   const f = fixture({ charge: text => {
     if (text.includes("[Optional design reference]")) throw new Error("tokenizer unavailable");

@@ -15,7 +15,8 @@ import { resultSemantics, retainedEffectFacts } from "./tool-result-semantics.js
 export const REFERENCE_LIMITS = Object.freeze({ observations: 16, diagnosticGroups: 3, diagnostics: 12,
   metadata: 8, sections: 6, candidates: 4, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
 export type ReferenceSignal = "diagnostic_present" | "diagnostic_recurred" | "observed_source_changed"
-  | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown" | "api_contract_observed";
+  | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown" | "api_contract_observed"
+  | "network_contract_observed";
 type Delivery = "returned" | "transport_error" | "canceled" | "unknown";
 type OperationStatus = "accepted" | "pending" | "completed" | "failed" | "canceled" | "outcome_unknown" | "unknown";
 type Origin = { provider: string; tool: string; executionId: string; toolCallId: string };
@@ -306,6 +307,9 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
           sourceBody: read && body !== undefined, engineVersion, versionSource: "saved_project", packages });
       if (read && body && /\b(?:UPROPERTY|UFUNCTION|DECLARE_DYNAMIC_\w+|AddDynamic|BindUFunction|TObjectPtr|SerializeField|UnityEvent)\b/.test(body.slice(0, 65536)))
         items[items.length - 1].data.apiContractContext = "lexical_signal_only; necessity_and_correctness_unverified";
+      // RPC or replication specifiers in returned source make the network contract relevant to the question.
+      if (read && body && /\bUFUNCTION\s*\([^)]*\b(?:Server|Client|NetMulticast)\b|\bReplicated(?:Using)?\b|\bDOREPLIFETIME/.test(body.slice(0, 65536)))
+        items[items.length - 1].data.networkContractContext = "lexical_signal_only; necessity_and_correctness_unverified";
     }
   }
   return { items, runtime, session, invalidateFiles };
@@ -563,6 +567,7 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
         if (!data.sourceBodyInCurrentInput) signal("source_body_unavailable");
         if (["modified", "deleted", "conflict_observed"].includes(String(data.observationState))) signal("observed_source_changed");
         if (present && item.sourceBody && data.apiContractContext) autoSignal("api_contract_observed");
+        if (present && item.sourceBody && data.networkContractContext) autoSignal("network_contract_observed");
       }
       snapshot.items.push({ id: item.id, origin: item.origin, project: item.project, engine: item.engine, kind: item.kind, data });
     }

@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@3",
+  "contractRevision": "unreal_contracts@4",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",

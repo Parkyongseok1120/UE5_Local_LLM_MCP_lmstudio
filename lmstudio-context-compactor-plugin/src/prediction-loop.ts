@@ -11,7 +11,7 @@ import { createAttachmentContext } from "./attachment-tools";
 import { BudgetBroker, readBudgetFeedback } from "./budget-broker";
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
-import { prepareRoundInput } from "./round-input";
+import { prepareRoundInput, type GuidanceRetention } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, verificationScopeNotice } from "./delivery-controller";
@@ -19,7 +19,7 @@ import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress,
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
-import { selectGuidanceIntent } from "./guidance-topic-selection";
+import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote } from "./execution-contracts";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
@@ -108,8 +108,14 @@ export function createPredictionLoopHandler(
       && config.designGuidanceMaxTokens > 0 && (config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto");
     const guidanceMessages = focusedReferences && config.designGuidanceMode === "auto"
       ? normalizeHistory(originalHistory).map((message, index) => ({ ...message, index })) : null;
-    const guidanceIntent = guidanceMessages ? selectGuidanceIntent(objectiveContinuity.guidanceObjective(
-      guidanceMessages, continuityState.extractPriorContinuityState(guidanceMessages))) : undefined;
+    const guidanceObjectiveOf = (messages: NonNullable<typeof guidanceMessages>) =>
+      objectiveContinuity.guidanceObjective(messages, continuityState.extractPriorContinuityState(messages));
+    // The previous request is read through the same objective owner, from the
+    // history before the latest user message.
+    const latestUserIndex = guidanceMessages ? guidanceMessages.map(m => m.role).lastIndexOf("user") : -1;
+    const earlierMessages = guidanceMessages && latestUserIndex > 0 ? guidanceMessages.slice(0, latestUserIndex) : [];
+    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjectiveOf(guidanceMessages),
+      earlierMessages.some(m => m.role === "user") ? guidanceObjectiveOf(earlierMessages) : undefined) : undefined;
     const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
       || focusedReferences ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
@@ -232,6 +238,13 @@ export function createPredictionLoopHandler(
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
     const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "projection" | "prior_turn", string>();
+    // Data blocks sent in this execution, by anchor. Earlier blocks are resent
+    // unchanged so each model input extends the previous one; discarded with
+    // the execution.
+    const shownDataBlocks = new Map<string, readonly string[]>();
+    // Admitted reference text for this execution only; discarded with it, so
+    // the next user turn selects again.
+    const guidanceRetention: GuidanceRetention = {};
     // Resume view: what the restored input carries only in part, and whether
     // the previous turn stopped before it reported. Derived, never stored.
     const resumeProjection = partialProjectionFact(workingHistory.getMessagesArray());
@@ -370,9 +383,11 @@ export function createPredictionLoopHandler(
           reasoningRecovery: reasoningRecoveryRound,
           guidanceDocuments,
           guidanceIntent,
+          guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           getRuntimeFacts: () => [...runtimeFacts.values()],
+          shownDataBlocks,
           finalizationTrigger: execution.finalizationTrigger,
           reportContinuation,
           projectionApplied, executionId, modelInputId, roundIndex,
@@ -427,6 +442,9 @@ export function createPredictionLoopHandler(
             modelInputId, releasedCount: released.length });
           evidenceManager.captureExposure(modelInput, modelInputId, false);
         }
+        // This input is final: its new data block, if any, is now part of what was sent.
+        if (modelComposition && "dataBlock" in modelComposition && modelComposition.dataBlock)
+          shownDataBlocks.set(modelComposition.dataBlock.anchor, modelComposition.dataBlock.parts);
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
           {
 model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"), contextLength: finalMeasurement.contextLength,

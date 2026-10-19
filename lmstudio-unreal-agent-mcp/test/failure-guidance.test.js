@@ -13,7 +13,7 @@ const test = require("node:test");
 
 const { createDirectRuntime } = require("../src/direct-server.js");
 
-function fixture(t) {
+function fixture(t, env = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "failure-guidance-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, "workspace");
@@ -44,7 +44,7 @@ function fixture(t) {
     configPath: path.join(root, "agent-mcp.json"),
     stateRoot,
     env: { AGENT_STATE_ROOT: stateRoot, ALLOW_WRITE: "1", ALLOW_COMMANDS: "0", ALLOW_UNREAL_BUILD: "0",
-      UNREAL_ENGINE_ROOT: engineRoot, SHARED_UNREAL_CONFIG: path.join(root, "shared.json") },
+      UNREAL_ENGINE_ROOT: engineRoot, SHARED_UNREAL_CONFIG: path.join(root, "shared.json"), ...env },
     getActiveProject: () => projectFile,
   });
   return { runtime, engineRoot, projectRoot, buildCs };
@@ -105,14 +105,14 @@ test("byteBudget is reported as a whole-response limit when it stops the body", 
   // The body alone exceeds the budget on every OS, independent of the
   // serialized temporary path length in the response metadata.
   assert.ok(Buffer.byteLength(buildCs) > 2048);
-  const payload = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 });
+  const payload = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 2048 });
   assert.equal(payload.ok, true);
   assert.ok(payload.nextOffsetBytes < Buffer.byteLength(buildCs));
   assert.equal(payload.hasMore, true);
   assert.equal(payload.omissionReason, "byte_budget");
   assert.equal(payload.effectiveByteBudget, 2048);
   assert.equal(payload.budgetScope, "whole_response");
-  const full = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", byteBudget: 16384 });
+  const full = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 16384 });
   assert.equal(full.hasMore, false);
   assert.equal(full.omissionReason, undefined);
 });
@@ -230,7 +230,7 @@ test("missing read and search targets name the caller's URI and an existing plac
 
 test("a read cut before the file or requested range ends names the exact continuation", async (t) => {
   const { runtime, buildCs } = fixture(t);
-  const first = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 });
+  const first = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 2048 });
   assert.equal(first.hasMore, true);
   assert.deepEqual(first.suggestion, { tool: "read_file",
     args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048, offsetBytes: first.nextOffsetBytes } });
@@ -282,9 +282,27 @@ test("a cut range still names nextStartLine inside the requested range only", as
   assert.equal(cut.suggestion.args.endLine, cut.requestedEndLine);
 });
 
+test("a completed source range points at locating the next symbol, not at sweeping to EOF", async (t) => {
+  const { runtime } = fixture(t);
+  const head = await call(runtime, "read_file_range", { path: "project://Source/Game/Lines.h", startLine: 1, endLine: 10 });
+  assert.equal(head.rangeComplete, true);
+  assert.equal(head.moreLinesInFile, true);
+  assert.equal(head.nextStartLine, undefined);
+  assert.equal(head.afterRange.owed, false);
+  assert.deepEqual(head.afterRange.locateNext.map((item) => item.tool), ["search_files", "read_symbol"]);
+  assert.equal(head.afterRange.locateNext[0].argsTemplate.path, "project://Source/Game/Lines.h");
+  const tail = await call(runtime, "read_file_range", { path: "project://Source/Game/Lines.h", startLine: 21, endLine: 30 });
+  assert.equal(tail.moreLinesInFile, false);
+  assert.equal(tail.afterRange, undefined, "a range ending at EOF has nothing after it");
+  const cut = await call(runtime, "read_file_range", { path: "project://Source/Game/Game.Build.cs", startLine: 1, endLine: 400, byteBudget: 2048 });
+  assert.equal(cut.afterRange, undefined, "a cut range keeps its own continuation contract");
+  const config = await call(runtime, "read_file_range", { path: "project://Game.uproject", startLine: 1, endLine: 1 });
+  assert.equal(config.afterRange, undefined, "non-source files are unchanged");
+});
+
 // Claude Code's Read refuses a whole oversized file and points at a portion or a
 // search; an engine source file is read by symbol, search hit or line range.
-test("whole read of a large engine file is refused with targeted alternatives; small files still read whole", async (t) => {
+test("whole read of a large engine file is refused with targeted alternatives; explicit windows still read", async (t) => {
   const { runtime, engineRoot } = fixture(t);
   const header = path.join(engineRoot, "Engine", "Source", "Runtime", "Engine", "Private", "GameFramework", "Big.h");
   fs.writeFileSync(header, Array.from({ length: 900 }, (_, i) => `\tint32 Field${i} = ${i}; // ${"x".repeat(20)}`).join("\n"), "utf8");
@@ -301,6 +319,48 @@ test("whole read of a large engine file is refused with targeted alternatives; s
     path: "engine://Engine/Source/Runtime/Engine/Private/GameFramework/Big.h", startLine: 400, endLine: 402 });
   assert.equal(paged.ok, true);
   assert.match(paged.content, /Field399/);
+});
+
+// Source is located first at any size; only a small non-source file reads whole,
+// and an explicit byte window remains the recovery path for both.
+test("implicit whole reads refuse project source at any size and allow small non-source files only", async (t) => {
+  const { runtime, projectRoot } = fixture(t);
+  const write = (relative, bytes) => {
+    fs.mkdirSync(path.dirname(path.join(projectRoot, relative)), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, relative), "x".repeat(bytes), "utf8");
+    return `project://${relative}`;
+  };
+  for (const source of ["project://Source/Game/Lines.h", "project://Source/Game/Game.Build.cs",
+    write("Source/Game/Tiny.cpp", 16), write("Source/Game/Upper.CPP", 16), write("Source/Game/Mixed.Hpp", 16)]) {
+    const refused = await call(runtime, "read_file", { path: source });
+    assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE", source);
+    assert.match(refused.message, /source files are located first/u);
+    assert.deepEqual(refused.alternatives.map((item) => item.tool), ["search_files", "read_symbol", "read_file_range"]);
+    assert.equal(refused.suggestion.tool, "read_file_range");
+    const window = await call(runtime, "read_file", { path: source, offsetBytes: 0, maxBytes: 1024 });
+    assert.equal(window.ok, true, source);
+  }
+  for (const small of ["project://Game.uproject", write("Config/DefaultGame.ini", 8 * 1024), write("Notes/README", 8 * 1024)]) {
+    const read = await call(runtime, "read_file", { path: small });
+    assert.equal(read.ok, true, small);
+    assert.equal(read.hasMore, false);
+  }
+  for (const large of [write("Config/DefaultEngine.ini", 8 * 1024 + 1), write("Notes/LICENSE", 8 * 1024 + 1)]) {
+    const refused = await call(runtime, "read_file", { path: large });
+    assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE", large);
+    assert.match(refused.message, /files over 8192 bytes require a targeted read/u);
+    const window = await call(runtime, "read_file", { path: large, maxBytes: 4096 });
+    assert.equal(window.ok, true);
+    assert.equal(window.hasMore, true);
+  }
+});
+
+test("the implicit whole-read limit stays configurable but never admits source", async (t) => {
+  const { runtime, projectRoot } = fixture(t, { DIRECT_WHOLE_READ_MAX_BYTES: String(16 * 1024) });
+  fs.mkdirSync(path.join(projectRoot, "Config"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "Config", "DefaultEngine.ini"), "x".repeat(12 * 1024), "utf8");
+  assert.equal((await call(runtime, "read_file", { path: "project://Config/DefaultEngine.ini" })).ok, true);
+  assert.equal((await call(runtime, "read_file", { path: "project://Source/Game/Lines.h" })).errorCode, "WHOLE_READ_TOO_LARGE");
 });
 
 test("edit failures suggest the lines around the intended region, not the file prefix", async (t) => {
@@ -404,6 +464,7 @@ test("oversized project whole reads point to a narrow range while explicit byte 
   fs.writeFileSync(path.join(projectRoot, "Source/Game/Large.cpp"), "int Value;\n".repeat(8000));
   const refused = await call(runtime, "read_file", { path: file });
   assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE");
+  assert.match(refused.message, /source files are located first/u);
   assert.equal(refused.suggestion.tool, "read_file_range");
   const window = await call(runtime, "read_file", { path: file, offsetBytes: 0, maxBytes: 100 });
   assert.equal(window.ok, true);

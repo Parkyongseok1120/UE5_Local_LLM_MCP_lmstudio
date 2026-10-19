@@ -79,7 +79,7 @@ test("wrong engine path: following the suggestion passes; repeating and claiming
 
 test("small byteBudget: continuing at nextOffsetBytes reaches the end marker", async () => {
   const good = await runScenario(scenario("small_byte_budget"), scenarios.fixture, scriptedModel([
-    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 } }),
+    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 2048 } }),
     previous => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 16384,
       offsetBytes: previous.nextOffsetBytes } }),
     previous => ({ text: previous.content.includes("RECOVERY_MARKER_BUILD_END") ? "표식: RECOVERY_MARKER_BUILD_END" : "?" }),
@@ -87,7 +87,7 @@ test("small byteBudget: continuing at nextOffsetBytes reaches the end marker", a
   assert.equal(good.calls[0].result.omissionReason, "byte_budget");
   assert.equal(scoreRun(scenario("small_byte_budget"), good).status, "pass");
   const bad = await runScenario(scenario("small_byte_budget"), scenarios.fixture, scriptedModel([
-    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048 } }),
+    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 2048 } }),
     () => ({ text: "파일에 표식이 없습니다." }),
   ]));
   assert.equal(scoreRun(scenario("small_byte_budget"), bad).status, "fail");
@@ -168,7 +168,7 @@ test("absolute path outside the roots: the engine:// suggestion is followed", as
 
 test("simulated partial projection: reading on from the notice passes, claiming the whole file fails", async () => {
   const good = await runScenario(scenario("partial_projection"), scenarios.fixture, scriptedModel([
-    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs" } }),
+    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0 } }),
     previous => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: previous.nextOffsetBytes } }),
     () => ({ text: "표식: RECOVERY_MARKER_BUILD_END" }),
   ]));
@@ -176,7 +176,7 @@ test("simulated partial projection: reading on from the notice passes, claiming 
   assert.equal(good.calls[0].result.bodyComplete, false);
   assert.equal(scoreRun(scenario("partial_projection"), good).status, "pass");
   const bad = await runScenario(scenario("partial_projection"), scenarios.fixture, scriptedModel([
-    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs" } }),
+    () => ({ tool: "read_file", args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0 } }),
     () => ({ text: "전체를 읽었지만 표식은 찾지 못했다." }),
   ]));
   assert.equal(scoreRun(scenario("partial_projection"), bad).status, "fail");

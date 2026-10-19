@@ -500,3 +500,14 @@ test("Unity symbol source retains real returned file coverage",()=>{
  const f=fixture(unity); f.ingest("unity_symbols",read("Assets/A.cs","class A {}"),{action:"source",indexVersion:"i1",symbolId:"A"});
  assert.ok(f.snapshot().items.some(i=>i.kind==="file" && i.data.hash==="a".repeat(64)));
 });
+
+test('RPC or replication specifiers in returned source are a network signal only while the body is available',()=>{
+  // The signal is lexical and engine-neutral; this fixture's file reader uses the Unity read shape.
+  const f=fixture(unity);
+  f.ingest('read_file',read('Source/Game/Pawn.h','UFUNCTION(Client, Unreliable)\nvoid ClientConfirmHit(float Damage);'));
+  assert.ok(f.snapshot().autoSignals.some(s=>s.signal==='network_contract_observed'));
+  assert.equal(f.snapshot([]).autoSignals.some(s=>s.signal==='network_contract_observed'),false);
+  const plain=fixture(unity); plain.ingest('read_file',read('Source/Game/Util.h','UFUNCTION(BlueprintCallable)\nvoid Reset();'));
+  assert.ok(plain.snapshot().autoSignals.some(s=>s.signal==='api_contract_observed'));
+  assert.equal(plain.snapshot().autoSignals.some(s=>s.signal==='network_contract_observed'),false, 'a non-network UFUNCTION is not a network signal');
+});

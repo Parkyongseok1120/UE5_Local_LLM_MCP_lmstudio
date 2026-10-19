@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 3,
+  "revision": 4,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.8"
@@ -607,6 +607,47 @@
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
           "symbol": "ELifetimeCondition::COND_SkipOwner",
           "line": 21
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ]
+    },
+    {
+      "id": "ue.net.client-rpc-callspace",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "AActor"
+        ]
+      },
+      "statement": "A Client RPC called on the server through its generated function goes through AActor::GetFunctionCallspace. If the actor replicates and has a remote owning connection (for example a pawn possessed by a remote PlayerController), the call is sent to and runs on that owning client. With no owning connection and no owning player (for example a server-spawned actor without a player Owner) it runs locally on the server; with a local player owner (listen-server host) it runs locally; a non-replicating actor (RemoteRole None) absorbs it.",
+      "preconditions": [
+        "Code calls a UFUNCTION(Client) RPC on the server through its generated function, not the _Implementation body."
+      ],
+      "exceptions": [
+        "Whether a sent call arrives also depends on relevancy and reliability; an Unreliable RPC can be dropped."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+          "symbol": "AActor::GetFunctionCallspace",
+          "line": 5606
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+          "symbol": "AActor::GetFunctionCallspace",
+          "line": 5627
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
+          "symbol": "AActor::GetFunctionCallspace",
+          "line": 5664
         }
       ],
       "guidanceRefs": [
