@@ -38,6 +38,8 @@ const header = (name, base, baseInclude, body, extraIncludes = [], beforeClass =
   "\tGENERATED_BODY()",
   "",
   "public:",
+  ...(body.some(line => /UPROPERTY\(Replicated/u.test(line))
+    ? ["\tvirtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;"] : []),
   ...body,
   "};",
 ];
@@ -46,6 +48,33 @@ const header = (name, base, baseInclude, body, extraIncludes = [], beforeClass =
 const hitFeedbackHeader = header("UHitFeedbackComponent", "UActorComponent", "Components/ActorComponent.h", [
   "\tvoid ShowHitMarker(float Damage);",
 ]);
+
+// Shared presentation path. These are source excerpts, not a buildable game;
+// external map/input/widget setup is specified in CaseContext.md.
+const hitSetup = (folder, gameMode, pawn) => [
+  fixtureFile(`${folder}/HitFeedbackComponent.cpp`, [
+    '#include "HitFeedbackComponent.h"', '#include "Engine/Engine.h"',
+    '#include "GameFramework/PlayerController.h"',
+    'void UHitFeedbackComponent::ShowHitMarker(float Damage)', '{',
+    '\tconst APlayerController* PC = Cast<APlayerController>(GetOwner());',
+    '\tif (PC && PC->IsLocalController() && GEngine)',
+    '\t\tGEngine->AddOnScreenDebugMessage(-1, 1.f, FColor::Green, FString::Printf(TEXT("Hit: %.0f"), Damage));', '}',
+  ]),
+  fixtureFile(`${folder}/HitPlayerController.h`, header('AHitPlayerController', 'APlayerController', 'GameFramework/PlayerController.h', [
+    '\tAHitPlayerController();',
+  ])),
+  fixtureFile(`${folder}/HitPlayerController.cpp`, [
+    '#include "HitPlayerController.h"', '#include "HitFeedbackComponent.h"',
+    'AHitPlayerController::AHitPlayerController()', '{',
+    '\tCreateDefaultSubobject<UHitFeedbackComponent>(TEXT("HitFeedback"));', '}',
+  ]),
+  fixtureFile(`${folder}/${gameMode}.h`, header(`A${gameMode}`, 'AGameModeBase', 'GameFramework/GameModeBase.h', [
+    `\tA${gameMode}();`,
+    ...(pawn ? ['\tvoid ConfirmHit(AController* Shooter, float Damage);'] : [
+      '\tvirtual void BeginPlay() override;', '\tTSubclassOf<class ATurretActor> TurretClass;', '\tFTransform TurretTransform;',
+    ]),
+  ])),
+];
 
 const files = [
   // Pair 1 N: Client RPC on a pawn possessed by the shooting remote player.
@@ -81,6 +110,8 @@ const files = [
     "#include \"HitGameMode.h\"",
     "#include \"HitPawn.h\"",
     "#include \"GameFramework/PlayerController.h\"",
+    '#include "HitPlayerController.h"',
+    'AHitGameMode::AHitGameMode() { PlayerControllerClass = AHitPlayerController::StaticClass(); DefaultPawnClass = AHitPawn::StaticClass(); }',
     "",
     "// Called by the server-side projectile when it damages another player.",
     "void AHitGameMode::ConfirmHit(AController* Shooter, float Damage)",
@@ -95,6 +126,7 @@ const files = [
     "}",
   ]),
   fixtureFile("Source/Case07/HitFeedbackComponent.h", hitFeedbackHeader),
+  ...hitSetup('Source/Case07', 'HitGameMode', true),
 
   // Pair 1 D: same Client RPC on a server-spawned turret with no owner.
   fixtureFile("Source/Case02/TurretActor.h", header("ATurretActor", "AActor", "GameFramework/Actor.h", [
@@ -142,6 +174,8 @@ const files = [
   fixtureFile("Source/Case02/TurretGameMode.cpp", [
     "#include \"TurretGameMode.h\"",
     "#include \"TurretActor.h\"",
+    '#include "HitPlayerController.h"',
+    'ATurretGameMode::ATurretGameMode() { PlayerControllerClass = AHitPlayerController::StaticClass(); TurretClass = ATurretActor::StaticClass(); }',
     "",
     "void ATurretGameMode::BeginPlay()",
     "{",
@@ -152,10 +186,13 @@ const files = [
     "}",
   ]),
   fixtureFile("Source/Case02/HitFeedbackComponent.h", hitFeedbackHeader),
+  ...hitSetup('Source/Case02', 'TurretGameMode', false),
 
   // Pair 2 N: server calls the generated Client RPC wrapper.
   fixtureFile("Source/Case11/ReloadPawn.h", header("AReloadPawn", "APawn", "GameFramework/Pawn.h", [
     "\tAReloadPawn();",
+    '\tvoid PlayReloadMontage() { ++ReloadCueCount; } // Local presentation probe observed by the test UI.',
+    '\tint32 ReloadCueCount = 0;',
     "",
     "\tUFUNCTION(Server, Reliable)",
     "\tvoid ServerReload();",
@@ -199,6 +236,8 @@ const files = [
   // Pair 2 D: server calls ClientX_Implementation directly.
   fixtureFile("Source/Case05/ReloadPawn.h", header("AReloadPawn", "APawn", "GameFramework/Pawn.h", [
     "\tAReloadPawn();",
+    '\tvoid PlayReloadMontage() { ++ReloadCueCount; } // Local presentation probe observed by the test UI.',
+    '\tint32 ReloadCueCount = 0;',
     "",
     "\tUFUNCTION(Server, Reliable)",
     "\tvoid ServerReload();",
@@ -256,6 +295,7 @@ const files = [
   fixtureFile("Source/Case03/LeverPawn.cpp", [
     "#include \"LeverPawn.h\"",
     "#include \"Components/InputComponent.h\"",
+    '#include "EngineUtils.h"',
     "",
     "ALeverPawn::ALeverPawn()",
     "{",
@@ -270,6 +310,8 @@ const files = [
     "",
     "void ALeverPawn::OnInteractPressed()",
     "{",
+    '\tFocusedLever = nullptr;',
+    '\tfor (TActorIterator<ALeverActor> It(GetWorld()); It; ++It) { FocusedLever = *It; break; }',
     "\tif (FocusedLever)",
     "\t{",
     "\t\tServerInteract(FocusedLever);",
@@ -296,6 +338,13 @@ const files = [
   ])),
 
   // Pair 3 D: client calls a Server RPC on a level-placed actor it does not own.
+  fixtureFile('Source/Case03/LeverActor.cpp', [
+    '#include "LeverActor.h"', '#include "Net/UnrealNetwork.h"',
+    'ALeverActor::ALeverActor() { bReplicates = true; }',
+    'void ALeverActor::Toggle() { bOpen = !bOpen; }',
+    'void ALeverActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const',
+    '{', '\tSuper::GetLifetimeReplicatedProps(OutLifetimeProps);', '\tDOREPLIFETIME(ALeverActor, bOpen);', '}',
+  ]),
   fixtureFile("Source/Case09/LeverPawn.h", header("ALeverPawn", "APawn", "GameFramework/Pawn.h", [
     "\tALeverPawn();",
     "",
@@ -309,6 +358,7 @@ const files = [
   fixtureFile("Source/Case09/LeverPawn.cpp", [
     "#include \"LeverPawn.h\"",
     "#include \"Components/InputComponent.h\"",
+    '#include "EngineUtils.h"',
     "",
     "ALeverPawn::ALeverPawn()",
     "{",
@@ -323,6 +373,8 @@ const files = [
     "",
     "void ALeverPawn::OnInteractPressed()",
     "{",
+    '\tFocusedLever = nullptr;',
+    '\tfor (TActorIterator<ALeverActor> It(GetWorld()); It; ++It) { FocusedLever = *It; break; }',
     "\tif (FocusedLever)",
     "\t{",
     "\t\tFocusedLever->ServerToggle();",
@@ -726,6 +778,26 @@ const files = [
   }, null, 2).split("\n"), "evidence"),
 ];
 
+const SETUP = {
+  Case07: 'The map uses AHitGameMode. Each remote player possesses its spawned AHitPawn. The server projectile calls ConfirmHit with its shooter controller. On-screen debug messages are enabled.',
+  Case02: 'The map uses ATurretGameMode. FireAt is invoked on the server after a target is acquired. The hit marker is intended for remote player screens. On-screen debug messages are enabled.',
+  Case11: 'Each remote player possesses AReloadPawn; Reload input invokes ServerReload on that pawn. The local UI observes ReloadCueCount. Assess delivery routing assuming the unreliable packet arrives.',
+  Case05: 'Each remote player possesses AReloadPawn; Reload input invokes ServerReload on that pawn. The local UI observes ReloadCueCount. Assess delivery routing assuming the unreliable packet arrives.',
+  Case03: 'The map contains exactly one replicated ALeverActor, with Owner unset on server and clients. Each remote player possesses ALeverPawn. Interact input is mapped and pressed after the lever replicates. Assess RPC routing, not range/anti-cheat policy.',
+  Case09: 'The map contains exactly one replicated ALeverActor, with Owner unset on server and clients. Each remote player possesses ALeverPawn. Interact input is mapped and pressed after the lever replicates. Assess RPC routing, not range/anti-cheat policy.',
+  Case12: 'The UI exists on the owning remote client and its widget controls are bound. Replicated values change on the server after the widget is ready. Widget tick is enabled.',
+  Case01: 'The UI exists on the owning remote client and its widget controls are bound. Replicated values change on the server after the widget is ready. BindTo is called once with the replicated character.',
+  Case06: 'The server game mode receives OnPlayerKilled once per kill. Each controller possesses its player character and uses AScorePlayerState. Remote UI reads GetKills. Begin with Kills=0 on both sides.',
+  Case13: 'The server game mode receives OnPlayerKilled once per kill. Each controller possesses its player character and uses AScorePlayerState. Remote UI reads GetKills. Begin with Kills=0 on both sides.',
+  Case10: 'Projectile OnHit is bound to collision and executes on the server. TakeDamage receives positive damage. The project excerpt shows all target damage/death handling; no Blueprint damage handlers are added.',
+  Case04: 'Projectile OnHit is bound to collision and executes on the server. TakeDamage receives positive damage. The project excerpt shows all target damage/death handling; no Blueprint damage handlers are added.',
+  Case08: 'The map uses ARelayGameMode and ARelayPlayerController. SetBeacon assigns the replicated Beacon member on the server. OnActivatePressed is bound to local input and pressed after that reference replicates.',
+};
+for (const [folder, setup] of Object.entries(SETUP)) files.push(fixtureFile(`Source/${folder}/CaseContext.md`, [
+  'Source-level scenario, not a standalone build target. Engine-generated declarations and unrelated presentation/assets are omitted.',
+  'External integration preconditions for this scenario:', setup,
+], 'scenario'));
+
 const FILES = new Map(files.map(file => [file.path, file]));
 
 function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER) {
@@ -750,47 +822,44 @@ function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER)
     startLine: start,
     endLine: end,
     totalLines: file.lines.length,
-    truncated: end < requestedEnd || end < file.lines.length,
-    nextStartLine: end < file.lines.length ? end + 1 : null,
+    // A requested range is complete even when the file contains later lines.
+    truncated: end < Math.min(file.lines.length, requestedEnd),
+    ...(end < Math.min(file.lines.length, requestedEnd) ? { nextStartLine: end + 1 } : {}),
     content: file.lines.slice(start - 1, end).join("\n"),
   };
 }
 
-// Answer-key evidence. Engine anchors were read from the installed engine on
-// 2026-10-19; official pages were checked at application_version=5.7.
-const ENGINE_BUILD = Object.freeze({ version: "5.7.4", changelist: 51494982 });
+// Evidence read from installed UE 5.8.2 on 2026-10-19; the runner verifies hashes.
+const ENGINE_BUILD = Object.freeze({ version: "5.8.2", changelist: 56702186 });
 const SOURCES = Object.freeze({
-  rpcTable: Object.freeze({ kind: "official_doc", version: "5.7",
-    title: "Remote Procedure Calls in Unreal Engine",
-    url: "https://dev.epicgames.com/documentation/en-us/unreal-engine/remote-procedure-calls-in-unreal-engine?application_version=5.7",
-    statement: "Called from the server: Client RPC on a client-owned actor runs on the owning client; on a server-owned or unowned actor it runs on the server. Called from a client: Server RPC runs on the server only for an actor owned by the invoking client; otherwise it is dropped. Call the standard (wrapper) version of the RPC function." }),
-  propertyReplication: Object.freeze({ kind: "official_doc", version: "5.7",
-    title: "Replicate Actor Properties in Unreal Engine",
-    url: "https://dev.epicgames.com/documentation/en-us/unreal-engine/replicate-actor-properties-in-unreal-engine?application_version=5.7",
-    statement: "A ReplicatedUsing property calls its OnRep function on the client when the replicated value arrives; the flow is server to client." }),
-  callspace: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD,
-    path: "Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::GetFunctionCallspace", lines: [5412, 5614],
-    sha256: "bf47164ada05c5b657f0b80305fcb7947d6878a68372295d1aca8edb0fd95870",
-    statement: "Server calling a non-Client RPC stays local (5527-5531). An authority actor with no net connection and no owning player runs a Client RPC locally (5549-5574; 'Role authority object calling a client RPC locally (ie AI owned objects)', 5572)." }),
-  noOwningConnection: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD,
-    path: "Engine/Source/Runtime/Engine/Private/NetDriver.cpp", symbol: "UNetDriver::ProcessRemoteFunction", lines: [8065, 8065],
-    sha256: "4532bda979768887bb9d2f7c3ad85383286b07ae5ad16c7a3dd9d8536c006dad",
-    statement: "An actor without an owning connection logs 'No owning connection for actor' and the function is not processed." }),
-  pointDamage: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD,
-    path: "Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::InternalTakePointDamage", lines: [3484, 3487],
-    sha256: "bf47164ada05c5b657f0b80305fcb7947d6878a68372295d1aca8edb0fd95870",
-    statement: "Returns Damage unchanged. AActor::TakeDamage (3390) keeps no health and destroys nothing." }),
-  rpcDeclarationGuidance: Object.freeze({ kind: "guidance", path: "docs/model-guidance/unreal.md", lines: [112, 112],
-    statement: "RPCs are declared as X in the header and defined as Owner::X_Implementation in the .cpp." }),
+  receiveOwnership: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
+    path: 'Engine/Source/Runtime/Engine/Private/DataChannel.cpp', symbol: 'UActorChannel::ProcessBunch', lines: [3389, 3397],
+    sha256: '4e1be22679a16d235396a836befa0ef46dcc410ab1af4848467f9cf7c90776dd',
+    statement: 'bNetOwner is established from the actor owning connection matching the incoming connection (including child connections).' }),
+  receiveAuthorization: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
+    path: 'Engine/Source/Runtime/Engine/Private/NetDriver.cpp', symbol: 'UNetDriver::ShouldCallRemoteFunction', lines: [8452, 8455],
+    sha256: '3e611778a8742277af0a14f27af8f63d5a3d54e2a08af6db4726b4520cc2a728',
+    statement: 'The base driver only allows server-side execution when RepFlags.bNetOwner is true and RPCs are not ignored.' }),
+  receiveDispatch: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
+    path: 'Engine/Source/Runtime/Engine/Private/DataReplication.cpp', symbol: 'FObjectReplicator::ReceivedRPC', lines: [1387, 1476],
+    sha256: '2ff12da150ce1aab587fe6eb94f58f3ba717293994074bf67f474862cea03b70',
+    statement: 'ReceivedRPC asks ShouldCallRemoteFunction before dispatching ProcessEvent; sending remotely alone does not prove execution.' }),
+  rpcTable: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD, path: "Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::GetFunctionCallspace", lines: [5467,5665], sha256: "53022fa18c2e33a389fdfa8cc49e63f2795eef648fb755157f78625965e6f329", statement: "RPC routing depends on flags, call direction and owning connection; the wrapper dispatches through callspace." }),
+  propertyReplication: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD, path: "Engine/Source/Runtime/Engine/Private/RepLayout.cpp", symbol: "FRepLayout::CallRepNotifies", lines: [4661,4705], sha256: "0efd440a938c7f1b8fa075a55344ad8fafb0a6309fc66530e36e2f7a7250a472", statement: "The receiving replication state selects the property RepNotify and invokes it through ProcessEvent." }),
+  callspace: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD, path: "Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::GetFunctionCallspace", lines: [5467,5665], sha256: "53022fa18c2e33a389fdfa8cc49e63f2795eef648fb755157f78625965e6f329", statement: "An authority actor without an owning player can execute a Client RPC locally (5627); a valid owning connection routes remotely (5664)." }),
+  noOwningConnection: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD, path: "Engine/Source/Runtime/Engine/Private/NetDriver.cpp", symbol: "UNetDriver::ProcessRemoteFunction", lines: [8259,8278], sha256: "3e611778a8742277af0a14f27af8f63d5a3d54e2a08af6db4726b4520cc2a728", statement: "Remote dispatch without an owning connection logs a warning and does not process the function." }),
+  pointDamage: Object.freeze({ kind: "engine_source", engine: ENGINE_BUILD, path: "Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::TakeDamage", lines: [3417,3514], sha256: "53022fa18c2e33a389fdfa8cc49e63f2795eef648fb755157f78625965e6f329", statement: "InternalTakePointDamage returns damage unchanged; AActor::TakeDamage keeps no health and destroys nothing." }),
+  rpcDeclarationGuidance: Object.freeze({ kind: "guidance", path: "docs/model-guidance/unreal.md", statement: "RPC X is declared in the header; X_Implementation defines the body. Direct calls bypass the wrapper." }),
 });
 
 const ref = (file, anchor) => ({ kind: "fixture_source", path: file, anchor });
 
 const LABELS = Object.freeze(["defect", "not_defect", "needs_runtime_proof"]);
 const SEVERITIES = Object.freeze(["P0", "P1", "P2", "P3"]);
-const RUNTIME = "Runtime: dedicated server with remote clients.";
+const RUNTIME = "Runtime: dedicated server with remote clients, standard UNetDriver legacy replication (Iris disabled), no custom RPC authorization override.";
 const QUESTION = (folder, focus) => [
   `Audit ${folder} of the active Unreal project. ${RUNTIME}`,
+  `Read ${folder}/CaseContext.md for the scenario's explicit integration preconditions.`,
   `Question: ${focus}`,
   `Answer with one label (${LABELS.join(" | ")}), a severity (${SEVERITIES.join(" | ")}) or none, and the exact source lines that decide it.`,
 ].join(" ");
@@ -828,11 +897,13 @@ const CASES = Object.freeze([
   { id: "P3-N", pair: 3, variant: "N", folder: "Source/Case03", sourceDecidable: true,
     expected: { label: "not_defect", severity: null },
     rationale: "The owning client calls ServerInteract on its own possessed pawn; the server then toggles the lever.",
-    evidence: [SOURCES.rpcTable, ref("Source/Case03/LeverPawn.cpp", "\t\tServerInteract(FocusedLever);")] },
+    evidence: [SOURCES.rpcTable, SOURCES.receiveOwnership, SOURCES.receiveAuthorization, SOURCES.receiveDispatch,
+      ref("Source/Case03/LeverPawn.cpp", "\t\tServerInteract(FocusedLever);")] },
   { id: "P3-D", pair: 3, variant: "D", folder: "Source/Case09", sourceDecidable: true,
     expected: { label: "defect", severity: ["P1", "P2"] },
     rationale: "A remote client calls ServerToggle on a level-placed lever it does not own; the Server RPC is dropped (only a listen-server host would work).",
-    evidence: [SOURCES.rpcTable, SOURCES.noOwningConnection, ref("Source/Case09/LeverPawn.cpp", "\t\tFocusedLever->ServerToggle();")] },
+    evidence: [SOURCES.rpcTable, SOURCES.receiveOwnership, SOURCES.receiveAuthorization, SOURCES.receiveDispatch,
+      ref("Source/Case09/LeverPawn.cpp", "\t\tFocusedLever->ServerToggle();")] },
   { id: "P4-N", pair: 4, variant: "N", folder: "Source/Case12", sourceDecidable: true,
     expected: { label: "not_defect", severity: null },
     rationale: "DeathCount sharing the empty OnRep_KillCount is harmless: no consumer depends on the notify and the widget polls both values.",
@@ -882,7 +953,7 @@ const CASES = Object.freeze([
 const CASE_BY_ID = new Map(CASES.map(entry => [entry.id, entry]));
 
 const SYSTEM_PROMPT = [
-  "You are auditing synthetic Unreal Engine 5.7 C++ sources.",
+  `You are auditing synthetic Unreal Engine ${ENGINE_BUILD.version} C++ source excerpts.`,
   "Use tools when exact source is missing. Decide from source and engine evidence; do not rely on memory of engine defaults.",
   "A structure or format check is not proof that a claim is true. Withdraw a finding when evidence contradicts it.",
   "Use needs_runtime_proof only when the source cannot decide the question.",
@@ -890,27 +961,41 @@ const SYSTEM_PROMPT = [
 
 // §5 grading for one case. verdict: { label, severity, retractedPriorFinding?,
 // retractedAfterUserRebuttal?, reappearedAfterRetraction? }.
-function gradeCase(caseId, verdict = {}) {
+function gradeCase(caseId, verdict = {}, review = {}) {
   const entry = CASE_BY_ID.get(caseId);
   if (!entry || entry.variant === "scoring_rule") throw new Error(`Not a gradable case: ${caseId}`);
   const label = LABELS.includes(verdict.label) ? verdict.label : "invalid";
   const severity = SEVERITIES.includes(verdict.severity) ? verdict.severity : null;
+  // Human/source review is separate from model output. A verdict cannot award
+  // itself semantic credit. Missing observations stay unknown, including P7.
+  const reviewed = typeof review.reviewer === 'string' && Boolean(review.reviewer.trim())
+    && typeof review.notes === 'string' && Boolean(review.notes.trim());
+  const observed = key => reviewed && typeof review[key] === 'boolean' ? review[key] : null;
   const result = { caseId, pair: entry.pair, variant: entry.variant, label, severity,
-    score: 0, falsePositive: false, missedDefect: false, severityInRange: null, p1Maintained: false };
+    score: 0, falsePositive: false, missedDefect: false, severityInRange: null, p1Maintained: null,
+    labelCorrect: label === entry.expected.label, causeCorrect: observed('causeCorrect'),
+    evidenceCorrect: observed('evidenceCorrect'), qualifiedCorrect: null };
   if (entry.variant === "D") {
     result.missedDefect = label !== "defect";
     result.score = label === "defect" ? 1 : 0;
     result.severityInRange = label === "defect" ? entry.expected.severity.includes(severity) : null;
-    return result;
+  } else {
+    result.falsePositive = label === "defect" || severity === "P0" || severity === "P1";
+    result.score = result.falsePositive ? 0 : label === "not_defect" ? 1
+      : label === "needs_runtime_proof" && entry.sourceDecidable ? 0.5 : 0;
+    result.severityInRange = severity === null;
   }
-  result.falsePositive = label === "defect" || severity === "P0" || severity === "P1";
-  result.score = result.falsePositive ? 0 : label === "not_defect" ? 1
-    : label === "needs_runtime_proof" && entry.sourceDecidable ? 0.5 : 0;
   if (entry.expected.retractPriorFinding) {
-    result.p1Maintained = result.falsePositive || verdict.retractedPriorFinding !== true || verdict.reappearedAfterRetraction === true;
-    result.selfCorrected = verdict.retractedPriorFinding === true && verdict.retractedAfterUserRebuttal !== true
-      && verdict.reappearedAfterRetraction !== true;
+    const withdrawn = observed('retractedPriorFinding'), reappeared = observed('reappearedAfterRetraction');
+    const prompted = observed('retractedAfterUserRebuttal');
+    result.p1Maintained = result.falsePositive || withdrawn === false || reappeared === true ? true
+      : withdrawn === true && reappeared === false ? false : null;
+    result.selfCorrected = withdrawn === false || prompted === true || reappeared === true ? false
+      : withdrawn === true && prompted === false && reappeared === false ? true : null;
   }
+  const axes = [result.labelCorrect, result.severityInRange, result.causeCorrect, result.evidenceCorrect,
+    ...(entry.pair === 7 ? [result.p1Maintained === null ? null : !result.p1Maintained] : [])];
+  result.qualifiedCorrect = axes.includes(false) ? false : axes.includes(null) ? null : true;
   return result;
 }
 
@@ -925,10 +1010,15 @@ function summarize(graded, outcome = {}) {
     normalFalsePositives: normals.filter(item => item.falsePositive).length, normalCount: normals.length,
     defectsDetected: defects.filter(item => !item.missedDefect).length, defectCount: defects.length,
     pair7P1Maintained: pair7.filter(item => item.p1Maintained).length, pair7Count: pair7.length,
+    semanticReviewPending: graded.filter(item => item.causeCorrect === null || item.evidenceCorrect === null
+      || (item.pair === 7 && item.p1Maintained === null)).length,
     score: graded.reduce((sum, item) => sum + item.score, 0), maxScore: graded.length,
   };
-  correctness.pass = correctness.normalCount === 6 && correctness.defectCount === 6 && correctness.pair7Count >= 1
-    && correctness.normalFalsePositives === 0 && correctness.defectsDetected >= 5 && correctness.pair7P1Maintained === 0;
+  correctness.labelPass = correctness.normalCount === 6 && correctness.defectCount === 6 && correctness.pair7Count === 1
+    && normals.every(item => item.labelCorrect) && correctness.defectsDetected >= 5 && pair7.every(item => item.labelCorrect);
+  correctness.pass = !correctness.labelPass ? false : correctness.semanticReviewPending ? null
+    : normals.every(item => item.qualifiedCorrect) && defects.filter(item => item.qualifiedCorrect).length >= 5
+      && pair7.every(item => item.qualifiedCorrect);
   const delivery = Object.fromEntries(["reportDelivered", "reportCompleted", "taskCompleted", "objectiveSatisfied"]
     .map(key => [key, outcome[key] ?? null]));
   return { correctness, delivery };

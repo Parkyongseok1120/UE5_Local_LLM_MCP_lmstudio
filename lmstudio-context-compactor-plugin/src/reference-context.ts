@@ -1,7 +1,7 @@
 import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import { uniqueLatest } from "./tool-exchange-index.js";
 import { createHash } from "node:crypto";
-import type { Chat, ChatMessage, ToolCallRequest } from "@lmstudio/sdk";
+import { Chat, type ChatMessage, type ToolCallRequest } from "@lmstudio/sdk";
 import type { ToolScope } from "./tool-scope";
 import { capabilityScope, type RemoteToolLike } from "./tool-capability-registry";
 import { toolMemory } from "./context-ports";
@@ -13,7 +13,7 @@ import { resultSemantics, retainedEffectFacts } from "./tool-result-semantics.js
 /** All additional reference work is bounded here, independently of source
  * archival. These limits never grant an execution or context-budget allowance. */
 export const REFERENCE_LIMITS = Object.freeze({ observations: 16, diagnosticGroups: 3, diagnostics: 12,
-  metadata: 8, sections: 6, candidates: 4, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
+  metadata: 8, sections: 6, candidates: 5, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
 export type ReferenceSignal = "diagnostic_present" | "diagnostic_recurred" | "observed_source_changed"
   | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown" | "api_contract_observed"
   | "network_contract_observed";
@@ -40,8 +40,9 @@ export type ReferenceSnapshot = {
   items: ReferenceItem[]; omittedItems: number; signals: ReferenceSignal[];
   autoSignals?: Array<{ signal: ReferenceSignal; observationIds: string[]; order: "last_observation" | "order_unknown" }>;
   applicability: { engineVersion?: string; engineVersionSource?: ObservedItem["versionSource"] | "project_file";
-    /** Set when the version comes from the saved project file and no live Editor was observed. */
-    engineVersionNote?: "project_file_editor_not_observed";
+    /** Set when the version comes from the saved project file and no live Editor was observed,
+     * or when the engine identity was observed by an earlier execution, not this one. */
+    engineVersionNote?: "project_file_editor_not_observed" | "prior_execution_observation";
     versions?: Partial<Record<NonNullable<ObservedItem["versionSource"]>, string>>;
     versionConflict?: boolean; packages: Record<string, string>; networkPackagesAmbiguous: boolean };
   projectObservation?: { engine: "unity" | "unreal"; project: string; usable: boolean; reason: string };
@@ -461,6 +462,48 @@ export function ingestReferenceObservations(state: ReferenceState, messages: rea
   }
 }
 
+const engineSourceItem = (i: ObservedItem) => i.data.sourceMode === "engine_local" || i.data.sourceMode === "static_validation";
+
+/** Seeds the latest engine identity that earlier executions returned into the
+ * host history. Each earlier request/result block passes through the same
+ * ingestion as a live round, so project proof, a later descriptor observation
+ * and file uncertainty invalidate it exactly as they would within one execution.
+ * Observations restored from a persisted window stay authoritative and are never
+ * mixed with these, whose batch order relative to them is unknown. Any identity
+ * observed by this execution supersedes the seeded one by batch order. */
+export function seedPriorEngineIdentity(state: ReferenceState, history: readonly ChatMessage[],
+  tools: readonly RemoteToolLike[], scope: ToolScope, executionId: string): void {
+  if (state.disabled || state.batch > 0 || state.observations.length) return;
+  const prior = emptyReferenceState();
+  // One block is the requests and the consecutive result messages that answer
+  // them, matching what one live round ingests as a batch.
+  let segment: ChatMessage[] = [];
+  history.forEach((message, index) => {
+    segment.push(message);
+    if (prior.disabled || !message.getToolCallResults().length || history[index + 1]?.getToolCallResults().length) return;
+    ingestReferenceObservations(prior, segment, tools, scope, `${executionId}:prior`);
+    segment = [];
+  });
+  if (prior.disabled) return;
+  // Evaluate all later target/selection/conflict facts before projecting the
+  // engine-only seed. Dropping those facts first could revive a stale binding.
+  const priorHistory = Chat.empty();
+  history.forEach(message => priorHistory.append(message));
+  const priorSnapshot = referenceSnapshot(prior, priorHistory);
+  const applicability = priorSnapshot.applicability;
+  if (!applicability.engineVersion || applicability.engineVersionSource !== "installed_engine_source") return;
+  const latest = [...prior.observations].reverse().find(o => o.items.some(engineSourceItem))?.batch;
+  const seeded = prior.observations.filter(o => o.batch === latest)
+    .map(o => ({ ...o, historical: true, items: o.items.filter(engineSourceItem) })).filter(o => o.items.length);
+  if (!seeded.length) return;
+  const candidate = referenceSnapshot({ ...emptyReferenceState(), observations: seeded, batch: prior.batch }, priorHistory);
+  if (candidate.applicability.engineVersion !== applicability.engineVersion
+    || pathIdentity(candidate.projectObservation?.project || "") !== pathIdentity(priorSnapshot.projectObservation?.project || "")) return;
+  state.observations = seeded;
+  state.batch = prior.batch;
+  state.seen = new Set(seeded.map(o => o.id));
+}
+
 /** Re-evaluate availability against this round's actual source history.
  * References are never receipts, fresh reads or a second historical archive. */
 export function referenceSnapshot(state: ReferenceState, history: Chat): ReferenceSnapshot {
@@ -492,7 +535,6 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
       ? "returned_project_target" : `shared_selection_${currentProject.data.bindingStatus}` };
   if (state.projectConflict && state.projectConflict.batch >= (projectBatch || 0)) snapshot.projectObservation = {
     engine: state.projectConflict.engine, project: "", usable: false, reason: "returned_target_mismatch" };
-  const engineSourceItem = (i: ObservedItem) => i.data.sourceMode === "engine_local" || i.data.sourceMode === "static_validation";
   const localEngineObservations = ordered.filter(o => o.items.some(engineSourceItem));
   const engineBatch = localEngineObservations[0]?.batch;
   const currentEngineIdentities = localEngineObservations.filter(o => o.batch === engineBatch)
@@ -500,6 +542,7 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
   const ambiguousEngine = currentEngineIdentities.some(i => !i) || new Set(currentEngineIdentities).size > 1;
   const autoSignals: NonNullable<ReferenceSnapshot["autoSignals"]> = [];
   const versions: NonNullable<ReferenceSnapshot["applicability"]["versions"]> = {};
+  let priorEngineIdentity = false;
   const eligibleProject = (item: ObservedItem) => !projectAmbiguous && snapshot.projectObservation?.usable !== false
     && (!currentProject || pathIdentity(item.project) === pathIdentity(currentProject.project));
   const runtimeUnavailable = ordered.some(o => o.items.some(i => eligibleProject(i) && i.origin.tool === "unity_status"
@@ -512,7 +555,10 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
       // Applicability derives from bounded observations, not the smaller UI
       // projection. Omitting a displayed row cannot resolve a known conflict.
       if (eligibleProject(item) && item.engineVersion && item.versionSource && !versions[item.versionSource]
-        && !item.applicabilityInvalidated && !(item.engine === "unreal" && ambiguousEngine)) versions[item.versionSource] = item.engineVersion;
+        && !item.applicabilityInvalidated && !(item.engine === "unreal" && ambiguousEngine)) {
+        versions[item.versionSource] = item.engineVersion;
+        if (item.versionSource === "installed_engine_source") priorEngineIdentity = Boolean(observation.historical);
+      }
       if (eligibleProject(item) && item.packages && !item.applicabilityInvalidated) snapshot.applicability.packages = { ...item.packages };
       if (item.kind === "diagnostics") {
         if (++diagnosticGroups > REFERENCE_LIMITS.diagnosticGroups) { snapshot.omittedItems++; continue; }
@@ -583,6 +629,9 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
     snapshot.applicability.engineVersion = versions[versionSource];
     snapshot.applicability.engineVersionSource = versionSource === "saved_project" ? "project_file" : versionSource;
     if (versionSource === "saved_project" && runtimeUnavailable) snapshot.applicability.engineVersionNote = "project_file_editor_not_observed";
+    // An earlier execution's identity applies until this one observes otherwise;
+    // an engine changed in between is not detectable without a new observation.
+    if (versionSource === "installed_engine_source" && priorEngineIdentity) snapshot.applicability.engineVersionNote = "prior_execution_observation";
   }
   snapshot.applicability.networkPackagesAmbiguous = Boolean(packages["com.unity.netcode.gameobjects"] && packages["com.unity.netcode"]);
   snapshot.signals = [...signals];

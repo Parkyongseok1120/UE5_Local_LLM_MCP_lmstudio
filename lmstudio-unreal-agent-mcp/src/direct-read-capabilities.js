@@ -173,7 +173,7 @@ function createReadCapabilities(context) {
         `${args.path} is ${initialStat.size} bytes; ${wholeReadRefusal}. `
         + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
           retryAllowed: true, retryMode: "different_arguments",
-          suggestion: { tool: "read_file_range", args: projectScopedSuggestionArgs(args, { path: args.path, startLine: 1, endLine: 20 }) },
+          suggestion: locateAlternatives(args)[0],
           details: { size: initialStat.size, alternatives: [
             ...locateAlternatives(args),
             { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },

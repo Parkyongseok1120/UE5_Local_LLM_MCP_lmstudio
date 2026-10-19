@@ -1,5 +1,7 @@
 # 로컬 모델 하네스 — 판단 정확도·읽기 범위·프롬프트 처리 대기 최종 구현 계획
 
+후속 승인 구현 및 평가 보정: [평가 신뢰성·읽기 안내 실행 기록](Harness_Eval_Read_Repair_20261019.md). 아래는 원래 계획·실험 이력이며, 이후 평가의 채점·버전·검증 상태는 후속 기록을 따른다.
+
 작성: 2026-10-19 · 기준 HEAD `12dddcc935d5635f5c3df1737f509c000462d3a2` (`Develop`) — 이번 세션에서 실제 HEAD 일치 확인.
 작업 트리: `docs/Harness_Targeted_Engine_Read_Plan_20261018.md`(수정), `docs/evidence/harness-prefill-analysis-20261019.json`, `docs/evidence/harness-behavior-latency-plan-20261019.json`(미추적) — 사용자 작업으로 보존, 되돌리지 않음.
 
@@ -329,6 +331,54 @@ W0  기준 고정 (읽기 전용)
 - 버전 확인 엔진 섹션이 실제 세션에서 들어가려면, 실행 안에서 `engine_local` 조회나 정적 검증으로 엔진 identity가 관찰돼야 한다. 이전 턴 관찰을 이어받을지는 별도 설계 결정이다(엔진 교체 위험).
 - 정확도는 표본이 작고 회차 간 변동이 크다. 같은 설정의 반복 평가(최소 3회)가 필요하다.
 - end-to-end 감사 작업의 전체 시간 비교는 하지 않았다.
+
+### 9.6 버전 확인 엔진 지침 전달 (후속, 2026-10-19, 미커밋)
+
+§9.5의 "버전 확인 엔진 섹션이 실제 세션에서 들어가지 않음"을 원인부터 확인하고 고쳤다. 막힌 곳은 두 군데였다.
+
+| 막힌 곳 | 근거 | 변경 |
+|---|---|---|
+| ① 엔진 버전 미확인 | `reference-context.ts`는 현재 실행에서 관찰한 identity(engine_local `observedEngineIdentity`, `static_validate_project` Build.version)만 쓴다. 이전 턴 관찰은 저장된 작업 창(압축 commit)의 `referenceObservations`로만 복원된다. 압축 전 세션과 eval에서는 매번 사라져 `contract_sections_version_unverified`가 된다 | `seedPriorEngineIdentity`: 실행을 시작할 때 호스트 history의 이전 요청/결과 블록을 live 라운드와 같은 `ingestReferenceObservations`로 차례대로 처리한다. 그중 **마지막 엔진 identity 관찰만** 넣는다(`historical`) |
+| ② 지침 예산 초과 | ①을 고친 뒤 실제 tokenizer로 재면 재선택 후보 `core/proof + unreal-networking/authority + engine-defaults`가 자료 포함 +2,300, 축소 자료 포함 +2,065였다. 둘 다 기본 `designGuidanceMaxTokens` 2,048을 넘어 C3(`core/proof`만)로 떨어졌다. ①만 적용한 첫 실측 P1-N auto도 selected가 `core/proof, unreal/verification`뿐이었다 | Auto 후보 사다리에서 C2 다음에 **자료 없는 최우선 계약**(엔진·계약 pack·supplement 유지)을 추가했다. 후보 상한은 4에서 5로 올렸다. 같은 측정에서 +1,585로 들어갔다 |
+
+엔진 버전 확인 경로 대조와 선택:
+- `.uproject` EngineAssociation: 기각. 요청한 association일 뿐 설치 엔진이 아니다(소스 빌드는 GUID). 또 descriptor 관찰은 계약상 버전을 무효화한다.
+- Unreal MCP `get_active_project`·`get_workspace_info`의 `engineSource.identity`: 기각. `{status, version}`뿐이라 sha256·engineRoot가 없어 교체를 감지할 수 없고, 모델이 그 도구를 불러야만 생긴다.
+- 설치 엔진 Build.version(engine_local 조회·정적 검증): **채택**. 이미 계약이 있는 유일한 strict identity다. 이를 이전 턴 history에서 이어받는다.
+
+이전 턴 identity 이어받기 판단: **채택**. 근거는 다음과 같다.
+- 저장 창 복원 경로는 이미 이전 실행의 identity를 그대로 이어받고 있었다. 이번 변경은 압축 전 세션을 같은 동작으로 맞춘다.
+- 모든 이전 블록이 live 수집 규칙을 다시 통과한다. 그래서 project 불일치는 들어가지 않고, 이후 `.uproject` 관찰(같은 블록 순서 포함)과 파일 불확실성은 무효화하며, 서로 다른 identity가 같은 블록에 있으면 모호로 둔다. "descriptor observation invalidates engine applicability" 계약이 유지된다.
+- 현재 실행의 새 identity가 batch 순서로 우선한다(엔진 교체 감지). 현재 실행의 descriptor 관찰은 이어받은 identity도 무효화한다.
+- 이어받은 version이면 모델이 보는 applicability에 `engineVersionNote: "prior_execution_observation"`을 단다.
+- 남는 한계: 실행 사이에 엔진이 바뀌고 새 관찰이 없으면 정적으로 감지할 수 없다. 저장 창 복원 경로와 같은 한계다. 또 저장 창이 관찰을 복원하면 그것을 우선하고 history는 보지 않는다. 그 창에 identity가 없으면 여전히 미확인이다.
+
+검사:
+- Compactor `run-tests.cjs` 847/847, generator `--check` 4종 통과.
+- 추가 테스트:
+  - `reference-context` 2건: 이어받기, 교체 감지, 현재·이전 descriptor 무효화, 같은 블록 순서, project 불일치, 미검증 identity, 같은 블록 모호, 저장 창 우선.
+  - `prediction-loop` 2건: 이전 턴 identity로 `engine-defaults`와 `ue.net.client-rpc-callspace`가 입력에 들어감. 이후 descriptor read가 있으면 안 들어감.
+  - `auto-guidance` 1건: 자료 없는 계약 후보가 축소 후보보다 앞섬.
+- 시드 호출을 빼면 prediction-loop 채택 테스트가 실패하는 것을 확인했다.
+
+실측(`eval-ue-accuracy.cjs`, swift-1.5-qwen3.8-27b, ctx 84,224, parallel 4):
+- rep 1 P1-N·P1-D auto의 선택 ID에 `unreal-networking/engine-defaults`가 들어갔다(**실제 루프에서 처음 전달됨**).
+- 3회 반복은 같은 설정(같은 빌드, rep마다 seed만 다름, temperature 0)이다. 사용자 요청에 따라 한 바퀴(13사례×2그룹)마다 10분씩 쉬었다. rep 1은 실행 경계에서 한 번 멈췄다가 `--resume`으로 이어서 했고, 다시 한 실행은 없다. runner에 `--resume`, `--pause-ms`, `--pause-at run|rep`를 추가했다. — [근거](evidence/harness-engine-guidance-eval-20261019.json)
+
+| rep | off | auto |
+|---|---:|---:|
+| 1 | 11/13 (FP 1, 결함 5/6) | 10/13 (FP 2, 결함 5/6) |
+| 2 | 11/13 (FP 1, 결함 5/6) | 12/13 (FP 1, 결함 6/6) |
+| 3 | 10/13 (FP 1, 결함 4/6) | **13/13 (§5 통과)** |
+| 평균 | 10.7 | 11.7 |
+
+- `engine-defaults` 전달: auto 39회 중 36회 들어갔다. 빠진 3회는 모두 P6-D다. 이 사례는 주제가 core/debugging이라 multiplayer가 선택되지 않았다.
+- 원래 오판(P1-N, 정상 Client RPC를 결함 판정): off는 3/3 오판, auto는 2/3 오판이었다(rep 3에서 정답).
+  - RPC 경로 자체를 잘못 읽은 경우: off rep 1·2는 "untargeted → multicast to all relevant clients"라고 판단했다. auto는 3회 모두 owning client 경로를 맞게 읽었다.
+  - 나머지 오판(auto rep 1·2, off rep 3)의 근거는 Case07에서 `UHitFeedbackComponent`가 부착되지 않았고 `ShowHitMarker`가 정의되지 않았다는 점이었다. auto rep 3은 "부착 위치는 제공된 소스 밖"이라고 보고 정답을 냈다.
+- 사례별 쌍 비교(39쌍): auto가 맞히고 off가 틀린 경우 4회(P3-D×2, P1-N×1, P5-D×1), 반대 1회(P3-N rep 1).
+- 판단: auto 평균이 1점 높고 §5 통과가 처음 1회 나왔다. 그러나 표본은 3회이고, 설정을 바꾸지 않은 off도 회차마다 10–11로 흔들리며 auto는 10–13이다. 따라서 **점수 개선은 확정됐다고 보지 않는다**. 근거가 있는 것은 두 가지다. 대상 오판인 Client RPC 경로 오독이 off 2/3에서 auto 0/3으로 줄었고, 전체 점수는 떨어지지 않았다. 지연은 실행당 중앙값 off 68.9초, auto 75.4초였다(라운드 중앙값 둘 다 4).
+- 후속: Case07 fixture가 피드백 컴포넌트 부착을 보여 주지 않아, RPC와 무관한 결함 판정 여지가 있다. fixture 타당성을 검토해야 한다.
 
 ## 계획 작성 중 수행한 확인 (사실)
 HEAD·작업 트리, 기존 계획 MD 전체, 분석 JSON(summary/analysis/joins/tasks/load config), 로컬 대화 JSON 선택 버전의 도구 호출 집계(메시지 3·5, 실행 ID 위치), `composeModelHistory`·`renderAvailableRefs`·`renderTaskProgress`·runtimeFacts writer·`round-loop.ts:281`·라운드 관측 필드·기존 배치 테스트, `readFile` whole-read 분기·기본 한도·도구 설명·관련 테스트·확장자 정본 후보, RPC/RepNotify 가이던스, eval runner·test runner 구조. 제품 코드 수정·테스트 실행·모델 호출은 하지 않음.

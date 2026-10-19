@@ -10,6 +10,15 @@ const {
   toMcpResult,
 } = require("../src/direct-response.js");
 
+test('locator templates survive both structured and model-text serialization without executable args', () => {
+  const result = toMcpResult(failure('WHOLE_READ_TOO_LARGE', 'Locate the target first.', {
+    retryAllowed: true,
+    suggestion: { tool: 'search_files', argsTemplate: { path: 'project://Source/Demo.cpp', query: '<symbol>', ownerCapability: 'secret' } },
+  }));
+  assert.deepEqual(result.structuredContent.suggestion, { tool: 'search_files', argsTemplate: { path: 'project://Source/Demo.cpp', query: '<symbol>' } });
+  assert.deepEqual(JSON.parse(result.content[0].text).suggestion, result.structuredContent.suggestion);
+});
+
 test("Direct response removes workflow control without reconstructing a legacy suggestion", () => {
   const legacyVariants = [
     {

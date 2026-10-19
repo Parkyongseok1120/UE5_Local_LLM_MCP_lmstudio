@@ -262,6 +262,9 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   const variants = [
     { selected: [...combined.values()], data: referenceItems },
     { selected: automatic ? [...minimum.values()] : top, data: latestDiagnostic ? [latestDiagnostic] : [] },
+    // Reserved roles (engine and contract packs, supplement) are kept before data
+    // when only the data pushes them over the token allowance.
+    ...(automatic ? [{ selected: [...minimum.values()], data: [] }] : []),
     { selected: top, data: [] },
     { selected: corePack, data: [] },
   ];

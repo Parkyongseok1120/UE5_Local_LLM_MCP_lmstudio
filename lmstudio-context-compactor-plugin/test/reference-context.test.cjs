@@ -511,3 +511,79 @@ test('RPC or replication specifiers in returned source are a network signal only
   assert.ok(plain.snapshot().autoSignals.some(s=>s.signal==='api_contract_observed'));
   assert.equal(plain.snapshot().autoSignals.some(s=>s.signal==='network_contract_observed'),false, 'a non-network UFUNCTION is not a network signal');
 });
+
+test('historical engine seeding respects later target conflicts and shared selections', () => {
+  const { seedPriorEngineIdentity } = require('../dist/reference-context');
+  const tools = [{ name: 'unreal_symbol_lookup', pluginIdentifier: 'mcp/unreal-rag' },
+    { name: 'read_file', pluginIdentifier: 'mcp/unreal-agent' },
+    { name: 'unreal_get_active_project', pluginIdentifier: 'mcp/unreal-rag' }];
+  const identity = project => ({ ok: true, canonicalProject: project, sourceMode: 'engine_local',
+    observedEngineIdentity: { status: 'observed', engineRoot: 'C:/UE_5.8', version: '5.8', hashScope: 'file', sha256: 'a'.repeat(64) } });
+  const first = pair('first', 'unreal_symbol_lookup', identity(unreal.projectIdentity));
+  const mismatch = pair('mismatch', 'unreal_symbol_lookup', identity('C:/Other/Other.uproject'));
+  const seed = (messages, scope = unreal) => {
+    const state = emptyReferenceState(); seedPriorEngineIdentity(state, messages, tools, scope, 'next');
+    return referenceSnapshot(state, history(messages));
+  };
+  assert.equal(seed([...first, ...mismatch]).applicability.engineVersion, undefined);
+  const selection = pair('selection', 'unreal_get_active_project', { ok: true, activeProject: 'C:/Other/Other.uproject', projectBindingStatus: 'bound' });
+  assert.equal(seed([...first, ...selection], { engine: 'unreal', source: 'available_tools', projectIdentity: '' }).applicability.engineVersion, undefined);
+  const fresh = pair('fresh', 'unreal_symbol_lookup', identity(unreal.projectIdentity));
+  assert.equal(seed([...first, ...mismatch, ...fresh]).applicability.engineVersion, '5.8');
+  // Returning to A through a plain read cannot seed B, even with the same version.
+  const readA = pair('read-a', 'read_file', { ok: true, canonicalProject: unreal.projectIdentity,
+    path: 'project://Source/A.cpp', content: 'int Value;', sha256: 'b'.repeat(64), startLine: 1, endLine: 1, totalLines: 1 });
+  assert.equal(seed([...first, ...mismatch, ...readA], { engine: 'unreal', source: 'available_tools', projectIdentity: '' }).applicability.engineVersion, undefined);
+});
+
+test('an earlier turn engine identity seeds applicability until this execution observes otherwise',()=>{
+  const {seedPriorEngineIdentity}=require('../dist/reference-context');
+  const tools=[{name:'unreal_symbol_lookup',pluginIdentifier:'mcp/unreal-rag'},{name:'read_file',pluginIdentifier:'mcp/unreal-agent'}];
+  const identity=(version,sha,project=unreal.projectIdentity)=>({ok:true,canonicalProject:project,sourceMode:'engine_local',
+    observedEngineIdentity:{status:'observed',engineRoot:'C:/UE_'+version,version,hashScope:'file',sha256:sha.repeat(64)}});
+  const descriptor={ok:true,canonicalProject:unreal.projectIdentity,path:'project://Game.uproject',
+    content:'{"EngineAssociation":"5.7"}',sha256:'d'.repeat(64),startLine:1,endLine:1,totalLines:1};
+  const seed=(prior)=>{const state=emptyReferenceState(); seedPriorEngineIdentity(state,prior,tools,unreal,'e2'); return state;};
+  const prior=[...pair('p1','unreal_symbol_lookup',identity('5.8','b')),ChatMessage.from({role:'assistant',content:'UE 5.8.'})];
+  let state=seed(prior), s=referenceSnapshot(state,history(prior));
+  assert.equal(s.applicability.engineVersion,'5.8');
+  assert.equal(s.applicability.engineVersionSource,'installed_engine_source');
+  assert.equal(s.applicability.engineVersionNote,'prior_execution_observation');
+  assert.equal(s.items.find(i=>i.data.sourceMode==='engine_local').data.observationProvenance,'restored_historical_observation');
+  // A changed engine is detected by this execution's own observation.
+  const live=pair('l1','unreal_symbol_lookup',identity('5.7','c'));
+  ingestReferenceObservations(state,live,tools,unreal,'e2'); s=referenceSnapshot(state,history([...prior,...live]));
+  assert.equal(s.applicability.engineVersion,'5.7'); assert.equal(s.applicability.engineVersionNote,undefined);
+  // This execution's descriptor observation invalidates the seeded identity.
+  state=seed(prior); const read=pair('d1','read_file',descriptor);
+  ingestReferenceObservations(state,read,tools,unreal,'e2');
+  assert.equal(referenceSnapshot(state,history([...prior,...read])).applicability.engineVersion,undefined);
+  // So does an earlier turn's descriptor observation after the lookup, and the same-block order rule still holds.
+  assert.equal(referenceSnapshot(seed([...prior,...pair('d2','read_file',descriptor)]),history()).applicability.engineVersion,undefined);
+  const a=pair('a','unreal_symbol_lookup',identity('5.8','b')),b=pair('b','read_file',descriptor);
+  for(const block of [[a[0],b[0],a[1],b[1]],[a[0],b[0],b[1],a[1]]])
+    assert.equal(referenceSnapshot(seed(block),history()).applicability.engineVersion,undefined);
+  // A lookup returned before a descriptor read in an earlier turn is re-established by a later lookup.
+  assert.equal(referenceSnapshot(seed([...pair('d3','read_file',descriptor),...prior]),history()).applicability.engineVersion,'5.8');
+});
+
+test('seeded engine identity requires the execution project, a verified identity and no restored window',()=>{
+  const {seedPriorEngineIdentity}=require('../dist/reference-context');
+  const tools=[{name:'unreal_symbol_lookup',pluginIdentifier:'mcp/unreal-rag'}];
+  const lookup=(extra={},identity={})=>({ok:true,canonicalProject:unreal.projectIdentity,sourceMode:'engine_local',
+    observedEngineIdentity:{status:'observed',engineRoot:'C:/UE',version:'5.8',hashScope:'file',sha256:'b'.repeat(64),...identity},...extra});
+  const version=(messages,state=emptyReferenceState())=>{seedPriorEngineIdentity(state,messages,tools,unreal,'e');
+    return referenceSnapshot(state,history()).applicability.engineVersion;};
+  assert.equal(version(pair('x','unreal_symbol_lookup',lookup())),'5.8');
+  assert.equal(version(pair('x','unreal_symbol_lookup',lookup({canonicalProject:'C:/Projects/Other/Other.uproject'}))),undefined);
+  assert.equal(version(pair('x','unreal_symbol_lookup',lookup({},{status:'unknown'}))),undefined);
+  // Two different identities returned in one earlier block remain ambiguous.
+  const a=pair('a','unreal_symbol_lookup',lookup()),b=pair('b','unreal_symbol_lookup',lookup({},{version:'5.7',sha256:'c'.repeat(64)}));
+  assert.equal(version([a[0],b[0],a[1],b[1]]),undefined);
+  // The latest earlier block wins.
+  assert.equal(version([...a,...b]),'5.7');
+  // Observations restored from a persisted window are not mixed with seeded ones.
+  const restored=emptyReferenceState();
+  restored.batch=1; restored.observations=[{id:'w',fingerprint:'f',batch:1,runtime:false,engine:'unreal',historical:true,items:[]}];
+  assert.equal(version(pair('x','unreal_symbol_lookup',lookup()),restored),undefined);
+});

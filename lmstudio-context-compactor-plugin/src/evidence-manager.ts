@@ -8,7 +8,7 @@ import { inputAvailability, toolMemory, workingContextModule } from "./context-p
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
-import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot } from "./reference-context";
+import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics } from "./tool-result-semantics.js";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
@@ -78,6 +78,10 @@ export class EvidenceManager {
     this.referenceState.observations = observations.map(o => ({ ...o, historical: true }));
     this.referenceState.batch = Math.max(0, ...observations.map(o => o.batch));
     this.referenceState.seen = new Set(observations.map(o => o.id));
+  }
+  /** Only when no persisted window restored reference observations. */
+  seedPriorEngineIdentity(history: Chat, scope: ToolScope, executionId: string) {
+    seedPriorEngineIdentity(this.referenceState, history.getMessagesArray(), this.tools, scope, executionId);
   }
   referenceSnapshot(history: Chat) { return referenceSnapshot(this.referenceState, history); }
   observeRoundReferences(history: Chat, returned: readonly ChatMessage[], scope: ToolScope, executionId: string,

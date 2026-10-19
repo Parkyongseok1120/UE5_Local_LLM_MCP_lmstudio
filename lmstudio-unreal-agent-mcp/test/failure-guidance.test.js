@@ -336,7 +336,9 @@ test("implicit whole reads refuse project source at any size and allow small non
     assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE", source);
     assert.match(refused.message, /source files are located first/u);
     assert.deepEqual(refused.alternatives.map((item) => item.tool), ["search_files", "read_symbol", "read_file_range"]);
-    assert.equal(refused.suggestion.tool, "read_file_range");
+    assert.equal(refused.suggestion.tool, "search_files");
+    assert.equal(refused.suggestion.args, undefined);
+    assert.equal(refused.suggestion.argsTemplate.query, "<symbol>");
     const window = await call(runtime, "read_file", { path: source, offsetBytes: 0, maxBytes: 1024 });
     assert.equal(window.ok, true, source);
   }
@@ -458,19 +460,33 @@ test("read_symbol view=declaration returns only the prototype or member statemen
   assert.equal(none.errorCode, "SYMBOL_NOT_FOUND");
 });
 
-test("oversized project whole reads point to a narrow range while explicit byte windows remain available", async (t) => {
+test("whole-read refusal locates the caller's target without guessing a first page", async (t) => {
   const { runtime, projectRoot } = fixture(t);
   const file = "project://Source/Game/Large.cpp";
   fs.writeFileSync(path.join(projectRoot, "Source/Game/Large.cpp"), "int Value;\n".repeat(8000));
   const refused = await call(runtime, "read_file", { path: file });
   assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE");
   assert.match(refused.message, /source files are located first/u);
-  assert.equal(refused.suggestion.tool, "read_file_range");
+  assert.equal(refused.suggestion.tool, "search_files");
+  assert.equal(refused.suggestion.args, undefined);
+  const located = await call(runtime, refused.suggestion.tool, { ...refused.suggestion.argsTemplate, query: "Value" });
+  assert.equal(located.ok, true);
   const window = await call(runtime, "read_file", { path: file, offsetBytes: 0, maxBytes: 100 });
   assert.equal(window.ok, true);
   const range = await call(runtime, "read_file_range", { path: file, startLine: 3, endLine: 4 });
   assert.equal(range.rangeComplete, true);
   assert.equal(range.nextStartLine, undefined);
+});
+
+test("engine whole-read refusal preserves the engine scope in its locator template", async (t) => {
+  const { runtime } = fixture(t);
+  const file = "engine://Engine/Source/Runtime/Engine/Private/PlayerController.cpp";
+  const refused = await call(runtime, "read_file", { path: file });
+  assert.equal(refused.suggestion.args, undefined);
+  assert.deepEqual(refused.suggestion, refused.alternatives[0]);
+  assert.equal(refused.suggestion.argsTemplate.path, file);
+  const found = await call(runtime, "search_files", { ...refused.suggestion.argsTemplate, query: "PostLogin" });
+  assert.equal(found.ok, true);
 });
 
 test("include filtering cannot turn a discovery limit into complete absence", async (t) => {

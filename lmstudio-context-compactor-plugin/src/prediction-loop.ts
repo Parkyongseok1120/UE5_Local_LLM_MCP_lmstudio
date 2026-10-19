@@ -188,6 +188,10 @@ export function createPredictionLoopHandler(
     }
     const restoredWindow = workingContext?.restore(originalHistory);
     evidenceManager.restoreReferences();
+    // Version-checked engine guidance needs an engine identity; an earlier turn's
+    // observation applies under the same invalidation rules as a live one.
+    if (!config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0)
+      evidenceManager.seedPriorEngineIdentity(originalHistory, scope, executionId);
     const objectiveFingerprint = modelNotes.objectiveFingerprint(originalHistory.getMessagesArray());
     const originalMessages = originalHistory.getMessagesArray();
     const noteScope = { objectiveFingerprint, projectDescriptor: scope.projectIdentity };

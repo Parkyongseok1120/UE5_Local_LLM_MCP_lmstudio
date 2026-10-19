@@ -5204,6 +5204,42 @@ test('Auto adopts returned engine guidance without rebinding later explicit tool
     [['included', undefined], ['included', 'scope_changed'], ['sticky_kept', undefined]]);
 });
 
+for (const descriptorRead of [false, true]) test(`Auto admits version-checked engine guidance from an earlier turn's engine identity${descriptorRead ? ' unless a later descriptor read invalidated it' : ''}`, async () => {
+  const project = 'C:/Projects/Net/Net.uproject';
+  const lookup = { name: 'unreal_symbol_lookup', description: 'Engine symbol', pluginIdentifier: 'mcp/unreal-rag',
+    parametersJsonSchema: { type: 'object', properties: { symbol: { type: 'string' } } } };
+  const read = { name: 'read_file', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const exchange = (id, tool, args, value) => [
+    ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: { type: 'function', id, name: tool, arguments: args } }] }),
+    ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: id, content: JSON.stringify(value) }] })];
+  const original = Chat.from([{ role: 'user', content: 'Which engine version does the project use?' }]);
+  [...exchange('prior-engine', lookup.name, { symbol: 'AActor' }, { ok: true, canonicalProject: project, sourceMode: 'engine_local',
+    observedEngineIdentity: { status: 'observed', engineRoot: 'C:/Engines/UE_5.8', version: '5.8', hashScope: 'file', sha256: 'e'.repeat(64) } }),
+  ...(descriptorRead ? exchange('prior-descriptor', read.name, { path: 'project://Net.uproject' }, { ok: true, canonicalProject: project,
+    path: 'project://Net.uproject', content: '{"EngineAssociation":"5.8"}', sha256: 'f'.repeat(64), startLine: 1, endLine: 1, totalLines: 1 }) : [])]
+    .forEach(message => original.append(message));
+  original.append('assistant', 'The installed engine is Unreal Engine 5.8.');
+  original.append('user', 'Review whether this Client RPC replication is a defect.');
+  let calls = 0;
+  const model = { async getContextLength() { return 65536; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      calls++;
+      if (descriptorRead) assert.doesNotMatch(chat.toString(), /reference id=unreal-networking\/engine-defaults/);
+      else assert.match(chat.toString(), /reference id=unreal-networking\/engine-defaults[\s\S]*ue\.net\.client-rpc-callspace/);
+      completeRecoveryReply(options, 'Reviewed.');
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'auto',
+    designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [lookup, read]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  const guidance = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.equal(guidance.primaryTopic, 'multiplayer');
+  assert.equal(guidance.selectedIds.includes('unreal-networking/engine-defaults'), !descriptorRead);
+  assert.doesNotMatch(original.toString(), /Derived reference data/);
+});
+
 for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {
   const { EvidenceManager } = require('../dist/evidence-manager');
   const oldSnapshot = EvidenceManager.prototype.referenceSnapshot;

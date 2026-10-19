@@ -98,7 +98,7 @@ test("the live audit objective selects design and lifetime within the existing s
   const snapshot = emptyReferenceSnapshot(), selected = selectGuidanceTopics(chosen, snapshot);
   assert.equal(selected.supplement, "lifecycle");
   const candidates = autoGuidanceCandidates(selected.primary, selected.supplement, scope, snapshot);
-  assert.ok(candidates.length <= 4);
+  assert.ok(candidates.length <= 5);
   assert.ok(candidates[0].ids.some(id => id.startsWith("design/")));
   assert.ok(candidates[0].ids.some(id => bundledGuidanceSections.some(s => s.id === id
     && s.documentId !== "core" && s.topics.includes("lifecycle"))));
@@ -129,7 +129,7 @@ test("only current auto observations add a supplement; stale manual signals cann
   const selected = selectGuidanceTopics(primary, snapshot);
   assert.equal(selected.primary, "design"); assert.equal(selected.supplement, "debugging");
   const candidates = autoGuidanceCandidates(selected.primary, selected.supplement, scope, snapshot);
-  assert.ok(candidates.length <= 4);
+  assert.ok(candidates.length <= 5);
   assert.ok(candidates[0].ids.includes("debugging/verification"));
   for (const c of candidates) {
     assert.ok(c.ids.length <= 6); assert.ok(c.ids.includes("core/proof"));
@@ -204,4 +204,21 @@ test("returned RPC/replication source adds the multiplayer supplement; explicit 
   assert.equal(selectGuidanceTopics(core, snapshot([network, diagnostic])).supplement, "debugging");
   const candidates = autoGuidanceCandidates(chosen.primary, chosen.supplement, scope, emptyReferenceSnapshot());
   assert.ok(candidates[0].ids.some(id => id.startsWith("unreal-networking/")), "the Unreal networking contract is a candidate");
+});
+
+test("reserved engine contract sections get a data-free candidate before falling back to fewer sections", () => {
+  const snapshot = emptyReferenceSnapshot();
+  snapshot.applicability.engineVersion = "5.8"; snapshot.applicability.engineVersionSource = "installed_engine_source";
+  snapshot.autoSignals = [{ signal: "network_contract_observed", observationIds: ["header"], order: "last_observation" }];
+  snapshot.items = [{ id: "header", kind: "file", engine: "unreal", project: "C:/P/P.uproject", origin: {},
+    data: { path: "Source/P/HitPawn.h", networkContractContext: "lexical_signal_only" } }];
+  const selected = selectGuidanceTopics(intent("Does the hit marker appear for the player it is meant for?"), snapshot);
+  assert.deepEqual([selected.primary, selected.supplement], ["core", "multiplayer"]);
+  const candidates = autoGuidanceCandidates(selected.primary, selected.supplement, scope, snapshot);
+  const withContract = candidates.filter(c => c.ids.includes("unreal-networking/engine-defaults"));
+  assert.ok(withContract.some(c => c.referenceData) && withContract.some(c => !c.referenceData), candidates.map(c => c.ids.join(",")).join(" | "));
+  const dataFree = candidates.findIndex(c => c.ids.includes("unreal-networking/engine-defaults") && !c.referenceData);
+  assert.ok(dataFree < candidates.findIndex(c => !c.ids.includes("unreal-networking/engine-defaults")));
+  assert.deepEqual(candidates.at(-1).ids, ["core/proof"]);
+  assert.ok(candidates.length <= 5);
 });

@@ -98,7 +98,9 @@ function suggestionFrom(payload) {
   if (isRecord(payload.suggestion) && String(payload.suggestion.tool || "").trim()) {
     return {
       tool: String(payload.suggestion.tool).trim(),
-      args: isRecord(payload.suggestion.args) ? stripInternal(payload.suggestion.args) : {},
+      ...(isRecord(payload.suggestion.argsTemplate)
+        ? { argsTemplate: stripInternal(payload.suggestion.argsTemplate) }
+        : { args: isRecord(payload.suggestion.args) ? stripInternal(payload.suggestion.args) : {} }),
     };
   }
   const suggested = Array.isArray(payload.suggestedToolCalls)

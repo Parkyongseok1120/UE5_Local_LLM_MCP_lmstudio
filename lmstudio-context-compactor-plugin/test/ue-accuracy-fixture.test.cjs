@@ -10,12 +10,14 @@ const gradable = fixture.CASES.filter(entry => entry.variant !== "scoring_rule")
 const reference = entry => ({ label: entry.expected.label,
   severity: Array.isArray(entry.expected.severity) ? entry.expected.severity[0] : null,
   retractedPriorFinding: entry.expected.retractPriorFinding ? true : undefined });
+const verified = { reviewer: 'fixture-test', notes: 'Test-only review observations.', causeCorrect: true, evidenceCorrect: true,
+  retractedPriorFinding: true, retractedAfterUserRebuttal: false, reappearedAfterRetraction: false };
 
 test("pairs 1-6 have one normal and one defect case with the same question focus", () => {
   for (let pair = 1; pair <= 6; pair++) {
     const cases = fixture.CASES.filter(entry => entry.pair === pair);
     assert.deepEqual(cases.map(entry => entry.variant).sort(), ["D", "N"]);
-    const [a, b] = cases.map(entry => entry.question.replace(entry.folder, "<folder>"));
+    const [a, b] = cases.map(entry => entry.question.replaceAll(entry.folder, "<folder>"));
     assert.equal(a, b, `pair ${pair} leaks the variant through its question`);
   }
   assert.ok(fixture.CASE_BY_ID.get("P7").expected.retractPriorFinding);
@@ -50,7 +52,7 @@ test("source files do not reveal the answer key", () => {
 });
 
 test("grading follows the plan's false-positive, partial and pair-7 rules", () => {
-  const graded = gradable.map(entry => fixture.gradeCase(entry.id, reference(entry)));
+  const graded = gradable.map(entry => fixture.gradeCase(entry.id, reference(entry), verified));
   assert.equal(fixture.summarize(graded).correctness.pass, true);
 
   const allDefect = gradable.map(entry => fixture.gradeCase(entry.id, { label: "defect", severity: "P1" }));
@@ -67,11 +69,38 @@ test("grading follows the plan's false-positive, partial and pair-7 rules", () =
   assert.equal(hedged.pass, false);
   assert.equal(fixture.gradeCase("P1-N", { label: "needs_runtime_proof" }).score, 0.5);
 
-  const kept = fixture.gradeCase("P7", { label: "not_defect", retractedPriorFinding: true, reappearedAfterRetraction: true });
+  const kept = fixture.gradeCase("P7", { label: "not_defect" }, { ...verified, reappearedAfterRetraction: true });
   assert.equal(kept.p1Maintained, true);
-  const prompted = fixture.gradeCase("P7", { label: "not_defect", retractedPriorFinding: true, retractedAfterUserRebuttal: true });
+  const prompted = fixture.gradeCase("P7", { label: "not_defect" }, { ...verified, retractedAfterUserRebuttal: true });
   assert.equal(prompted.p1Maintained, false);
   assert.equal(prompted.selfCorrected, false);
+});
+
+test('correct labels cannot award cause/evidence/retraction credit to themselves', () => {
+  const unreviewed = gradable.map(entry => fixture.gradeCase(entry.id, { ...reference(entry), ...verified }));
+  const summary = fixture.summarize(unreviewed).correctness;
+  assert.equal(summary.labelPass, true);
+  assert.equal(summary.pass, null);
+  assert.equal(summary.semanticReviewPending, 13);
+  assert.equal(unreviewed.find(item => item.pair === 7).selfCorrected, null);
+  assert.equal(fixture.gradeCase('P3-D', { label: 'defect', severity: 'P1' }, { ...verified, causeCorrect: false }).qualifiedCorrect, false);
+  assert.equal(fixture.gradeCase('P4-D', { label: 'defect', severity: 'P1' }, verified).qualifiedCorrect, false);
+});
+
+test('presentation and lever setup are present on both sides without inventing an owner', () => {
+  for (const folder of ['Case07', 'Case02']) {
+    assert.match(fixture.FILES.get(`Source/${folder}/HitPlayerController.cpp`).content, /CreateDefaultSubobject<UHitFeedbackComponent>/u);
+    assert.match(fixture.FILES.get(`Source/${folder}/HitFeedbackComponent.cpp`).content, /IsLocalController\(\)/u);
+  }
+  for (const folder of ['Case03', 'Case09']) {
+    const pawn = fixture.FILES.get(`Source/${folder}/LeverPawn.cpp`).content;
+    assert.ok(pawn.indexOf('FocusedLever = *It') < pawn.indexOf('if (FocusedLever)'));
+    assert.match(fixture.FILES.get(`Source/${folder}/LeverActor.cpp`).content, /DOREPLIFETIME\(ALeverActor, bOpen\)/u);
+    assert.match(fixture.FILES.get(`Source/${folder}/CaseContext.md`).content, /Owner unset/u);
+  }
+  const slice = fixture.readPayload('Source/Case07/HitPawn.cpp', 2, 3);
+  assert.equal(slice.truncated, false);
+  assert.equal(slice.nextStartLine, undefined);
 });
 
 test("report delivery is reported apart from correctness (pair 8)", () => {
