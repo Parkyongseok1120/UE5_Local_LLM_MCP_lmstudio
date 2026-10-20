@@ -19,10 +19,10 @@
 <!-- /guidance-section: engine-defaults -->
 
 <!-- guidance-section: authority -->
-- HasAuthority, IsLocallyControlled, Actor Owner/owning connection은 다른 질문에 답한다. Owner 설정으로 서버 판정이나 참조 수명이 완성되지 않는다.
-- Server/Client/NetMulticast RPC의 실행 조건, 소유 연결, Actor/Component의 복제 전제를 확인한다. 클라이언트의 Multicast 호출을 서버 방송으로 해석하지 않는다.
+- HasAuthority, IsLocallyControlled, Actor Owner/owning connection은 다른 질문에 답한다. Owner 설정으로 서버 판정이나 참조 수명이 완성되지 않으며 클라이언트의 Multicast 호출을 서버 방송으로 해석하지 않는다.
+- Server/Client/NetMulticast RPC 실행 조건·소유 연결·복제 전제와 프로퍼티의 선언·등록·수신 조건을 구별한다. 계약 위반 판정에는 적용 엔진의 선언/구현을 조회하고 버전·본문이 미확인이면 추정으로 확정하지 않는다.
 - 원격 플레이어의 요청이 권한 측 실행까지 도달하는지 본다. HasAuthority 가드만 추가해 원격 요청을 버리면 기능은 연결되지 않는다.
-- bReplicates와 SetReplicateMovement는 전투 규칙 구현의 증거가 아니다. 탄약·체력·사망·점수의 실제 변경 권한과 관찰 범위를 각각 정한다.
+- bReplicates와 SetReplicateMovement는 전투 규칙 구현의 증거가 아니다. 로컬 예측 쓰기는 서버 수락·거부·보정·표시로 판단하며, 쓰기 자체를 결함으로 보거나 다음 복제로 무조건 수렴한다고 가정하지 않는다.
 - 지속 상태와 순간 효과를 구분한다. 늦게 참가하거나 다시 relevant해진 연결의 표시를 복원할 상태를 둔다.
 - 서로 다른 Actor의 RPC나 서로 다른 변수의 OnRep 순서를 전제로 하지 않는다. 함께 해석해야 하는 값에는 일관성·준비 조건을 둔다.
 - GameMode의 서버 규칙, GameState/PlayerState의 공유 상태, Pawn의 실행 수명을 현재 프로젝트 기준으로 연결한다.

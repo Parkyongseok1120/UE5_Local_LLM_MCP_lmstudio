@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "mode": "architecture",
+  "baseline": {
+    "head": "eb476dfc4b4f25bfdd62e5193bc00c8ae1523ad5",
+    "workingTree": "Contains prior installed, uncommitted implementation; HEAD alone is not the baseline",
+    "installedBuildId": "ef-build-v2-d182c5b0a4d6c59ad5bc571e80b27a43c017707c61a604d69b8239eb7aad5459",
+    "attachmentSha256": "e950cd766c0271d092df771f0abd2a7f7445680f52aab300d6cd8288826a8405",
+    "actualProjectEngine": "5.7.4",
+    "existingSyntheticEvaluationEngine": "5.8.2 / CL 56702186"
+  },
+  "existing": [
+    "prediction-loop/round-input/design-guidance own selection and final model input",
+    "evidence-manager and existing trace/eval records own returned/exposed evidence",
+    "evidence_first_mcp._bounded_issues and validate_evidence_packet own diagnostics",
+    "Canonical guidance documents, evidence_packet_contract, generated guidance and preset already exist",
+    "ue-accuracy fixture/runner own versioned evaluation; partialSearchScopeNotice owns the post-answer scope notice"
+  ],
+  "proposed": [
+    "Correlate loaded identity, guidance delivery, source acquisition and source retention before attributing accuracy failure",
+    "Preserve bounded representative claim locations in grouped validation diagnostics",
+    "Consolidate existing evidence/absence/severity/retraction guidance only where needed",
+    "Reuse existing evaluation owners for consumer, replication, prediction and structural repair cases",
+    "Compare preserved working-tree baseline with candidate and retain actual GUI adoption checks"
+  ],
+  "doNotDuplicate": [
+    "No new semantic truth judge, forced search/answer gate, state database or benchmark runner",
+    "Do not reimplement installed output, read-window, identity, permission/hash/receipt or prefix fixes",
+    "Do not hard-code the user's function names or expected labels into model guidance"
+  ],
+  "invariants": [
+    "Preserve pre-existing dirty worktree and user's game checkout",
+    "Keep bounded validation response size and structural-only truth scope",
+    "Do not treat partial broad searches as evidence of symbol absence",
+    "Preserve true defect detection; all-ambiguous responses cannot pass",
+    "Keep 5.7.4 real-project and 5.8.2 evaluation evidence separate"
+  ],
+  "impactedSurfaces": [
+    "MCP validation result/errors and existing tests",
+    "Canonical guidance, preset, generated source and runtime identity",
+    "Conditional guidance retention/coverage observation boundaries",
+    "Evaluation fixtures, tool adapters, source hashes and human-reviewed scoring"
+  ],
+  "validationPlan": [
+    "Detailed phases, gates and supported commands are in docs/Opus_Audit_Accuracy_Handoff_20261020.md",
+    "Focused diagnostic and input tests precede full affected suites",
+    "Small baseline/candidate smoke precedes three paired repetitions of full and held-out evaluation",
+    "Measure source/citation accuracy separately from labels and latency separately from generation rate",
+    "Actual GUI loading and adopted installation remain separate verification steps"
+  ],
+  "claims": [
+    {
+      "claim": "The current bounded MCP diagnostic projection removes claim indexes while grouping equivalent errors.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py:_bounded_issues",
+          "observation": "ARRAY_INDEX_PATTERN.sub('[]', value) supplies the grouping key and returned diagnostic text."
+        },
+        {
+          "kind": "test",
+          "location": "read-only Python invocation of bounded_validation_result during this plan",
+          "observation": "Input errors for claims[1] and claims[3] both requiring a final effect/observer yielded one claims[] error with (2 occurrences), errorCount=2 and errorShapeCount=1."
+        }
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "evidence_first_mcp.py:bounded_validation_result", "symbol": "errors list"},
+        {"stage": "decision", "stageStatus": "present", "location": "evidence_first_mcp.py:_bounded_issues", "symbol": "normalize array indexes and group error shapes"},
+        {"stage": "mutation", "stageStatus": "present", "location": "evidence_first_mcp.py:_bounded_issues", "symbol": "clip and append grouped shape with occurrences"},
+        {"stage": "observer", "stageStatus": "present", "location": "evidence_first_mcp.py:bounded_validation_result", "symbol": "returned errors/errorCount/errorShapeCount"}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "tests/test_evidence_first_mcp.py", "observation": "Existing tests intentionally enforce claims[] grouping, occurrence counts and a bounded diagnostic response. These properties must be preserved."}
+      ],
+      "unknowns": ["The raw validation calls from the attached GUI run are not available here; this does not prove that index loss caused every observed retry."]
+    },
+    {
+      "claim": "The inspected current game has a HUD consumer for the hit-confirmation timestamp that the attached report calls unused.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:345", "observation": "ClientConfirmHit_Implementation stores world time in LastHitConfirmationTime."},
+        {"kind": "project_source", "location": "UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatHUD.cpp:39", "observation": "DrawHUD reads GetLastHitConfirmationTime and draws two red lines while the elapsed time is less than 0.15 seconds."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "Character.cpp:ClientConfirmHit_Implementation", "symbol": "timestamp assignment in current source"},
+        {"stage": "decision", "stageStatus": "present", "location": "LatencyMultiCombatHUD.cpp:39", "symbol": "elapsed hit-confirmation time < 0.15f"},
+        {"stage": "side_effect", "stageStatus": "present", "location": "LatencyMultiCombatHUD.cpp:41", "symbol": "two red DrawLine calls"}
+      ],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "current game checkout HEAD 766146c", "observation": "This is source inspection of the clean current checkout, not a multiplayer rendering execution or an exact hash match to every tool result in the attached run."}
+      ],
+      "unknowns": ["Whether the HUD body was queried, returned, retained or visible to that model invocation is not established by the pasted transcript."]
+    },
+    {
+      "claim": "The existing accuracy runner cannot by itself establish search pagination recovery or validator-retry behavior because its current exposed tools omit those operations.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs:tools", "observation": "Returns list_files, read_file_range and unreal_symbol_lookup; engine source identity is fixed to the fixture version and hashes."},
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs:controller", "observation": "Runs production prediction handler with synthetic controller/tools; this is not the actual GUI/MCP path."}
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/test/ue-accuracy-runner.test.cjs", "observation": "Existing runner tests and schema/hash checks remain useful and should be extended rather than replaced."}
+      ],
+      "unknowns": ["Candidate guidance effectiveness, real-model accuracy, latency and runtime adoption remain unmeasured."]
+    }
+  ]
+}

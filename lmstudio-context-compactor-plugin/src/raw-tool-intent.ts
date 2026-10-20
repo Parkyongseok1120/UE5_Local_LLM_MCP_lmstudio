@@ -2,13 +2,15 @@ import {
   ChatMessage
 } from "@lmstudio/sdk";
 import { REASONING_SEPARATOR, modelNotes } from "./context-ports";
+import { stripInternalDataEcho } from "./internal-data-output";
 import { type RemoteToolLike, UNSAFE_UNKNOWN_NAME_PATTERN, isObservationOnlyToolCall } from "./tool-capability-registry";
 
-export function visibleAssistantOutput(text: string): { visibleText: string; hasFooter: boolean; note: unknown } {
+export function visibleAssistantOutput(text: string, internalDataParts: readonly string[] = []): { visibleText: string; hasFooter: boolean; note: unknown } {
   const raw = String(text || "");
   const separatorIndex = raw.lastIndexOf(REASONING_SEPARATOR);
-  return modelNotes.splitVisibleAnswer(separatorIndex >= 0
+  const result = modelNotes.splitVisibleAnswer(separatorIndex >= 0
     ? raw.slice(separatorIndex + REASONING_SEPARATOR.length) : raw);
+  return { ...result, visibleText: stripInternalDataEcho(result.visibleText, internalDataParts) };
 }
 
 export const RAW_TOOL_WRAPPER_PATTERNS = [
@@ -110,10 +112,10 @@ export function hasRawToolIntent(text: string, messages: Array<ChatMessage>): bo
   return containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
 }
 
-export function visibleTextFromMessages(messages: Array<ChatMessage>): string {
+export function visibleTextFromMessages(messages: Array<ChatMessage>, internalDataParts: readonly string[] = []): string {
   return messages
     .filter(message => message.isAssistantMessage())
-    .map(message => visibleAssistantOutput(message.getText()).visibleText)
+    .map(message => visibleAssistantOutput(message.getText(), internalDataParts).visibleText)
     .join("")
     .trim();
 }

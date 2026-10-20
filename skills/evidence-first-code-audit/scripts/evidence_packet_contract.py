@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA_VERSION = "1.1.2"
+SCHEMA_VERSION = "1.1.4"
 MODES = ("audit", "architecture", "codegen")
 NEUTRAL_VERDICT = "Confirmed"
 NEUTRAL_SEVERITY = "Info"
@@ -89,7 +89,11 @@ VALIDATION_POLICY = (
     "Validate one claim or a small coherent group at a time; do not rewrite the entire audit in one call. "
     "Keep evidence concise and leave room for JSON arguments after reasoning. "
     "Each call checks only that packet's structure and reasoning-record consistency, not source truth "
-    "or whole-task completion. If validation is unavailable or an argument is cut off, report returned "
+    "or whole-task completion. Routine edit/build receipts do not require another validation call. "
+    "If recording a verified neutral result, use architecture mode with Confirmed/Info and an appropriate "
+    "non-codegen claimType; never change severity or invent design intent just to pass validation. "
+    "During structural repair preserve evidence and stageStatus; changing unknown to present needs new supporting evidence. "
+    "If validation is unavailable or an argument is cut off, report returned "
     "facts and unresolved scope as partial; do not present unvalidated causal claims as confirmed."
 )
 
@@ -113,7 +117,9 @@ def model_guidance_prompt() -> str:
         "evidence_first_contract is an optional exact-schema lookup: call it only when machine-readable "
         "obligations are needed and are not already available, never as a routine preflight, authority "
         "check, or RAG/read/write/build sequence. " + VALIDATION_POLICY + " "
-        "Read direct contracts and framework semantics. Trace entry through decision/dispatch to mutation, "
+        "Read the applicable framework declaration/implementation before making a change that depends on its behavior. "
+        "A bounded lookup miss does not prove API absence, and a compiler error does not prove an API was removed in a past version. "
+        "Trace entry through decision/dispatch to mutation, "
         "side effect, or observer. Distinguish present, constructed, registered, reachable, called, "
         "mutating, and observed. Report claimType, verdict, severity, evidence, behaviorPath with "
         "stageStatus, counterEvidence, proofLevel, and unknowns. Match proof levels to source, static-analysis, "

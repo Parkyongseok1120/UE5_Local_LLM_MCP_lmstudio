@@ -415,14 +415,9 @@ KNOWN_BAD_API_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             "or actor authority checks with a valid world context."
         ),
     ),
-    (
-        "getnetmode_free",
-        re.compile(r"(?<![\w>-])\bGetNetMode\s*\(\s*\)", re.IGNORECASE),
-        (
-            "GetNetMode() is a UWorld member. Resolve a UWorld* first; do not invent "
-            "a global IsServer()/GetNetMode() helper."
-        ),
-    ),
+    # GetNetMode is also an AActor member. A bare call can use implicit this
+    # (including inherited members); this lexical scanner cannot prove it is an
+    # invalid free call. Do not classify a real API as invented from its token.
 )
 
 _MEMBER_GET_PLAYER_CONTROLLER = re.compile(
@@ -435,10 +430,6 @@ _MEMBER_ADD_TO_VIEWPORT = re.compile(
 )
 _MEMBER_IS_SERVER = re.compile(
     r"(?:->|\.)\s*IsServer\s*\(\s*\)",
-    re.IGNORECASE,
-)
-_MEMBER_GET_NET_MODE = re.compile(
-    r"(?:->|\.)\s*GetNetMode\s*\(\s*\)",
     re.IGNORECASE,
 )
 
@@ -520,8 +511,6 @@ def check_denylist(text: str) -> list[dict[str, Any]]:
             if term == "addtoviewport_free" and _is_safe_member_call(masked, match, _MEMBER_ADD_TO_VIEWPORT):
                 continue
             if term == "isserver_free" and _is_safe_member_call(masked, match, _MEMBER_IS_SERVER):
-                continue
-            if term == "getnetmode_free" and _is_safe_member_call(masked, match, _MEMBER_GET_NET_MODE):
                 continue
             matched = True
             break

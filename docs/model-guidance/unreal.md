@@ -34,14 +34,14 @@
 - 매크로는 사용 목적 → 사용처/바인딩 → 적용 엔진의 헤더 선언·부모 계약 순서로 확인한다. 본문/부분 발췌에 없다고 누락으로 단정하지 않는다. 여러 줄 지정자를 포함해 선언을 읽고 누락·부적합·정상·근거 부족을 구분한다.
 - UPROPERTY는 GC 추적·직렬화·에디터/Blueprint 노출·복제 목적을 구분한다. 일반 C++ 멤버에 일괄 추가하거나 비소유 참조를 근거 없이 강한 참조로 바꾸지 않는다.
 - UFUNCTION은 Blueprint/RPC/RepNotify/리플렉션 호출 목적과 시그니처를 확인한다. Exec는 콘솔 노출이며 OnRep의 일반 표기가 아니다. BlueprintPure는 실제 상태 변경 여부와 대조한다. 부모의 리플렉션 계약과 native override를 확인하고 중복 선언하지 않는다.
-- ReplicatedUsing 선언, OnRep, 복제 등록, 객체의 복제 설정을 연결한다. 선언만으로 원격 호출을 증명하지 않는다. 관련 오류 사례는 debugging.md를 참고한다.
+- ReplicatedUsing 선언, OnRep, 복제 등록, 객체의 복제 설정을 연결한다. 선언만으로 원격 호출을 증명하지 않으며, OnRep의 일반 C++ 직접 호출 자체를 계약 위반으로 보지 않는다. 상태 변경과 로컬·원격 효과가 실제로 누락·중복되는지 확인한다.
 - Delegate는 native/dynamic, single/multicast와 실제 바인딩을 대조한다. AddDynamic 대상의 UFUNCTION 등록·시그니처, 중복 등록·해제 책임·늦은 호출을 확인한다. BindUObject 등 native 바인딩에 UFUNCTION을 일괄 요구하지 않는다.
 - FORCEINLINE은 성능·정의 가시성·호출 위치·코드 크기 판단이다. 헤더 정의의 ODR을 위한 inline 여부와 최적화 강도를 구분한다. 작은 함수라는 이유로 FORCEINLINE을 필수로 취급하지 않는다.
 - 변경 후 쓰기 결과의 hunk(`changeEvidence`)가 실제 diff 근거다. 충돌·hunk 누락 때만 그 범위를 다시 읽는다. 필요한 UHT·빌드를 변경 단위로 검증하고, 빌드 성공과 실제 바인딩·복제·수명 동작을 구분한다.
 - Trace는 대상 Object Type, 채널 응답, 가림, 자신 제외, 판정 위치·시각을 같이 확인한다.
 - Build.cs 의존성과 Public/Private 노출, Runtime/Editor 경계를 구분한다. 헤더 경로를 추측하며 엔진 소스를 수정하지 않는다.
 - 빈 OnRep나 native override도 부모 호출·다른 소비자가 있으면 정상일 수 있다. 공개 필드·RPC·delegate를 제거/변경할 때 Blueprint·에셋·직렬화 호환성을 확인한다. C++ 검색 결과만으로 모든 사용처가 없다고 단정하지 않는다.
-- Editor 빌드 성공과 Server/Shipping 대상, standalone 역할 분기와 실제 연결된 클라이언트 검증을 구별한다. 서버 상태 결정·예측·복제·표시는 각 책임 경로에서 확인한다.
+- Editor 빌드 성공과 Server/Shipping 대상, standalone 역할 분기와 실제 연결된 클라이언트 검증을 구별한다. 예측 상태의 판단 기준은 Unreal 네트워크 지침의 권한 절을 따른다.
 <!-- /guidance-section: api -->
 
 <!-- guidance-section: responsibility -->

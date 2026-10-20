@@ -41,6 +41,25 @@ def test_lifecycle_and_denylist_tables_come_from_the_contract_source():
     assert lifecycle.LIFECYCLE_CONTRACT_STATUS == "available"
 
 
+@pytest.mark.parametrize("source", [
+    "void ACombatWeapon::MulticastShot_Implementation() { if (GetNetMode() != NM_DedicatedServer) SpawnEffect(); }",
+    "class ACombatWeapon : public AActor { void Show() { if (GetNetMode() == NM_Client) return; } };",
+    "void ACombatWeapon::Show() { auto Mode = this->GetNetMode(); }",
+    "void Show(UWorld* World) { auto Mode = World->GetNetMode(); }",
+    # Without class/translation-unit resolution a free-looking call is unknown,
+    # not proof of an invented API (it may be user-defined too).
+    "void Show() { auto Mode = GetNetMode(); }",
+])
+def test_real_netmode_api_is_not_rejected_from_a_bare_token(source):
+    assert not unreal_api_denylist.check_denylist(source)
+
+
+def test_ambiguous_netmode_call_does_not_hide_known_bad_lifecycle():
+    terms = {hit["term"] for hit in unreal_api_denylist.check_denylist(
+        "void UExample::OnWorldDestroyed() { auto Mode = GetNetMode(); }")}
+    assert "onworlddestroyed" in terms
+
+
 @pytest.mark.parametrize("mutate, message", [
     (lambda d: d["contracts"].append(copy.deepcopy(d["contracts"][0])), "duplicate contract id"),
     (lambda d: d["contracts"][0].update(evidenceRefs=[]), "needs engine source evidence"),

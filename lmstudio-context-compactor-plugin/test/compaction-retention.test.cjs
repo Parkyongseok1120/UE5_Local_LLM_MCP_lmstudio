@@ -141,6 +141,26 @@ test("per-round data sits before the newest complete tool exchange, keeping earl
 // Measured on the hybrid-attention model (plan W-P1): the server reused the
 // prefix only when each input extended the previous one exactly. With the
 // execution's shown blocks, every round's input is a prefix of the next.
+test("same-anchor retries append new observations without rewriting already shown blocks", () => {
+  const { composeModelHistory } = require("../dist/context-manager");
+  const config = readConfig({ getPluginConfig() { return { get: () => undefined }; } });
+  const history = Chat.from([{ role: "system", content: "system" }, { role: "user", content: "request" }]);
+  const shown = new Map();
+  const compose = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts, shown);
+  const first = compose(["observation A"]);
+  shown.set(first.dataBlock.anchor, first.dataBlock.parts);
+  const retry = compose(["observation B"]);
+  assert.deepEqual(shown.get("user"), ["observation A"], "candidate assembly cannot commit state");
+  assert.deepEqual(retry.dataBlock.parts, ["observation A", "observation B"]);
+  assert.deepEqual(retry.history.getMessagesArray().map(m => m.getText()),
+    ["system\n\nscope", "observation A", "observation B", "request"]);
+  shown.set(retry.dataBlock.anchor, retry.dataBlock.parts);
+  const repeat = compose(["observation B"]);
+  assert.equal(repeat.dataBlock, undefined, "unchanged retries do not accumulate data");
+  assert.equal(repeat.history.toString(), retry.history.toString());
+  assert.equal(history.length, 2);
+});
+
 test("with shown data blocks each round's model input is an exact prefix of the next", () => {
   const { composeModelHistory } = require("../dist/context-manager");
   const config = readConfig({ getPluginConfig() { return { get: () => undefined }; } });

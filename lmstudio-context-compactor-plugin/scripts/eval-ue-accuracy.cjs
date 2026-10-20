@@ -1,22 +1,25 @@
 #!/usr/bin/env node
 "use strict";
 // Plan §5 / W-A2: real-model accuracy on the synthetic UE normal/defect pairs.
-// One variable per comparison: design guidance off vs auto on the same build.
+// Compare off/auto on one build, or the same cases against a preserved runtime.
 // Usage: node scripts/eval-ue-accuracy.cjs --model <id> --reps 1 --output <new-file>
 // [--cases P1-N,P3-D,P7] [--groups off,auto] [--seed-base 7000]
-// [--engine-root <verified-engine>] [--resume] [--pause-ms <ms> [--pause-at run|rep]]
+// [--engine-root <verified-engine>] [--runtime-root <preserved-plugin-root>]
+// [--resume] [--pause-ms <ms> [--pause-at run|rep]]
 // Raw output is local-only: it contains full visible answers and source excerpts.
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { Chat, ChatMessage, LMStudioClient, rawFunctionTool } = require("@lmstudio/sdk");
-const { createPredictionLoopHandler } = require("../dist/prediction-loop.js");
 const fixture = require("./ue-accuracy-fixture.cjs");
 
 const valueAfter = (flag, fallback) => { const i = process.argv.indexOf(flag); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback; };
+// Compare the same fixture/runner against a preserved dirty-tree runtime.
+const runtimeRoot = path.resolve(valueAfter('--runtime-root', path.resolve(__dirname, '..')));
+const { createPredictionLoopHandler } = require(path.join(runtimeRoot, 'dist/prediction-loop.js'));
 // Actual installed source backs this bounded evaluation catalog. This is not a
 // substitute for the production MCP/GUI integration checks.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function createEngineLookup(engineRoot) {
   const build = JSON.parse(fs.readFileSync(path.join(engineRoot, 'Engine/Build/Build.version'), 'utf8'));
@@ -55,6 +58,26 @@ function caseHandlers(entry, engineLookup) {
     read_file_range: args => allowed.has(String(args.path).replace(/^project:\/\//u, ''))
       ? fixture.readPayload(args.path, args.startLine, args.endLine)
       : { ok: false, errorCode: 'NOT_IN_CASE', message: 'Only the current scenario files are available.' },
+    search_files: ({ query, cursor, maxResults = 4 }) => {
+      if (typeof query !== 'string' || !query || !Number.isSafeInteger(maxResults) || maxResults < 1 || maxResults > 10)
+        return { ok: false, errorCode: 'INVALID_SEARCH' };
+      const scope = hash(JSON.stringify([entry.files, query]));
+      let offset = 0;
+      if (cursor) {
+        const match = /^([a-f0-9]{64}):(\d+)$/u.exec(String(cursor));
+        if (!match || match[1] !== scope || !Number.isSafeInteger(Number(match[2])))
+          return { ok: false, errorCode: 'INVALID_CURSOR' };
+        offset = Number(match[2]);
+      }
+      const matches = entry.files.flatMap(file => fixture.FILES.get(file).lines.flatMap((text, index) =>
+        text.includes(query) ? [{ path: `project://${file}`, line: index + 1, text }] : []));
+      if (offset > matches.length) return { ok: false, errorCode: 'INVALID_CURSOR' };
+      const results = matches.slice(offset, offset + maxResults), next = offset + results.length;
+      const truncated = next < matches.length;
+      return { ok: true, query, scope: entry.folder, results, matchesReturned: results.length,
+        matchesOmitted: matches.length - next, truncated, coverage: truncated ? 'partial' : 'complete',
+        absenceVerified: matches.length === 0, ...(truncated ? { nextCursor: `${scope}:${next}` } : {}) };
+    },
     unreal_symbol_lookup: ({ symbol }) => engineLookup(symbol),
   };
 }
@@ -82,6 +105,13 @@ function tools(recorder, entry, engineLookup) {
     implementation: invoke('read_file_range'),
   });
   for (const tool of [listFiles, readRange]) tool.pluginIdentifier = "mcp/unreal-agent";
+  const search = rawFunctionTool({
+    name: 'search_files', description: 'Search an exact, case-sensitive text in the current scenario files. Results may be paginated; scope excludes assets and other scenarios.',
+    parametersJsonSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1 },
+      cursor: { type: 'string' }, maxResults: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['query'], additionalProperties: false },
+    implementation: invoke('search_files'),
+  });
+  search.pluginIdentifier = 'mcp/unreal-agent';
   const engineTool = rawFunctionTool({
     name: "unreal_symbol_lookup",
     description: `Read verified installed engine excerpts. Symbols: ${[...new Set(Object.values(fixture.SOURCES).filter(item => item.kind === 'engine_source').map(item => item.symbol))].join(', ')}. Other symbols are unavailable in this evaluation.`,
@@ -89,7 +119,7 @@ function tools(recorder, entry, engineLookup) {
     implementation: invoke('unreal_symbol_lookup'),
   });
   engineTool.pluginIdentifier = "mcp/unreal-rag";
-  return [listFiles, readRange, engineTool];
+  return [listFiles, readRange, search, engineTool];
 }
 
 function controller(history, tokenSource, session, overrides) {
@@ -124,6 +154,16 @@ function parseVerdict(answer) {
   return { label: line[1], severity: line[2] === 'none' ? null : line[2], parsed: true };
 }
 
+function observeModelInput(chat) {
+  const messages = chat.getMessagesArray();
+  const instructions = messages.filter(message => message.isSystemPrompt()).map(message => message.getText()).join('\n');
+  return { systemSha256: hash(instructions),
+    guidanceIdsInSystem: [...instructions.matchAll(/\[reference id=([^\s\]]+)/gu)].map(match => match[1]),
+    toolResults: messages.flatMap(message => message.getToolCallResults()).map(result => ({
+      toolCallId: result.toolCallId, contentSha256: hash(result.content), contentChars: result.content.length,
+    })) };
+}
+
 async function oneRun(model, entry, group, seed, engineLookup) {
   const recorder = { calls: [] };
   const history = Chat.empty();
@@ -136,10 +176,12 @@ async function oneRun(model, entry, group, seed, engineLookup) {
     content: JSON.stringify(engineLookup("AActor")) }] }));
   history.append("assistant", `The installed engine source is Unreal Engine ${fixture.ENGINE_BUILD.version}.`);
   history.append("user", `${entry.question}\n${VERDICT_LINE}`);
-  const predictions = [], turnMessages = [];
+  const predictions = [], turnMessages = [], inputObservations = [];
   const fixedModel = { identifier: model.identifier, getContextLength: () => model.getContextLength(),
     applyPromptTemplate: (chat, options) => model.applyPromptTemplate(chat, options), countTokens: text => model.countTokens(text),
-    act: (chat, actTools, options) => model.act(chat, actTools, { ...options, temperature: 0, seed,
+    act: (chat, actTools, options) => {
+      inputObservations.push({ ordinal: inputObservations.length + 1, ...observeModelInput(chat) });
+      return model.act(chat, actTools, { ...options, temperature: 0, seed,
       onMessage(message) { turnMessages.push(message); options.onMessage?.(message); },
       onPredictionCompleted(result) {
         // Store settings and counters, never reasoningContent or hidden text.
@@ -148,7 +190,7 @@ async function oneRun(model, entry, group, seed, engineLookup) {
           loadConfig: result.loadConfig, predictionConfig: result.predictionConfig });
         options.onPredictionCompleted?.(result);
       },
-    }) };
+    }); } };
   const session = { tools: tools(recorder, entry, engineLookup), [Symbol.dispose]() {} };
   // "off" uses the product's own disable switch (a zero guidance budget).
   const config = group === "off" ? { designGuidanceMode: "auto", designGuidanceMaxTokens: 0 } : { designGuidanceMode: "auto" };
@@ -177,7 +219,7 @@ async function oneRun(model, entry, group, seed, engineLookup) {
     guidanceIncludedRounds: guidance.filter(value => value.outcome === "included").length,
     guidanceSelectedIds: [...new Set(guidance.flatMap(value => value.selectedIds || []))],
     guidanceTopics: [...new Set(guidance.map(value => `${value.primaryTopic || ""}/${value.supplementTopic || ""}`))],
-    answer, answerTail: answer.slice(-600), followup, calls: recorder.calls, predictions,
+    answer, answerTail: answer.slice(-600), followup, calls: recorder.calls, predictions, inputObservations,
     roundObservations: rounds, guidanceObservations: guidance,
     seedVerification: predictions.length && predictions.every(prediction => prediction.predictionConfig?.fields
       ?.some(field => field.key === 'llm.prediction.seed')) ? 'returned_by_runtime' : 'requested_only_not_returned_by_runtime',
@@ -195,9 +237,9 @@ function validateResume(saved, identity) {
 }
 
 function assertBuiltIdentity() {
-  const source = require('./build-runtime-identity.cjs').renderIdentity(path.resolve(__dirname, '..'));
+  const source = require('./build-runtime-identity.cjs').renderIdentity(runtimeRoot);
   const expected = source.match(/ef-build-v2-[a-f0-9]{64}/u)?.[0];
-  if (expected !== require('../dist/generated-runtime-identity.js').LOADED_BUILD_ID)
+  if (expected !== require(path.join(runtimeRoot, 'dist/generated-runtime-identity.js')).LOADED_BUILD_ID)
     throw new Error('Compiled evaluation build is stale. Run npm run build before evaluating.');
 }
 
@@ -252,7 +294,8 @@ async function main() {
     promptTemplateProbeSha256: hash(await model.applyPromptTemplate(Chat.from([
       { role: 'system', content: 'Evaluation identity probe.' }, { role: 'user', content: 'Probe.' },
     ]))),
-    buildId: require('../dist/generated-runtime-identity.js').LOADED_BUILD_ID,
+    buildId: require(path.join(runtimeRoot, 'dist/generated-runtime-identity.js')).LOADED_BUILD_ID,
+    runtimeRoot,
     fixtureSha256: hash(fs.readFileSync(require.resolve('./ue-accuracy-fixture.cjs'))),
     runnerSha256: hash(fs.readFileSync(__filename)), engine: fixture.ENGINE_BUILD, engineRoot,
     sdkVersion: JSON.parse(fs.readFileSync(path.resolve(path.dirname(require.resolve('@lmstudio/sdk')), '../package.json'), 'utf8')).version,
@@ -300,4 +343,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(error); process.exit(1); });
-module.exports = { SCHEMA_VERSION, hash, parseVerdict, caseHandlers, createEngineLookup, validateResume, assertConsistentSettings };
+module.exports = { SCHEMA_VERSION, hash, parseVerdict, caseHandlers, createEngineLookup, validateResume, assertConsistentSettings, observeModelInput };

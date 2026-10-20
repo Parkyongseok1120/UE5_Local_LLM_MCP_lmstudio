@@ -6,7 +6,8 @@ import {
 } from "@lmstudio/sdk";
 import { BudgetBroker } from "./budget-broker";
 import { boundPastReasoning, resolveGenerationBudget, selectMeasuredCandidate } from "./context-budget";
-import { core, inputAvailability, modelNotes, workingContextModule } from "./context-ports";
+import { core, inputAvailability, modelNotes, workingContextModule, REASONING_SEPARATOR } from "./context-ports";
+import { stripInternalDataEcho } from "./internal-data-output";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { numeric } from "./execution-config";
 import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, type DirectConfig, type NormalizedMessage } from "./execution-contracts";
@@ -232,7 +233,7 @@ export function composeModelHistory(
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
-    return { history, overhead: 0 };
+    return { history, overhead: 0, privateDataParts: [] as string[] };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -283,9 +284,13 @@ export function composeModelHistory(
   let dataBlock: { anchor: string; parts: string[] } | undefined;
   if (shownBlocks && slotAnchor) {
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
-    if (!blocks.has(slot)) {
-      const parts = unshownParts(runtimeParts, [...blocks.values()].flat());
-      if (parts.length) { blocks.set(slot, parts); dataBlock = { anchor: slotAnchor, parts }; }
+    // A reasoning retry can produce a new observation without a new tool
+    // exchange/anchor. Keep everything already shown, then append only the
+    // missing parts; otherwise that observation is silently lost on the retry.
+    const fresh = unshownParts(runtimeParts, [...blocks.values()].flat());
+    if (fresh.length) {
+      const parts = [...(blocks.get(slot) || []), ...fresh];
+      blocks.set(slot, parts); dataBlock = { anchor: slotAnchor, parts };
     }
   } else blocks.set(slot, runtimeParts);
   if (slot < 0) for (const part of runtimeParts) composed.append("assistant", part);
@@ -293,7 +298,9 @@ export function composeModelHistory(
     for (const part of blocks.get(index) || []) composed.append("assistant", part);
     if (!message.isSystemPrompt()) composed.append(message);
   });
-  return { history: composed, overhead, ...(dataBlock ? { dataBlock } : {}) };
+  const privateDataParts = [...blocks.values()].flat().filter(part =>
+    part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data"));
+  return { history: composed, overhead, privateDataParts, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
@@ -331,14 +338,18 @@ function runtimeSlotIndex(messages: ReadonlyArray<ChatMessage>, latestUser: numb
   return complete ? newestRequest : latestUser;
 }
 
-export function modelHistoryMessage(message: ChatMessage): ChatMessage {
+export function modelHistoryMessage(message: ChatMessage, internalDataParts: readonly string[] = []): ChatMessage {
   if (!message.isAssistantMessage() || !message.getText()) return message;
   const extracted = modelNotes.splitVisibleAnswer(message.getText());
-  if (!extracted.hasFooter || extracted.visibleText === message.getText()) return message;
+  const separator = extracted.visibleText.lastIndexOf(REASONING_SEPARATOR);
+  const split = separator < 0 ? 0 : separator + REASONING_SEPARATOR.length;
+  const text = extracted.visibleText.slice(0, split)
+    + stripInternalDataEcho(extracted.visibleText.slice(split), internalDataParts);
+  if (text === message.getText()) return message;
   const copy = ChatMessage.from(message);
   // Keep the SDK's raw reasoning/non-reasoning serialization for the next
-  // tool round. Only the private continuity footer is removed from model input.
-  copy.replaceText(extracted.visibleText);
+  // tool round. Remove the private footer and automatic data echoes from prose.
+  copy.replaceText(text);
   return copy;
 }
 

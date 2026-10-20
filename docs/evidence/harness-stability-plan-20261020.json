@@ -1,0 +1,612 @@
+{
+  "schemaVersion": 1,
+  "mode": "architecture",
+  "baselineHead": "eb476dfc4b4f25bfdd62e5193bc00c8ae1523ad5",
+  "existing": [
+    "Existing stream/fallback/history/transaction own presentation and next-round boundaries.",
+    "ShownDataBlocks and reference-context own anchored observations.",
+    "Read/write/hash/snapshot/receipt/permission and eval/install owners already exist."
+  ],
+  "proposed": [
+    "W0 fix baseline and correlate GUI events.",
+    "W1 prevent automatic metadata exposure and next-round re-entry.",
+    "W2 measure snapshot cost and verify live same-anchor reachability before lifecycle changes.",
+    "W3 conservatively correct GetNetMode advisory.",
+    "W4/W5 simplify evidence use and structural validation remediation.",
+    "W6 isolate refill causes and measure actual read overlap before optimization.",
+    "W7 focused regression, controlled model comparison, GUI and install/release verification."
+  ],
+  "doNotDuplicate": [
+    "No new truth classifier, state database, benchmark framework or completion gate.",
+    "Do not reimplement whole-read refusal, locator guidance, prefix repair or permission/hash/receipt gates."
+  ],
+  "invariants": [
+    "Preserve normal prose, intentional user quotations and complete tool pairs.",
+    "Source observations never authorize edits.",
+    "Do not relabel severity or intent to satisfy a structural schema.",
+    "Preserve append-only prefix advantage and verify semantic freshness."
+  ],
+  "impactedSurfaces": [
+    "Output stream/fallback/history normalization/transaction commit",
+    "Reference rendering/anchored data/input preparation",
+    "Unreal denylist/advisory",
+    "Evidence-first descriptions/errors",
+    "Existing eval/telemetry/install/release checks"
+  ],
+  "validationPlan": [
+    "Linked plan defines W0-W7 owners, acceptance, counterexamples and rollback.",
+    "Focused regression precedes full tests, then sequential paired model and actual GUI checks.",
+    "Unknown GUI activation, same-anchor reachability and refill cause remain unknown until observed."
+  ],
+  "claims": [
+    {
+      "claim": "내부 refs/derived data를 모델이 일반 출력하면 stream/fallback이 그대로 표시한다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#node.results[0:2]",
+          "observation": "Seven-character fragments and nonstream fallback preserve both metadata blocks."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:111",
+          "observation": "Visible stream protects only continuity footer."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "prediction-stream.ts:133",
+          "symbol": "onFragment"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "prediction-stream.ts:111",
+          "symbol": "streamVisible"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "prediction-stream.ts:104",
+          "symbol": "answerBlock.appendText"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "test/prediction-loop.test.cjs:5096",
+          "observation": "Existing non-echo fake-model test proves direct injection is not displayed."
+        }
+      ],
+      "unknowns": [
+        "Actual GUI event-to-fragment correlation is not established."
+      ]
+    },
+    {
+      "claim": "완료된 assistant의 refs 재출력은 다음 라운드용 이력에도 남는다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#node.results[2]",
+          "observation": "planningCommitted, normalizerRetainsMetadata and durableRetainsMetadata are true."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:816",
+          "observation": "Completed normalized messages are appended to workingHistory."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "context-manager.ts:334",
+          "symbol": "modelHistoryMessage"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "execution-state.ts:84",
+          "symbol": "RoundTransaction.durable"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "prediction-loop.ts:817",
+          "symbol": "workingHistory.append"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "context-manager.ts:269",
+          "observation": "Direct input injection is intentionally not persistent; generated echo follows a different path."
+        }
+      ],
+      "unknowns": [
+        "Host conversation database persistence is not measured."
+      ]
+    },
+    {
+      "claim": "append-only 참조 입력에 이전 스냅샷과 최신 스냅샷이 함께 보존된다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#node.results[3]",
+          "observation": "20 exchanges retain 21 snapshots, 13745 characters, both hash_0 and hash_20."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:284",
+          "observation": "Old anchored parts remain; other parts deduplicate verbatim."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Behavior_Latency_Final_Plan_20261019.md:284",
+          "observation": "Append-only layout is intentional cache reuse repair with replay benefit."
+        }
+      ],
+      "unknowns": [
+        "Actual token cost, semantic impact and contribution to the three full refills are unmeasured."
+      ]
+    },
+    {
+      "claim": "같은 anchor의 새 사실 누락은 합성 재현됐으나 실사용 도달성은 미확인이다.",
+      "claimType": "data_flow",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#node.results[4]",
+          "observation": "With identical history, fact A remains and changed fact B is omitted."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:286",
+          "observation": "New parts are assembled only when current slot lacks a shown block."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "context-manager.ts:223",
+          "symbol": "shownBlocks with changed runtimeFacts"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "context-manager.ts:286",
+          "symbol": "blocks.has(slot)"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "read-only-probes.cjs",
+          "symbol": "fact B absent"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "unknown",
+          "location": "prediction-loop.ts",
+          "symbol": "live recovery caller reachability"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "test/compaction-retention.test.cjs:144",
+          "observation": "Existing advancing-exchange prefix test does not prove same-anchor live reachability."
+        }
+      ],
+      "unknowns": [
+        "Need reachable recovery/replanning/finalization sequence before classifying as live failure."
+      ]
+    },
+    {
+      "claim": "Actor 상속 멤버 GetNetMode의 정상 호출에 getnetmode_free 경고가 발생한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#denylistProbes",
+          "observation": "Bare Actor-derived call warns; explicit this and world receiver controls do not."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/unreal_api_denylist.py:419",
+          "observation": "Bare-token regex and UWorld-only explanation."
+        },
+        {
+          "kind": "framework_source",
+          "location": "UE_5.7/Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:3159",
+          "observation": "AActor declares ENetMode GetNetMode() const; implementation line 4986."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "unreal_api_denylist.py:509",
+          "symbol": "check_denylist"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "unreal_api_denylist.py:524",
+          "symbol": "explicit receiver check misses inherited implicit this"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "mutation-semantic-guard.js:111",
+          "symbol": "non-blocking advisory"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#denylistProbes[3]",
+          "observation": "Unknown free context also warns; invalid and unknown contexts must remain distinguishable."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/mutation-semantic-guard.js:114",
+          "observation": "blocking=false; permission gate remains separate."
+        }
+      ],
+      "unknowns": [
+        "Bare token alone cannot establish call validity for all translation units."
+      ]
+    },
+    {
+      "claim": "첨부에는 가상 엔진 멤버 수정, OnRep 계약 오판, 검증 등급 변경이 관찰된다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "supplied conversation:1053-1127",
+          "observation": "Assumed members added; compiler reports C2065."
+        },
+        {
+          "kind": "runtime",
+          "location": "supplied conversation:1308-1346",
+          "observation": "Retries change verdict/severity without new semantic evidence."
+        },
+        {
+          "kind": "framework_source",
+          "location": "UE_5.7/Engine/Source/Runtime/Engine/Private/PlayerState.cpp:258",
+          "observation": "Engine directly invokes OnRep_PlayerName."
+        },
+        {
+          "kind": "framework_source",
+          "location": "UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:3390",
+          "observation": "Inspected TakeDamage implementation dispatches damage/events and returns ActualDamage; no assumed health store in function."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "supplied conversation:1229-1283",
+          "observation": "Transcript reports rollback and successful rebuild."
+        }
+      ],
+      "unknowns": [
+        "Historical removal of the assumed APIs is not proven.",
+        "Gameplay runtime was not verified."
+      ]
+    },
+    {
+      "claim": "서버 로그 12회 요청은 합산 약49.9 tokens/s이며 중간 재처리의 단일 원인은 미확정이다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "supplied server log:84-1047",
+          "observation": "Twelve timing pairs: 23220 generated tokens; 465263.67 ms generation; 250234.03 ms prompt processing."
+        },
+        {
+          "kind": "runtime",
+          "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json#serverMetrics",
+          "observation": "Tasks 12336/13276/13689 total 177066.23 ms prompt processing."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "supplied server log:125-464,893-1052",
+          "observation": "Eight other requests have small prompt evaluation; reuse is not globally broken."
+        }
+      ],
+      "unknowns": [
+        "SDK/server join and cache/runtime/input change causes are not fully linked.",
+        "This log is not proven to cover the whole pasted conversation."
+      ]
+    },
+    {
+      "claim": "기존 읽기·prefix 수정은 구현됐고 현재 게임 checkout과 실제 GUI 활성화는 과거 보고와 구분해야 한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:165",
+          "observation": "Implicit source whole read refused; explicit recovery windows preserved."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js:42",
+          "observation": "Default non-source whole-read threshold 8 KiB."
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/Harness_Eval_Read_Repair_20261019.md",
+          "observation": "Corrected full paired evaluation and GUI end-to-end checks remain open."
+        },
+        {
+          "kind": "runtime",
+          "location": "game checkout observation 2026-10-20",
+          "observation": "HEAD 766146c clean; current SetCombatState directly calls OnRep_CombatState; helper absent."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "supplied conversation:1281-1283",
+          "observation": "Transcript ends with a different helper-refactor state."
+        }
+      ],
+      "unknowns": [
+        "Actual GUI loaded build identity is not verified."
+      ]
+    }
+  ],
+  "observations": {
+    "date": "2026-10-20",
+    "node": {
+      "syntheticOnly": true,
+      "modelCalls": 0,
+      "results": [
+        {
+          "case": "seven_character_stream",
+          "containsRefs": true,
+          "containsDerivedData": true,
+          "exactOutputPreserved": true
+        },
+        {
+          "case": "nonstream_fallback",
+          "containsRefs": true,
+          "containsDerivedData": true
+        },
+        {
+          "case": "completed_echo_next_round_history",
+          "planningCommitted": true,
+          "normalizerRetainsMetadata": true,
+          "durableRetainsMetadata": true,
+          "hostPersistence": "not_measured"
+        },
+        {
+          "case": "twenty_completed_exchanges",
+          "retainedSnapshots": 21,
+          "metadataChars": 13745,
+          "oldAndNewHashPresent": true,
+          "liveImpact": "not_measured"
+        },
+        {
+          "case": "same_anchor_changed_fact",
+          "oldFactPresent": true,
+          "newFactPresent": false,
+          "liveReachability": "not_verified"
+        }
+      ]
+    },
+    "denylistProbes": [
+      {
+        "case": "actor_derived_member",
+        "terms": [
+          "getnetmode_free"
+        ]
+      },
+      {
+        "case": "explicit_this",
+        "terms": []
+      },
+      {
+        "case": "world_receiver",
+        "terms": []
+      },
+      {
+        "case": "unknown_free_context",
+        "terms": [
+          "getnetmode_free"
+        ]
+      }
+    ],
+    "serverMetrics": {
+      "requestCount": 12,
+      "processedPromptTokens": 200113,
+      "promptMs": 250234.03,
+      "generatedTokens": 23220,
+      "generationMs": 465263.67,
+      "combinedMs": 715497.7,
+      "weightedGenerationTokensPerSecond": 49.907184887227494,
+      "promptShare": 0.3497342199702389,
+      "threeRefillTasks": [
+        12336,
+        13276,
+        13689
+      ],
+      "threeRefillPromptMs": 177066.23,
+      "requestToTranscriptJoin": "not_verified"
+    },
+    "serverTasks": [
+      {
+        "task": 8829,
+        "promptMs": 37489.93,
+        "promptTokens": 32303,
+        "generationMs": 17133.01,
+        "generationTokens": 966
+      },
+      {
+        "task": 9120,
+        "promptMs": 3188.18,
+        "promptTokens": 2283,
+        "generationMs": 13834.44,
+        "generationTokens": 847
+      },
+      {
+        "task": 9341,
+        "promptMs": 3837.3,
+        "promptTokens": 2735,
+        "generationMs": 80102.17,
+        "generationTokens": 3564
+      },
+      {
+        "task": 10598,
+        "promptMs": 7140.02,
+        "promptTokens": 5019,
+        "generationMs": 44548.81,
+        "generationTokens": 2285
+      },
+      {
+        "task": 11283,
+        "promptMs": 5472.26,
+        "promptTokens": 3699,
+        "generationMs": 41635.78,
+        "generationTokens": 2331
+      },
+      {
+        "task": 11915,
+        "promptMs": 6989.55,
+        "promptTokens": 4496,
+        "generationMs": 27883.02,
+        "generationTokens": 1418
+      },
+      {
+        "task": 12336,
+        "promptMs": 67334.49,
+        "promptTokens": 53428,
+        "generationMs": 61825.74,
+        "generationTokens": 2888
+      },
+      {
+        "task": 13276,
+        "promptMs": 70593.16,
+        "promptTokens": 55821,
+        "generationMs": 26200.62,
+        "generationTokens": 1386
+      },
+      {
+        "task": 13689,
+        "promptMs": 39138.58,
+        "promptTokens": 34050,
+        "generationMs": 48348.29,
+        "generationTokens": 2228
+      },
+      {
+        "task": 14472,
+        "promptMs": 3558.93,
+        "promptTokens": 2517,
+        "generationMs": 31994.78,
+        "generationTokens": 1736
+      },
+      {
+        "task": 14975,
+        "promptMs": 2910.81,
+        "promptTokens": 2005,
+        "generationMs": 26607.05,
+        "generationTokens": 1510
+      },
+      {
+        "task": 15392,
+        "promptMs": 2580.82,
+        "promptTokens": 1757,
+        "generationMs": 45149.96,
+        "generationTokens": 2061
+      }
+    ],
+    "sourceHashes": {
+      "lmstudio-context-compactor-plugin/src/prediction-stream.ts": "0b68298ff439af114f741d20fdcc5c45b325e25e5bbc7a9e884f9f4b67d87165",
+      "lmstudio-context-compactor-plugin/src/context-manager.ts": "ce1ccbc55a5fe179d5192a2e7af19225a10896a3f2ad15b79a537928f3bf4b82",
+      "lmstudio-context-compactor-plugin/src/execution-state.ts": "70212d0fd29436a415006d9196e242b1b1bc74b6a749de8cd59e40d38b76f273",
+      "lmstudio-context-compactor-plugin/src/prediction-loop.ts": "2f92547d2767dfef22f4c9693b5050effb0d53730829336370859e7c5233cb00",
+      "scripts/unreal_api_denylist.py": "1b2a37d85a3c7441eeadf053704ce34df6ce2b91298093ac4474e49fb667dfc7",
+      "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py": "5abffc0159e63889ca1fb948f3ab041508a9c03579b0ad1a0ceaf84ac42fc5e5"
+    },
+    "inputs": {
+      "conversation": {
+        "sha256": "cb513e37efc44ee7365b895111eedef55720e4e0635e2f2a60145a049e59c298",
+        "lineCount": 1390
+      },
+      "server": {
+        "sha256": "cf82b0ab2ab1171217a7a31b5cbbe2b2f47e428c24ef286998f02eab993cde68",
+        "lineCount": 1060
+      }
+    },
+    "probeSha256": "e60891099a8dfdc0e2cadc20f8a2f4b8c3d4b5d8b5142a34960c80f00ce7430a"
+  },
+  "localArtifacts": {
+    "report": {
+      "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probe-results.json",
+      "sha256": "da6d91a85db665f624e7ca70884ee205cf97a6360f71c6b95c1d778d2ecbddb1"
+    },
+    "probe": {
+      "location": "$USERPROFILE/.evidence-first/evaluations/harness-stability-20261020/read-only-probes.cjs",
+      "sha256": "e60891099a8dfdc0e2cadc20f8a2f4b8c3d4b5d8b5142a34960c80f00ce7430a"
+    }
+  },
+  "validationScope": "Structure validation does not certify semantic truth. Product implementation, model runs, Unreal builds, installation and release were not performed.",
+  "localBuildIdentity": {
+    "sourceAndCompiled": "ef-build-v2-4cf45cf9c625634b8e9b1aec4e1b526674691714427c42e4ad4edbd009b543d9",
+    "matches": true,
+    "guiLoadedIdentity": "not_verified"
+  },
+  "validationResults": {
+    "packetStructure": {
+      "ok": true,
+      "claimCount": 8,
+      "errors": 0,
+      "warnings": 0,
+      "factualEvidenceVerified": false,
+      "wholeTaskVerified": false
+    },
+    "modelCalls": 0,
+    "unrealBuilds": 0,
+    "productEdits": 0,
+    "installationChanges": 0,
+    "fullProductTestSuiteRun": false
+  }
+}

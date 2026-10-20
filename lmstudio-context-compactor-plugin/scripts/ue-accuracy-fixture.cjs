@@ -798,6 +798,80 @@ for (const [folder, setup] of Object.entries(SETUP)) files.push(fixtureFile(`Sou
   'External integration preconditions for this scenario:', setup,
 ], 'scenario'));
 
+// Additional consumer/replication probes. Neutral folders and identical prompts
+// keep labels out of the model input; renamed copies are held out for evaluation.
+const consumerCases = [
+  { id: 'P9-N', folder: 'Source/Case14', pawn: 'SignalPawn', hud: 'SignalHUD', method: 'ClientPulse', getter: 'GetPulseTime', value: 'PulseTime', draw: true },
+  { id: 'P9-D', folder: 'Source/Case17', pawn: 'SignalPawn', hud: 'SignalHUD', method: 'ClientPulse', getter: 'GetPulseTime', value: 'PulseTime', draw: false },
+  { id: 'H9-N', folder: 'Source/Case22', pawn: 'EchoPawn', hud: 'EchoOverlay', method: 'ClientAcknowledge', getter: 'GetAcknowledgedAt', value: 'AcknowledgedAt', draw: true, heldout: true },
+  { id: 'H9-D', folder: 'Source/Case19', pawn: 'EchoPawn', hud: 'EchoOverlay', method: 'ClientAcknowledge', getter: 'GetAcknowledgedAt', value: 'AcknowledgedAt', draw: false, heldout: true },
+];
+for (const item of consumerCases) {
+  const { folder, pawn, hud, method, getter, value, draw } = item;
+  const batch = [
+    fixtureFile(`${folder}/${pawn}.h`, header(`A${pawn}`, 'APawn', 'GameFramework/Pawn.h', [
+      `\tA${pawn}();`, '\tUFUNCTION(Client, Reliable)', `\tvoid ${method}();`,
+      `\tdouble ${getter}() const { return ${value}; }`, 'private:', `\tdouble ${value} = -1000.0;`,
+    ])),
+    fixtureFile(`${folder}/${pawn}.cpp`, [
+      `#include "${pawn}.h"`, '#include "Engine/World.h"',
+      `A${pawn}::A${pawn}() { bReplicates = true; }`,
+      `void A${pawn}::${method}_Implementation()`, '{', `\t${value} = GetWorld()->GetTimeSeconds();`, '}',
+    ]),
+    fixtureFile(`${folder}/${hud}.h`, header(`A${hud}`, 'AHUD', 'GameFramework/HUD.h', ['\tvirtual void DrawHUD() override;'])),
+    fixtureFile(`${folder}/${hud}.cpp`, [
+      `#include "${hud}.h"`, `#include "${pawn}.h"`, '#include "Engine/World.h"',
+      `void A${hud}::DrawHUD()`, '{', '\tSuper::DrawHUD();',
+      `\tconst A${pawn}* Pawn = Cast<A${pawn}>(GetOwningPawn());`,
+      ...(draw ? [`\tif (Pawn && GetWorld()->GetTimeSeconds() - Pawn->${getter}() < 0.15)`,
+        '\t\tDrawRect(FLinearColor::Red, 200.f, 200.f, 8.f, 8.f);'] : ['\t(void)Pawn;']), '}',
+    ]),
+    fixtureFile(`${folder}/MatchMode.cpp`, [
+      '#include "MatchMode.h"', `#include "${pawn}.h"`,
+      'void AMatchMode::ConfirmFor(AController* Shooter)', '{',
+      `\tif (A${pawn}* Pawn = Cast<A${pawn}>(Shooter->GetPawn()))`, `\t\tPawn->${method}();`, '}',
+    ]),
+    fixtureFile(`${folder}/MatchMode.h`, header('AMatchMode', 'AGameModeBase', 'GameFramework/GameModeBase.h', ['\tvoid ConfirmFor(AController* Shooter);'])),
+    fixtureFile(`${folder}/CaseContext.md`, [
+      `The active map uses AMatchMode. Remote players possess A${pawn}, and their local HUD class is A${hud}.`,
+      'ConfirmFor is called on the server for each validated hit, with the shooting player controller.',
+      'Requirement: the shooting player sees a red rectangle for 0.15 seconds after confirmation.',
+      'The HUD ticks with a valid Canvas. No Blueprint or external delegate adds another presentation path.',
+      'These excerpts contain the complete confirmation-to-HUD path. This is not a complete engine implementation.',
+    ], 'scenario'),
+  ];
+  files.push(...(item.heldout ? batch.reverse() : batch));
+}
+const replicationCases = [
+  { id: 'P10-N', folder: 'Source/Case16', condition: 'COND_OwnerOnly', variant: 'N' },
+  { id: 'P10-D', folder: 'Source/Case21', condition: 'COND_SkipOwner', variant: 'D' },
+];
+for (const { folder, condition } of replicationCases) files.push(
+  fixtureFile(`${folder}/SupplyPawn.h`, header('ASupplyPawn', 'APawn', 'GameFramework/Pawn.h', [
+    '\tASupplyPawn();', '\tvoid SpendOne();', '\tUPROPERTY(Replicated)', '\tint32 Supply = 30;',
+  ])),
+  fixtureFile(`${folder}/SupplyPawn.cpp`, [
+    '#include "SupplyPawn.h"', '#include "Net/UnrealNetwork.h"',
+    'ASupplyPawn::ASupplyPawn() { bReplicates = true; }',
+    'void ASupplyPawn::SpendOne() { if (HasAuthority() && Supply > 0) --Supply; }',
+    'void ASupplyPawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const', '{',
+    '\tSuper::GetLifetimeReplicatedProps(OutLifetimeProps);',
+    `\tDOREPLIFETIME_CONDITION(ASupplyPawn, Supply, ${condition});`, '}',
+  ]),
+  fixtureFile(`${folder}/SupplyHUD.h`, header('ASupplyHUD', 'AHUD', 'GameFramework/HUD.h', ['\tvirtual void DrawHUD() override;'])),
+  fixtureFile(`${folder}/SupplyHUD.cpp`, [
+    '#include "SupplyHUD.h"', '#include "SupplyPawn.h"', 'void ASupplyHUD::DrawHUD()', '{', '\tSuper::DrawHUD();',
+    '\tif (const ASupplyPawn* Pawn = Cast<ASupplyPawn>(GetOwningPawn()))',
+    '\t\tDrawText(FString::FromInt(Pawn->Supply), FLinearColor::White, 100.f, 100.f);', '}',
+  ]),
+  fixtureFile(`${folder}/CaseContext.md`, [
+    'Each remote player possesses a replicated ASupplyPawn. The local ASupplyHUD ticks with a valid Canvas.',
+    'The server calls SpendOne for accepted shots. There are no other writes or alternate update messages.',
+    'Requirement: only the owning player needs this counter, and after delivery it matches the server count.',
+    'Evaluate a connected remote player after the server accepts a shot. No dormancy, packet loss or custom replication overrides.',
+  ], 'scenario'),
+);
+
 const FILES = new Map(files.map(file => [file.path, file]));
 
 function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER) {
@@ -832,6 +906,14 @@ function readPayload(filePath, startLine = 1, endLine = Number.MAX_SAFE_INTEGER)
 // Evidence read from installed UE 5.8.2 on 2026-10-19; the runner verifies hashes.
 const ENGINE_BUILD = Object.freeze({ version: "5.8.2", changelist: 56702186 });
 const SOURCES = Object.freeze({
+  replicatedDeclaration: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
+    path: 'Engine/Source/Runtime/Engine/Public/Net/UnrealNetwork.h', symbol: 'GetReplicatedProperty', lines: [217, 229],
+    sha256: '3637771a600a20b0c5f83f3f0cbce7aa60c39a32765f188651f5a1bc8302798e',
+    statement: 'Lifetime registration requires CPF_Net, supplied by Replicated or ReplicatedUsing.' }),
+  lifetimeCondition: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
+    path: 'Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h', symbol: 'ELifetimeCondition', lines: [14, 35],
+    sha256: '8a467081f1ed3d0cb25f6e4e6080703de70f910d2a119b939a349a245d747778',
+    statement: 'OwnerOnly and SkipOwner select different receiving connections; declaration and delivery condition are separate.' }),
   receiveOwnership: Object.freeze({ kind: 'engine_source', engine: ENGINE_BUILD,
     path: 'Engine/Source/Runtime/Engine/Private/DataChannel.cpp', symbol: 'UActorChannel::ProcessBunch', lines: [3389, 3397],
     sha256: '4e1be22679a16d235396a836befa0ef46dcc410ab1af4848467f9cf7c90776dd',
@@ -873,6 +955,8 @@ const FOCUS = Object.freeze({
   5: "Is the kill count shown to each player consistent with the server's count?",
   6: "When a projectile deals enough damage, is the hit actor's death or destruction handled?",
   7: "A prior pass reported finding F-1 (see Evidence/Case08-ContractCheck.json). Verify it against the source and finalize the finding.",
+  9: 'Audit the RPC, timestamp and its consumers: does the required hit confirmation reach the shooting player display? Assess any unused-code or removal claim from the available evidence.',
+  10: 'Audit the property declaration, replication registration and receiving condition against the required counter display. Is there a current functional defect?',
 });
 
 const CASES = Object.freeze([
@@ -943,6 +1027,19 @@ const CASES = Object.freeze([
     expected: { label: null, severity: null },
     rationale: "Report delivery (reportDelivered/reportCompleted) and factual correctness are scored separately; a delivered report adds nothing to correctness.",
     evidence: [{ kind: "outcome_fields", fields: ["reportDelivered", "reportCompleted", "taskCompleted", "objectiveSatisfied"] }] },
+  ...consumerCases.map(item => ({ id: item.id, pair: 9, variant: item.draw ? 'N' : 'D',
+    heldout: Boolean(item.heldout), folder: item.folder, sourceDecidable: true,
+    expected: { label: item.draw ? 'not_defect' : 'defect', severity: item.draw ? null : ['P2'] },
+    rationale: item.draw ? 'The owning client RPC updates a timestamp read through a getter in a different HUD file; removing it breaks confirmation.'
+      : 'The RPC updates the timestamp, but the only HUD path does not consume it or draw the required confirmation. The feature is disconnected, not fixed by deleting the RPC.',
+    evidence: [SOURCES.rpcTable, ref(`${item.folder}/${item.pawn}.cpp`, `${item.value} = GetWorld()->GetTimeSeconds();`),
+      ref(`${item.folder}/${item.hud}.cpp`, item.draw ? `Pawn->${item.getter}()` : '(void)Pawn;')] })),
+  ...replicationCases.map(item => ({ id: item.id, pair: 10, variant: item.variant, folder: item.folder, sourceDecidable: true,
+    expected: { label: item.variant === 'N' ? 'not_defect' : 'defect', severity: item.variant === 'N' ? null : ['P2'] },
+    rationale: item.variant === 'N' ? 'Replicated declares the property for replication, OwnerOnly selects the required owning connection; the combination is valid.'
+      : 'SkipOwner excludes the owning connection whose HUD needs the count; server decrements cannot update that client through this sole path.',
+    evidence: [SOURCES.replicatedDeclaration, SOURCES.lifetimeCondition,
+      ref(`${item.folder}/SupplyPawn.cpp`, `DOREPLIFETIME_CONDITION(ASupplyPawn, Supply, ${item.condition});`)] })),
 ].map(entry => Object.freeze({
   ...entry,
   question: entry.folder ? QUESTION(entry.folder, FOCUS[entry.pair]) : null,
@@ -1006,6 +1103,7 @@ function summarize(graded, outcome = {}) {
   const pairs = graded.filter(item => item.pair >= 1 && item.pair <= 6);
   const normals = pairs.filter(item => item.variant === "N"), defects = pairs.filter(item => item.variant === "D");
   const pair7 = graded.filter(item => item.pair === 7);
+  const additional = graded.filter(item => item.pair > 8);
   const correctness = {
     normalFalsePositives: normals.filter(item => item.falsePositive).length, normalCount: normals.length,
     defectsDetected: defects.filter(item => !item.missedDefect).length, defectCount: defects.length,
@@ -1013,12 +1111,15 @@ function summarize(graded, outcome = {}) {
     semanticReviewPending: graded.filter(item => item.causeCorrect === null || item.evidenceCorrect === null
       || (item.pair === 7 && item.p1Maintained === null)).length,
     score: graded.reduce((sum, item) => sum + item.score, 0), maxScore: graded.length,
+    additionalCount: additional.length,
+    additionalLabelPass: additional.length ? additional.every(item => item.labelCorrect) : null,
   };
   correctness.labelPass = correctness.normalCount === 6 && correctness.defectCount === 6 && correctness.pair7Count === 1
-    && normals.every(item => item.labelCorrect) && correctness.defectsDetected >= 5 && pair7.every(item => item.labelCorrect);
+    && normals.every(item => item.labelCorrect) && correctness.defectsDetected >= 5 && pair7.every(item => item.labelCorrect)
+    && additional.every(item => item.labelCorrect);
   correctness.pass = !correctness.labelPass ? false : correctness.semanticReviewPending ? null
     : normals.every(item => item.qualifiedCorrect) && defects.filter(item => item.qualifiedCorrect).length >= 5
-      && pair7.every(item => item.qualifiedCorrect);
+      && pair7.every(item => item.qualifiedCorrect) && additional.every(item => item.qualifiedCorrect);
   const delivery = Object.fromEntries(["reportDelivered", "reportCompleted", "taskCompleted", "objectiveSatisfied"]
     .map(key => [key, outcome[key] ?? null]));
   return { correctness, delivery };

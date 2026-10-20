@@ -154,14 +154,18 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         if neutral_verdict != neutral_severity:
             errors.append(
                 f"{path} {NEUTRAL_VERDICT} verdict and {NEUTRAL_SEVERITY} severity "
-                "must be used together"
+                "must be used together. For a verified neutral edit/build result, use its receipt directly "
+                "or architecture mode with Confirmed/Info and an appropriate non-codegen claimType. "
+                "Do not lower severity to P3 or select ByDesign merely to pass validation."
             )
         if neutral_verdict and (
             mode != NEUTRAL_MODE or claim_type in NEUTRAL_EXCLUDED_CLAIM_TYPES
         ):
             errors.append(
                 f"{path} {NEUTRAL_VERDICT}/{NEUTRAL_SEVERITY} is limited to verified "
-                f"non-codegen facts in {NEUTRAL_MODE} mode"
+                f"non-codegen facts in {NEUTRAL_MODE} mode. Report routine edit/build receipts directly; "
+                "if a neutral packet is useful, change its mode and describe the observed result with a "
+                "non-codegen claimType. Do not change the factual verdict or severity to satisfy the schema."
             )
         if neutral_verdict and proof not in VERIFIED_PROOF_LEVELS:
             errors.append(
@@ -210,13 +214,13 @@ def validate_packet(packet: Any) -> dict[str, Any]:
 
         behavioral = claim_type in BEHAVIORAL_CLAIM_TYPES
         if behavioral and (not isinstance(behavior, list) or len(behavior) < 3):
-            errors.append(f"{path} behavioral/wiring claim needs at least three behaviorPath stages")
+            errors.append(f"{path}.behaviorPath behavioral/wiring claim needs at least three behaviorPath stages")
         if behavioral and "entry" not in stages:
-            errors.append(f"{path} behavioral claim needs an entry stage")
+            errors.append(f"{path}.behaviorPath behavioral claim needs an entry stage")
         if behavioral and not stages.intersection({"decision", "dispatch"}):
-            errors.append(f"{path} behavioral claim needs a decision or dispatch stage")
+            errors.append(f"{path}.behaviorPath behavioral claim needs a decision or dispatch stage")
         if behavioral and not stages.intersection({"mutation", "side_effect", "observer"}):
-            errors.append(f"{path} behavioral claim needs a final effect or observer stage")
+            errors.append(f"{path}.behaviorPath behavioral claim needs a final effect or observer stage")
         ordered_final_stages = (
             {"mutation", "side_effect"}
             if claim_type == "wiring"

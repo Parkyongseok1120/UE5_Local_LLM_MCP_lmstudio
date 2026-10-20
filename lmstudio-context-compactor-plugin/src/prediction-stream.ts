@@ -3,6 +3,7 @@ import type {
   PredictionProcessContentBlockController,
   PredictionLoopHandlerController,
 } from "@lmstudio/sdk";
+import { InternalDataOutputFilter, stripInternalDataEcho } from "./internal-data-output";
 
 type SplitVisibleAnswer = (text: string) => {
   visibleText: string;
@@ -19,6 +20,7 @@ type StreamState = {
   sawFragment: boolean;
   finished: boolean;
   consumed: boolean;
+  dataFilter: InternalDataOutputFilter;
 };
 
 export type StreamedAssistant = {
@@ -71,6 +73,7 @@ export class PredictionStreamRenderer {
     private readonly splitVisibleAnswer: SplitVisibleAnswer,
     private readonly protectContinuityFooter: boolean,
     private readonly suppressReasoning = false,
+    private readonly internalDataParts: readonly string[] = [],
   ) {}
 
   private state(roundIndex: number): StreamState {
@@ -79,6 +82,7 @@ export class PredictionStreamRenderer {
       state = {
         rawVisible: "", pendingVisible: "", footerSeen: false,
         sawFragment: false, finished: false, consumed: false,
+        dataFilter: new InternalDataOutputFilter(this.internalDataParts),
       };
       this.states.set(roundIndex, state);
     }
@@ -100,6 +104,7 @@ export class PredictionStreamRenderer {
   }
 
   private appendVisible(state: StreamState, text: string, fragment: LLMPredictionFragmentWithRoundIndex): void {
+    text = state.dataFilter.push(text);
     if (!text) return;
     this.answerBlock(state).appendText(text, {
       tokensCount: fragment.tokensCount,
@@ -152,9 +157,12 @@ export class PredictionStreamRenderer {
     if (state.finished) return;
     state.finished = true;
     if (!state.footerSeen && state.pendingVisible) {
-      this.answerBlock(state).appendText(state.pendingVisible);
+      const visible = state.dataFilter.push(state.pendingVisible);
+      if (visible) this.answerBlock(state).appendText(visible);
       state.pendingVisible = "";
     }
+    const remaining = state.dataFilter.finish();
+    if (remaining) this.answerBlock(state).appendText(remaining);
     if (state.thinkingBlock) {
       state.thinkingBlock.setStyle({ type: "thinking", ended: true, title: "생각" });
     }
@@ -166,13 +174,13 @@ export class PredictionStreamRenderer {
     const entry = [...this.states.entries()]
       .sort(([left], [right]) => left - right)
       .find(([, state]) => state.sawFragment && !state.consumed);
-    if (!entry) return { streamed: false, visibleText: this.splitVisibleAnswer(rawText).visibleText };
+    if (!entry) return { streamed: false, visibleText: stripInternalDataEcho(this.splitVisibleAnswer(rawText).visibleText, this.internalDataParts) };
     const [roundIndex, state] = entry;
     this.finish(roundIndex);
     state.consumed = true;
     return {
       streamed: true,
-      visibleText: this.splitVisibleAnswer(state.rawVisible).visibleText,
+      visibleText: stripInternalDataEcho(this.splitVisibleAnswer(state.rawVisible).visibleText, this.internalDataParts),
     };
   }
 }

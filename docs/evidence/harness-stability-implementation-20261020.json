@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "mode": "architecture",
+  "baselineHead": "eb476dfc4b4f25bfdd62e5193bc00c8ae1523ad5",
+  "scope": "Local working-tree implementation; fake-model production-handler tests, not actual model or GUI verification",
+  "existing": ["Existing presentation, history, delivery controller, anchored block and package owners"],
+  "proposed": ["Implemented minimal changes recorded in docs/Harness_Stability_Implementation_20261020.md; runtime adoption remains pending"],
+  "doNotDuplicate": ["No new model call, permission gate, semantic judge, persistent state store or evaluation framework"],
+  "invariants": ["Preserve original diagnostic capture and tool request/result pairs", "Do not count hidden metadata as a delivered report", "Retain shown block contents and commit only the selected input"],
+  "impactedSurfaces": ["Stream/fallback/history/delivery", "Same-anchor runtime observations", "API advisory and evidence guidance", "Portable runtime file inventory"],
+  "validationPlan": ["Focused tests, existing complete suites, generated identity and portable extracted build", "Actual model, GUI and performance checks remain adoption requirements"],
+  "claims": [
+    {
+      "claim": "Injected metadata echoes are removed from prose and next-round messages, and metadata-only responses are not accepted as completed reports in tested normal and bounded paths.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/internal-data-output.test.cjs", "observation": "All chunk boundaries, CRLF, intentional literals, malformed data, stream/fallback/history consistency and original capture preservation are covered."},
+        {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs", "observation": "Production-handler tests cover metadata echoes on/off streaming, next tool round, and metadata-only normal/bounded report completion."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "src/context-manager.ts", "symbol": "composeModelHistory.privateDataParts"},
+        {"stage": "decision", "stageStatus": "present", "location": "src/internal-data-output.ts", "symbol": "InternalDataOutputFilter"},
+        {"stage": "mutation", "stageStatus": "present", "location": "src/context-manager.ts", "symbol": "modelHistoryMessage"},
+        {"stage": "observer", "stageStatus": "present", "location": "src/prediction-loop.ts", "symbol": "visibleCaptured -> DeliveryController.observe/evaluate"}
+      ],
+      "counterEvidence": [{"kind": "test", "location": "test/internal-data-output.test.cjs", "observation": "Non-injected or malformed data is deliberately preserved; this is not a universal log/security filter."}],
+      "unknowns": ["Actual historical GUI ingress and host persistence are uncorrelated.", "Real model behavior and deliberate unformatted raw-log reproduction are not exhaustively covered."]
+    },
+    {
+      "claim": "A newly created partial-projection summary reaches a same-anchor reasoning retry after the change while original read handles remain available.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs", "observation": "72,000-character source result, deterministic pressure, note-enabled workspace and reasoning retry: before fix summary false/false; after fix false/true; handles retained both rounds."},
+        {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/compaction-retention.test.cjs", "observation": "Candidate does not mutate shown map; same-anchor A then B retains A and adds B; unchanged retry adds nothing; normal new-tool-round exact-prefix regression passes."}
+      ],
+      "behaviorPath": [
+        {"stage": "entry", "stageStatus": "present", "location": "src/prediction-loop.ts", "symbol": "partialProjectionFact -> runtimeFacts.set"},
+        {"stage": "decision", "stageStatus": "present", "location": "src/context-manager.ts", "symbol": "composeModelHistory.unshownParts"},
+        {"stage": "mutation", "stageStatus": "present", "location": "src/prediction-loop.ts", "symbol": "shownDataBlocks.set after final input selection"},
+        {"stage": "observer", "stageStatus": "present", "location": "test/prediction-loop.test.cjs", "symbol": "second fake-model act input"}
+      ],
+      "counterEvidence": [{"kind": "test", "location": "test/prediction-loop.test.cjs", "observation": "The partial body marker and archive read handle were already retained before the fix; source recovery was not lost."}],
+      "unknowns": ["Same-anchor insertion can move the following suffix; actual server cache cost has not been measured.", "A-to-B-to-A freshness, historical snapshot growth and project transitions are not solved by this minimal change."]
+    }
+  ]
+}

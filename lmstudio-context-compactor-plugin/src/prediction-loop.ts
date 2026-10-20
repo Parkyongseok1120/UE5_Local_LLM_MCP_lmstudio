@@ -603,7 +603,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         emitter.beginRound();
         const roundController = continuingReport ? visibleTranscript.continuationController() : visibleTranscript.controller;
         const roundEmitter = continuingReport ? createMessageEmitter(roundController, modelTools) : emitter;
-        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport);
+        const internalDataParts = modelComposition?.privateDataParts || [];
+        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport, internalDataParts);
         const continuationStatus = continuingReport ? ctl.createStatus({ status: "loading", text: "답변 이어 작성 중" }) : null;
         const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
         let generationRepetitionReported = false;
@@ -716,7 +717,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
               let textStreamed = false;
               if (message.isAssistantMessage() && message.getText()) {
                 const streamed = stream.consumeAssistant(message.getText());
-                const fallback = visibleAssistantOutput(message.getText());
+                const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
                 const visibleText = streamed.streamed ? streamed.visibleText : fallback.visibleText;
                 textStreamed = streamed.streamed;
                 if (visibleText !== message.getText()) {
@@ -740,7 +741,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // observation used by output classification and recovery eligibility.
         stream.finishAll();
         continuationStatus?.remove();
-        deliveryController.observe(captured, phaseTimeoutSignal?.aborted === true);
+        // Completion/recovery must assess the same prose the user receives.
+        // Preserve captured originals for diagnostics and tool evidence.
+        const visibleCaptured = { ...captured,
+          messages: captured.messages.map(message => modelHistoryMessage(message, internalDataParts)) };
+        deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
         if (!hasUnexecutedRawToolSyntax(visibleTranscript.lastAnswerText))
           deliveryController.retainReportPrefix(visibleTranscript.lastAnswerText);
         const unfinishedGeneration = toolGeneration.hasUnfinished();
@@ -785,7 +790,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           let textAlreadyStreamed = live?.textStreamed || false;
           if (message.isAssistantMessage() && message.getText()) {
             const extracted = modelNotes.splitVisibleAnswer(message.getText());
-            historyMessage = modelHistoryMessage(message);
+            historyMessage = modelHistoryMessage(message, internalDataParts);
             if (hasUnexecutedRawToolSyntax(visibleAssistantOutput(historyMessage.getText()).visibleText)) {
               const sanitized = ChatMessage.from(historyMessage);
               sanitized.replaceText("[Unexecuted raw tool-call text omitted from subsequent model input; no tool was dispatched.]");
@@ -793,7 +798,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             }
             if (!live) {
               const streamed = stream.consumeAssistant(message.getText());
-              const fallback = visibleAssistantOutput(message.getText());
+              const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
               textAlreadyStreamed = streamed.streamed;
               visibleMessage = ChatMessage.from(message);
               visibleMessage.replaceText(streamed.streamed ? streamed.visibleText : fallback.visibleText);
@@ -826,10 +831,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
           !config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0);
-        const outputLimitStage = classifyOutputLimitStage(captured, finalizing, generationAtRoundEnd);
+        const outputLimitStage = classifyOutputLimitStage(visibleCaptured, finalizing, generationAtRoundEnd);
         if (toolPlanningRetryRound) execution.finishReplan();
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
-        const rawIntentText = visibleTextFromMessages(captured.messages);
+        const rawIntentText = visibleTextFromMessages(captured.messages, internalDataParts);
         const finalRawToolIntent = hasRawToolIntent(rawIntentText, captured.messages);
         const rawIntent = classifyRawToolIntent(rawIntentText, allModelTools, registeredModelTools);
         const { catalogueCorrectionAllowed, archiveOnlyRecoveryAllowed, retryTools, retryInstruction }
@@ -1141,7 +1146,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           break;
         }
         if (finalizing) {
-          const evaluated = deliveryController.evaluate(workingHistory, captured, phaseTimedOut,
+          const evaluated = deliveryController.evaluate(workingHistory, visibleCaptured, phaseTimedOut,
             execution.finalizationTrigger, recoveryCoordinator.noProgressRounds);
           const finalDelivery = evaluated.delivery;
           const { deliveryState } = finalDelivery;
@@ -1254,7 +1259,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
           // This is the single retry, not an entry to report or read recovery.
           if (captured.finishReason === "maxPredictedTokensReached" || finalRawToolIntent
-            || !captured.predictionCompleted || !visibleTextFromMessages(captured.messages).trim()) {
+            || !captured.predictionCompleted || !visibleTextFromMessages(captured.messages, internalDataParts).trim()) {
             ctl.createStatus({ status: "canceled", text: "생각 단계 재시도에서도 응답을 완료하지 못했습니다. 자동 재시도는 여기서 중단합니다." });
             deliverPartial("reasoning_recovery_exhausted");
           }
@@ -1283,7 +1288,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (researchRecoveryRound) {
           const decision = recoveryCoordinator.advance(recoveryProgress, config.auditResearchRounds,
             captured.continueAfterTools, finalRawToolIntent, structuredToolRequestCount,
-            actualResultCount, visibleTextFromMessages(captured.messages).trim(), boundedAudit);
+            actualResultCount, visibleTextFromMessages(captured.messages, internalDataParts).trim(), boundedAudit);
           if (decision.trigger) {
             execution.finishResearch(decision.trigger);
             if (config.showDebugInfo) ctl.debug({
@@ -1305,7 +1310,7 @@ event: decision.trigger === "research_recovery_exhausted"
           continue;
         }
         if (!boundedAudit && config.outputRecoveryMode === "on"
-          && canRecoverOutputLimit(captured, generationAtRoundEnd)) {
+          && rawIntentText.trim() && canRecoverOutputLimit(visibleCaptured, generationAtRoundEnd)) {
           // Assistant-authored prose is continuation context, never committed
           // planning or source evidence. Preserve exactly the delivered prefix.
           reportContinuation = visibleTranscript.lastAnswerText;

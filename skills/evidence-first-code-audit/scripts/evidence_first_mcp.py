@@ -30,6 +30,9 @@ MAX_DIAGNOSTIC_ITEM_CHARS = 320
 MAX_ERROR_DIAGNOSTIC_CHARS = 3600
 MAX_WARNING_DIAGNOSTIC_CHARS = 1200
 ARRAY_INDEX_PATTERN = re.compile(r"\[\d+\]")
+DIAGNOSTIC_PATH_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:(?:\[\d+\])|(?:\.[A-Za-z_]\w*))*(?=\s|$)")
+MAX_DIAGNOSTIC_PATH_EXAMPLES = 2
+MAX_DIAGNOSTIC_PATH_CHARS = 80
 TOOL_ANNOTATIONS = {
     "readOnlyHint": True,
     "destructiveHint": False,
@@ -116,14 +119,29 @@ def _bounded_issues(
 ) -> tuple[list[str], int, int]:
     source = [str(value) for value in values] if isinstance(values, list) else []
     groups: dict[str, int] = {}
+    locations: dict[str, dict[str, None]] = {}
     for value in source:
         shape = ARRAY_INDEX_PATTERN.sub("[]", value)
         groups[shape] = groups.get(shape, 0) + 1
+        match = DIAGNOSTIC_PATH_PATTERN.match(value)
+        # Only validator-owned paths are echoed, never claim/evidence contents.
+        # Non-indexed diagnostics retain their already actionable original path.
+        if match and ARRAY_INDEX_PATTERN.search(match[0]):
+            locations.setdefault(shape, {})[match[0]] = None
 
     reported: list[str] = []
     used_chars = 0
     for shape, occurrences in groups.items():
-        suffix = f" ({occurrences} occurrences)" if occurrences > 1 else ""
+        paths = list(locations.get(shape, {}))
+        examples = [
+            item if len(item) <= MAX_DIAGNOSTIC_PATH_CHARS
+            else item[: MAX_DIAGNOSTIC_PATH_CHARS - 3] + "..."
+            for item in paths[:MAX_DIAGNOSTIC_PATH_EXAMPLES]
+        ]
+        if len(paths) > len(examples):
+            examples.append(f"+{len(paths) - len(examples)} more locations")
+        suffix = f" [at {'; '.join(examples)}]" if examples else ""
+        suffix += f" ({occurrences} occurrences)" if occurrences > 1 else ""
         available_shape_chars = max(0, MAX_DIAGNOSTIC_ITEM_CHARS - len(suffix))
         if len(shape) > available_shape_chars:
             if available_shape_chars > 3:

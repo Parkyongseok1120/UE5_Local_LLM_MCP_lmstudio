@@ -81,7 +81,7 @@ test('correct labels cannot award cause/evidence/retraction credit to themselves
   const summary = fixture.summarize(unreviewed).correctness;
   assert.equal(summary.labelPass, true);
   assert.equal(summary.pass, null);
-  assert.equal(summary.semanticReviewPending, 13);
+  assert.equal(summary.semanticReviewPending, gradable.length);
   assert.equal(unreviewed.find(item => item.pair === 7).selfCorrected, null);
   assert.equal(fixture.gradeCase('P3-D', { label: 'defect', severity: 'P1' }, { ...verified, causeCorrect: false }).qualifiedCorrect, false);
   assert.equal(fixture.gradeCase('P4-D', { label: 'defect', severity: 'P1' }, verified).qualifiedCorrect, false);
@@ -110,4 +110,20 @@ test("report delivery is reported apart from correctness (pair 8)", () => {
   assert.equal(summary.delivery.objectiveSatisfied, null);
   assert.equal(summary.correctness.pass, false);
   assert.throws(() => fixture.gradeCase("P8", {}), /Not a gradable case/);
+});
+
+test('consumer and receiving-condition probes keep labels private and resolve both outcomes', () => {
+  for (const ids of [['P9-N', 'P9-D'], ['H9-N', 'H9-D'], ['P10-N', 'P10-D']]) {
+    const [normal, defect] = ids.map(id => fixture.CASE_BY_ID.get(id));
+    assert.equal(normal.question.replaceAll(normal.folder, '<folder>'), defect.question.replaceAll(defect.folder, '<folder>'));
+    assert.equal(fixture.gradeCase(normal.id, reference(normal), verified).qualifiedCorrect, true);
+    assert.equal(fixture.gradeCase(defect.id, { label: 'needs_runtime_proof' }, verified).qualifiedCorrect, false);
+  }
+  assert.match(fixture.FILES.get('Source/Case14/SignalHUD.cpp').content, /Pawn->GetPulseTime\(\)/u);
+  assert.doesNotMatch(fixture.FILES.get('Source/Case17/SignalHUD.cpp').content, /GetPulseTime|DrawRect/u);
+  assert.ok(fixture.CASE_BY_ID.get('H9-N').heldout);
+  assert.notEqual(fixture.CASE_BY_ID.get('H9-N').files[0].split('/').at(-1), fixture.CASE_BY_ID.get('P9-N').files[0].split('/').at(-1));
+  assert.match(fixture.FILES.get('Source/Case16/SupplyPawn.h').content, /UPROPERTY\(Replicated\)/u);
+  assert.match(fixture.FILES.get('Source/Case16/SupplyPawn.cpp').content, /COND_OwnerOnly/u);
+  assert.match(fixture.FILES.get('Source/Case21/SupplyPawn.cpp').content, /COND_SkipOwner/u);
 });

@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "mode": "architecture",
+  "status": "installed_local_model_adoption_pending",
+  "baselineBuildId": "ef-build-v2-d182c5b0a4d6c59ad5bc571e80b27a43c017707c61a604d69b8239eb7aad5459",
+  "candidateBuildId": "ef-build-v2-ee37966c3c47c706589e019c100e372850552816ac23cd84823fecf0aa02b051",
+  "sourceConversationSha256": "63f87b4fbc61096fef3a825caa71cc25eb2de0564a60d3667ce2cdc61aa2f9ed",
+  "existing": [
+    "Existing bounded MCP diagnostics and stateless validator own repair responses.",
+    "Existing guidance catalogue selects and admits references.",
+    "Existing UE fixture/runner owns evaluation and local result persistence."
+  ],
+  "proposed": [
+    "Candidate implementation preserves indexed error locations and consolidates selected audit guidance.",
+    "Adopt only after initial model smoke, paired semantic/latency evaluation and actual GUI checks."
+  ],
+  "doNotDuplicate": [
+    "No new truth judge, mandatory search gate, retry engine or evaluation runner.",
+    "Preserve installed dirty baseline and engine applicability gate."
+  ],
+  "invariants": [
+    "Keep source truth separate from structural validity.",
+    "Do not mutate factual fields merely to satisfy a schema.",
+    "Preserve user game, installed plugins, MCP permissions and model settings."
+  ],
+  "validationPlan": [
+    "Focused and affected full automated checks, original packet replay, actual system-input fake-model coverage.",
+    "Model and GUI gates remain incomplete after connection failure."
+  ],
+  "claims": [
+    {
+      "claim": "Grouped diagnostics retain bounded original claim locations while preserving structural acceptance on all four original packets.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "skills/evidence-first-code-audit/scripts/evidence_first_mcp.py:_bounded_issues",
+          "observation": "Grouping stays normalized, but up to two original paths and an omitted-location count are added within existing item and aggregate limits."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_evidence_first_mcp.py and local validator-replay.json",
+          "observation": "Tests cover exact/nested paths, 1000 repeated errors, omissions, no body echo, and one structural repair preserving unknown/evidence/verdict. Four recorded packets retain ok/errorCount/warningCount and facts-not-verified fields."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "local observed-run-local.json",
+          "observation": "The original validator accepted some factually incorrect findings; the new diagnostics do not validate source truth."
+        }
+      ],
+      "unknowns": [
+        "Real-model retry count improvement has not been measured."
+      ]
+    },
+    {
+      "claim": "The recorded GUI audit used the installed baseline but did not query engine source or directly read the HUD consumer.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "Local conversation 1792458755676, message index 3, execution 83b54c5b-24ca-4622-942a-460b324c568f",
+          "observation": "Runtime telemetry reports loadedMatchesInstalled=true for baseline build d182c5b0. Recorded tools contain 4 list_directory, 1 broad search_files, 3 read_file, 18 read_file_range and 4 validator requests; no engine source lookup or HUD direct read."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts and src/design-guidance.ts",
+          "observation": "Installed-engine evidence supplies version applicability. Unverified versions exclude version-gated contract sections; selecting general guidance does not certify source truth."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "design_guidance_input and model_input_evidence_summary in recorded execution",
+          "observation": "General proof/authority guidance was selected. Partial projections include notice and recovery handles; exact final historical source-line exposure is not reconstructed."
+        }
+      ],
+      "unknowns": [
+        "Historical complete SDK model input bodies were not available.",
+        "Selection telemetry alone is not proof of exact retained text or model compliance."
+      ]
+    },
+    {
+      "claim": "The existing evaluation owner now supports isolated paginated consumer searches and the same fixture against a preserved dirty-tree runtime.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/scripts/eval-ue-accuracy.cjs and scripts/ue-accuracy-fixture.cjs",
+          "observation": "Schema 4 adds six neutral-folder consumer/replication scenarios, scoped literal search, runtime-root selection and actual act-input guidance/result hashes. Existing engine version and source hashes remain enforced."
+        },
+        {
+          "kind": "test",
+          "location": "test/ue-accuracy-fixture.test.cjs and test/ue-accuracy-runner.test.cjs",
+          "observation": "Fixture anchors, separated scoring, cross-query/case cursor rejection, next-page HUD consumer and actual SDK input summarization pass focused tests."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "local baseline smoke launch",
+          "observation": "The attempt failed before inference because LM Studio was no longer running. No completed model sample or candidate accuracy/latency comparison exists."
+        }
+      ],
+      "unknowns": [
+        "Full paired model evaluation, real-model validator repair and GUI verification remain pending; local installation completed by subsequent explicit user request.",
+        "Pawn fallback, prediction correction and capsule-size additional pairs remain gated on initial smoke."
+      ]
+    },
+    {
+      "claim": "The mixed-audit production handler sends the revised common and networking guidance in its actual SDK system input without asserting an unverified engine version.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:mixed audit delivers consumer and contract-verification guidance without inventing an engine version",
+          "observation": "A scripted model inspects the actual Chat system messages and observes core/proof and unreal-networking/authority, consumer/quote/prediction criteria, and no engine-defaults. Exactly one act call."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "local baseline smoke launch",
+          "observation": "No real-model inference completed; passing SDK-input assertions does not demonstrate model compliance or accuracy gains."
+        }
+      ],
+      "unknowns": [
+        "Actual model adherence, latency and GUI behavior remain unmeasured for the candidate."
+      ]
+    },
+    {
+      "claim": "The requested local update installed compactor 0.4.82 revision 129 and evidence-first 1.1.4 while preserving existing MCP and Unreal connection configuration.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "Local update-verification.json and update-mcp-smoke.json",
+          "observation": "Installed source/dist/production include expected build ID ee37966c; skill and preset hashes match source. MCP smoke reports 1.1.4, compatible contract and graceful exit. Existing mcp.json/unreal-workspace.json/unreal-agent.json hashes are unchanged."
+        },
+        {
+          "kind": "runtime",
+          "location": "Local update-diagnostic-smoke.json",
+          "observation": "The actual configured MCP command/args returns both original claim indexes for two grouped location errors, while factualEvidenceVerified and wholeTaskVerified remain false."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "Installed scripts/status.cjs --json",
+          "observation": "Source layout verification explicitly leaves runtimeActivationProven=false; installed files do not prove a running GUI has reloaded them."
+        }
+      ],
+      "unknowns": [
+        "New GUI loaded ID and actual model accuracy/latency comparisons remain unverified."
+      ]
+    }
+  ],
+  "checks": {
+    "compactorFull": {
+      "passed": 870,
+      "failed": 0
+    },
+    "nodeFocused": {
+      "passed": 60,
+      "overlapsFull": true
+    },
+    "pythonFocusedFinal": {
+      "passed": 38
+    },
+    "pythonNamedCiInitial": {
+      "passed": 922,
+      "failed": 2,
+      "skipped": 15,
+      "warning": 1
+    },
+    "pythonNamedCiRepairs": "Both documentation-path failures pass in focused final; the native-codepage warning test passes separately without forced UTF-8.",
+    "modelCompletedRuns": 0,
+    "installedCandidate": true
+  }
+}

@@ -63,6 +63,22 @@ def test_portable_validator_accepts_complete_audit_packet() -> None:
     assert result["errors"] == []
 
 
+def test_neutral_result_error_prescribes_one_coherent_repair_without_relabeling() -> None:
+    validator = _load_validator()
+    packet = _neutral_architecture_packet()
+    packet["mode"] = "codegen"
+    packet["claims"][0]["claimType"] = "codegen"
+    errors = validator.validate_packet(packet)["errors"]
+    assert any("receipt" in error and "non-codegen claimType" in error for error in errors)
+    assert any("Do not change the factual verdict or severity" in error for error in errors)
+    packet["mode"] = "architecture"
+    packet["claims"][0]["claimType"] = "existence"
+    assert validator.validate_packet(packet)["ok"] is True
+    packet["claims"][0]["verdict"] = "ByDesign"
+    errors = validator.validate_packet(packet)["errors"]
+    assert any("Do not lower severity to P3" in error for error in errors)
+
+
 def test_optional_obligations_obey_published_types_in_every_mode() -> None:
     validator = _load_validator()
     for field in ("existing", "proposed", "doNotDuplicate", "invariants", "impactedSurfaces", "validationPlan"):

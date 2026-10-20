@@ -4584,6 +4584,110 @@ function completeRecoveryReply(options, text = 'Which input binding constraint s
   options.onMessage(ChatMessage.create('assistant', text));
 }
 
+for (const streaming of [false, true]) test(`internal metadata echoes stay out of GUI and the next tool round (stream=${streaming})`, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-echo-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let calls = 0;
+  const tool = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const model = reasoningModel(async (chat, _tools, options) => {
+    calls++;
+    if (calls === 3) {
+      const generated = chat.getMessagesArray().find(m => m.isAssistantMessage() && m.getText().startsWith('Observed source.'));
+      assert.ok(generated);
+      assert.equal(generated.getText(), 'Observed source.\nContinuing.');
+      assert.equal(generated.getToolCallRequests()[0].id, 'echo-read-2');
+      completeRecoveryReply(options, 'Review complete.'); return;
+    }
+    let prose = '';
+    if (calls === 2) {
+      const refs = chat.getMessagesArray().find(m => m.isAssistantMessage() && m.getText().startsWith('[Available tool-call refs]'));
+      assert.ok(refs, 'test must actually receive injected metadata');
+      prose = 'Observed source.\n' + refs.getText() + '\nContinuing.';
+      if (streaming) for (let i = 0; i < prose.length; i += 3) options.onPredictionFragment({
+        roundIndex: 0, reasoningType: 'none', content: prose.slice(i, i + 3), tokensCount: 1, isStructural: false });
+    }
+    const id = `echo-read-${calls}`;
+    const request = { type: 'function', id, name: tool.name, arguments: { path: `Source/File${calls}.cpp` } };
+    options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [
+      ...(prose ? [{ type: 'text', text: prose }] : []), { type: 'toolCallRequest', toolCallRequest: request }] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: id,
+      content: JSON.stringify({ ok: true, content: `source ${calls}` }) }] }));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Read the two source files and report.' }]), model,
+    { contextManagementMode: 'hybrid' }, [tool]);
+  ctl.getWorkingDirectory = () => directory;
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3);
+  assert.ok(ctl.blocks.every(block => !block.text.includes('[Available tool-call refs]')));
+  assert.ok(ctl.blocks.some(block => block.text === 'Observed source.\nContinuing.'));
+  assert.equal(ctl.blocks.flatMap(block => block.results).length, 2);
+});
+
+for (const bounded of [false, true]) test(`metadata-only output cannot count as a completed report (bounded=${bounded})`, async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-only-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let calls = 0;
+  const model = reasoningModel(async (chat, _tools, options) => {
+    calls++;
+    if (calls === 1) {
+      const request = { type: 'function', id: 'metadata-read', name: 'read_file_range', arguments: { path: 'Source/A.cpp' } };
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, content: 'source' }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    }
+    assert.equal(calls, 2);
+    const refs = chat.getMessagesArray().find(m => m.getText().startsWith('[Available tool-call refs]'));
+    assert.ok(refs);
+    completeRecoveryReply(options, refs.getText());
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Read and report.' }]), model,
+    { contextManagementMode: 'hybrid', auditCompletionMode: bounded ? 'bounded' : 'off', auditResearchRounds: 1 },
+    [{ name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent', parametersJsonSchema: { type: 'object' } }]);
+  ctl.getWorkingDirectory = () => directory;
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(calls, 2);
+  assert.ok(ctl.blocks.every(b => !b.text.includes('[Available tool-call refs]')));
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.reportCompleted, false);
+  assert.equal(outcome.taskCompleted, false);
+});
+
+test('reasoning recovery retains partial-result notices and read handles after first-round projection', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'projection-retry-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const history = archivedObservationHistory(72000);
+  const observations = [];
+  const model = exactCountingModel(async (chat, _tools, options) => {
+    const results = chat.getMessagesArray().flatMap(m => m.getToolCallResults())
+      .map(r => { try { return JSON.parse(r.content); } catch { return null; } })
+      .filter(r => r?.kind === 'archived_tool_result_projection');
+    assert.ok(results.length);
+    assert.ok(results.every(r => r.bodyComplete === false && r.archiveRef?.readHandle));
+    observations.push({ handles: results.map(r => r.archiveRef.readHandle),
+      summaryPresent: chat.toString().includes('earlier tool result(s) are present in this input only in part') });
+    if (observations.length === 1) { emitReasoningLimit(options); return; }
+    assert.equal(observations.length, 2);
+    completeRecoveryReply(options, 'Only the visible range was reviewed.');
+  });
+  model.getContextLength = async () => 20000;
+  const ctl = fakeController(history, model, { contextManagementMode: 'deterministic',
+    workingInputTargetTokens: 3000, workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    assumedContextLength: 20000, maxOutputReserve: 2048, safetyMarginTokens: 512,
+    softRemainingTokens: 1000, hardRemainingTokens: 500, reasoningRecoveryMode: 'on' },
+    [{ name: 'git_changed_files', pluginIdentifier: 'mcp/unity-tools', description: 'read git page', parametersJsonSchema: { type: 'object' } }]);
+  ctl.getWorkingDirectory = () => directory;
+  await createPredictionLoopHandler()(ctl);
+  assert.equal(observations.length, 2);
+  assert.deepEqual(observations[1].handles, observations[0].handles);
+  assert.equal(observations[0].summaryPresent, false);
+  assert.equal(observations[1].summaryPresent, true, 'new projection guidance must reach the same-anchor retry');
+});
+
 test('reasoning recovery keeps constraints and evidence, allows clarification, and does not reuse report limits', async () => {
   let calls = 0;
   const history = Chat.from([{ role: 'user', content: 'C++ only. Input Action binding forbidden. Make a small change.' }]);
@@ -5238,6 +5342,29 @@ for (const descriptorRead of [false, true]) test(`Auto admits version-checked en
   assert.equal(guidance.primaryTopic, 'multiplayer');
   assert.equal(guidance.selectedIds.includes('unreal-networking/engine-defaults'), !descriptorRead);
   assert.doesNotMatch(original.toString(), /Derived reference data/);
+});
+
+test('mixed audit delivers consumer and contract-verification guidance without inventing an engine version', async () => {
+  let calls = 0;
+  const model = { async getContextLength() { return 65536; }, async applyPromptTemplate(chat) { return chat.toString(); },
+    async countTokens(text) { return Math.ceil(text.length / 4); }, async act(chat, _tools, options) {
+      calls++;
+      const system = chat.getMessagesArray().filter(message => message.isSystemPrompt()).map(message => message.getText()).join('\n');
+      assert.match(system, /reference id=core\/proof/u);
+      assert.match(system, /연관 getter의 다른 파일 소비자/u);
+      assert.match(system, /가드·인자·순서를 보존/u);
+      assert.match(system, /reference id=unreal-networking\/authority/u);
+      assert.match(system, /프로퍼티의 선언·등록·수신 조건/u);
+      assert.match(system, /로컬 예측 쓰기/u);
+      assert.doesNotMatch(system, /reference id=unreal-networking\/engine-defaults/u);
+      completeRecoveryReply(options, 'The required engine contract and consumer path remain unverified.');
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '캐릭터 RPC, SSOT SOLID 책임 수명과 UE 매크로를 점검해' }]), model,
+    { projectEngine: 'unreal', projectIdentity: 'C:/Projects/Net/Net.uproject', designGuidanceMode: 'auto',
+      designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.ok(ctl.debugValues.find(e => e.event === 'design_guidance_input').omissionReasons.includes('contract_sections_version_unverified'));
 });
 
 for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips new analysis and candidate admission`, async () => {

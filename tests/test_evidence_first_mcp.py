@@ -276,6 +276,105 @@ def test_grouped_diagnostic_suffix_stays_inside_the_per_item_bound() -> None:
     assert len(grouped[0]) <= module.MAX_DIAGNOSTIC_ITEM_CHARS
 
 
+def test_grouped_diagnostics_keep_two_exact_nested_paths_and_count_the_rest() -> None:
+    module = _load_mcp()
+    values = [
+        f"claims[{index}].evidence[3].location must be a non-empty string"
+        for index in (1, 3, 8, 12)
+    ]
+    grouped, shapes, omitted = module._bounded_issues(
+        values, max_shapes=16, max_chars=3600,
+    )
+    assert (shapes, omitted) == (1, 0)
+    assert "claims[1].evidence[3].location" in grouped[0]
+    assert "claims[3].evidence[3].location" in grouped[0]
+    assert "+2 more locations" in grouped[0]
+    assert "claims[8]" not in grouped[0]
+    assert grouped[0].endswith("(4 occurrences)")
+
+
+def test_single_claim_error_retains_its_actual_index_without_echoing_packet() -> None:
+    module = _load_mcp()
+    packet = _neutral_architecture_packet()
+    packet["claims"] *= 4
+    packet = json.loads(json.dumps(packet))
+    packet["claims"][3]["evidence"][0]["location"] = ""
+    packet["claims"][3]["claim"] = "PRIVATE_CLAIM_BODY"
+    packet["claims"][3]["evidence"][0]["observation"] = "PRIVATE_SOURCE_BODY"
+    result, is_error = module.call_tool("evidence_first_validate", {"packet": packet})
+    assert is_error and result["errorCount"] == 1
+    assert "claims[3].evidence[0].location" in result["errors"][0]
+    assert "PRIVATE_" not in json.dumps(result)
+    assert result["factualEvidenceVerified"] is False
+    assert result["wholeTaskVerified"] is False
+
+
+def test_behavioral_diagnostic_identifies_one_repair_without_changing_facts() -> None:
+    module = _load_mcp()
+    for claim_type in ("behavior", "wiring", "state_transition", "data_flow"):
+        packet = _neutral_architecture_packet()
+        claim = json.loads(json.dumps(packet["claims"][0]))
+        claim.update({"claimType": claim_type, "verdict": "Ambiguous", "severity": "P2",
+                      "unknowns": ["The final effect has not been observed."],
+                      "behaviorPath": [
+                          {"stage": stage, "stageStatus": "present", "symbol": "StateStore",
+                           "location": "src/state.py:20"}
+                          for stage in ("entry", "decision", "dispatch")
+                      ]})
+        packet["claims"].append(claim)
+        before = json.loads(json.dumps(packet))
+        result, is_error = module.call_tool("evidence_first_validate", {"packet": packet})
+        assert is_error
+        assert any("claims[1].behaviorPath" in error and "final effect" in error
+                   for error in result["errors"])
+        assert all("claims[0]" not in error for error in result["errors"])
+        # Record the still-unknown stage; do not invent a successful observation.
+        claim["behaviorPath"].append({"stage": "side_effect", "stageStatus": "unknown",
+                                      "symbol": "StateStore result", "location": "src/state.py:20"})
+        repaired, is_error = module.call_tool("evidence_first_validate", {"packet": packet})
+        assert not is_error and repaired["ok"]
+        assert repaired["factualEvidenceVerified"] is False
+        assert repaired["wholeTaskVerified"] is False
+        assert claim["behaviorPath"][-1]["stageStatus"] == "unknown"
+        for key in before["claims"][1]:
+            if key != "behaviorPath":
+                assert claim[key] == before["claims"][1][key]
+        assert packet["claims"][0] == before["claims"][0]
+
+
+def test_large_diagnostic_sets_preserve_limits_and_omission_counts() -> None:
+    module = _load_mcp()
+    errors = [f"claims[{index}].evidence[0].location must be a non-empty string"
+              for index in range(1000)]
+    errors += [f"claims[999].field{index} must be an array" for index in range(40)]
+    result = module.bounded_validation_result({"ok": False, "errors": errors,
+                                              "warnings": errors, "factualEvidenceVerified": False})
+    for kind, max_shapes, max_chars in (
+        ("error", module.MAX_ERROR_SHAPES, module.MAX_ERROR_DIAGNOSTIC_CHARS),
+        ("warning", module.MAX_WARNING_SHAPES, module.MAX_WARNING_DIAGNOSTIC_CHARS),
+    ):
+        values = result[kind + "s"]
+        assert len(values) <= max_shapes
+        assert sum(map(len, values)) <= max_chars
+        assert all(len(value) <= module.MAX_DIAGNOSTIC_ITEM_CHARS for value in values)
+        assert result[kind + "Count"] == 1040
+        assert result[kind + "ShapeCount"] == 41
+        assert result["omitted" + kind.title() + "ShapeCount"] == 41 - len(values)
+        assert "+998 more locations" in values[0]
+    assert result["factualEvidenceVerified"] is False
+
+
+def test_duplicate_paths_and_nonindexed_errors_do_not_invent_locations() -> None:
+    module = _load_mcp()
+    errors = ["claims[7].unknowns must be an array"] * 3 + ["mode must be audit, architecture, or codegen"]
+    grouped, shapes, omitted = module._bounded_issues(errors, max_shapes=16, max_chars=3600)
+    assert (shapes, omitted) == (2, 0)
+    assert grouped[0].count("claims[7].unknowns") == 1
+    assert "more locations" not in grouped[0]
+    assert grouped[1] == errors[-1]
+    assert module._bounded_issues(errors, max_shapes=0, max_chars=0) == ([], 2, 2)
+
+
 def test_generic_mcp_stdio_smoke() -> None:
     completed = subprocess.run(
         [sys.executable, str(SMOKE)],
