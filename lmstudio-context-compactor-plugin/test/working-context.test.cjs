@@ -768,3 +768,55 @@ test("structure validation flags survive an archived projection and its durable 
   }
   assert.equal(durable.toolName, "evidence_first_validate");
 });
+
+// 2026-10-20 run: a projection was 2,852 chars, 559 of them the first lines of
+// the body, while the model later misquoted line 342 of the same read.
+function lineRead(callId, file, lines, extra = {}) {
+  const history = Chat.from([{ role: "user", content: "Audit" }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    type: "function", id: callId, name: "read_file_range", arguments: { path: `project://${file}` } } }] }));
+  const content = Array.from({ length: lines }, (_, i) => `${i + 1}\tvoid Line${i + 1}() { Work(${i + 1}); }`).join("\n");
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: callId, content: JSON.stringify({
+    ok: true, path: `project://${file}`, projectRelativePath: file, lineNumbers: true, startLine: 1, endLine: lines,
+    totalLines: lines, rangeComplete: true, moreLinesInFile: false, sha256: "a".repeat(64),
+    workspaceIdentity: "b".repeat(64), canonicalProject: "C:/Projects/Game/Game.uproject", content, ...extra }) }] }));
+  return history;
+}
+const projectedValue = history => JSON.parse(new WorkingContext(scope).project(history, () => true, {}, 512)
+  .history.getMessagesArray().at(-1 - history.getMessagesArray().slice().reverse()
+    .findIndex(message => message.getToolCallResults().length)).getToolCallResults()[0].content);
+
+test("a body projection keeps the facts and digests its readers use and drops envelope bookkeeping", () => {
+  const value = projectedValue(lineRead("r1", "Source/Game/Weapon.cpp", 200));
+  assert.equal(value.kind, "archived_tool_result_projection");
+  assert.deepEqual(value.sourceIdentity, { path: "project://Source/Game/Weapon.cpp" });
+  for (const key of ["sourceIdentityDigest", "sourceVersion", "sourceQueryKey"]) assert.match(value[key], /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(value.archiveRef).sort(), ["evidenceId", "readHandle", "version"]);
+  for (const key of ["provider", "semanticQueryDigest", "sourceHash", "rangeUnit", "archivedRanges", "projectedRawRanges",
+    "projectedSanitizedRanges", "omittedRanges", "redacted"]) assert.equal(key in value, false, key);
+  assert.equal(Object.values(value).includes("unknown"), false);
+  assert.equal(value.sourceFacts.rangeComplete, true);
+  assert.equal(value.sourceFacts.totalLines, 200);
+  assert.equal(value.fullRawProvided, false);
+  assert.equal(value.currentFile, false);
+  assert.equal(value.grantsMutation, false);
+  assert.match(value.notice, /^PARTIAL BODY: chars 0-\d+ of \d+/);
+  assert.match(value.excerpt, /^1\tvoid Line1\(\)/);
+});
+
+test("lines cited later by path:line or by Line N after the file name stay in the projection", () => {
+  const history = lineRead("r2", "Source/Game/LatencyWeapon.cpp", 200);
+  history.append("assistant", "In LatencyWeapon.h the declaration is fine. Line 150 calls Work(150); "
+    + "see also LatencyWeapon.cpp:180-181 and GameMode.cpp:12.");
+  const value = projectedValue(history);
+  assert.match(value.notice, /^CITED LINES 149-151, 179-182: \d+ of \d+ chars shown; page the rest with evidence_first_read_context readHandle=h_/);
+  assert.match(value.excerpt, /^149\tvoid Line149/);
+  assert.match(value.excerpt, /\n…\n179\tvoid Line179/);
+  assert.match(value.excerpt, /181\tvoid Line181\(\) \{ Work\(181\); \}/);
+  assert.doesNotMatch(value.excerpt, /(^|\n)12\t/);
+  assert.equal(value.projectedBodyRanges.length, 2);
+  const shown = value.projectedBodyRanges.reduce((total, [start, end]) => total + end - start, 0);
+  assert.equal(value.bodyOmittedChars, value.bodyTotalChars - shown);
+  assert.deepEqual(value.omittedBodyRanges[0], [0, value.projectedBodyRanges[0][0]]);
+  assert.equal(value.bodyComplete, false);
+});

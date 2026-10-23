@@ -34,7 +34,7 @@ test("partial projections in the input are listed once with their read handles",
   const { fact, count } = partialProjectionFact(history.getMessagesArray());
   assert.equal(count, 1);
   assert.match(fact, /1 earlier tool result\(s\) are present in this input only in part/);
-  assert.match(fact, /- project:\/\/Source\/Game\/GameMode\.cpp: read_file \(chars 0-512 of 5988 shown; readHandle=h-a\)/);
+  assert.match(fact, /- project:\/\/Source\/Game\/GameMode\.cpp: read_file \(512 of 5988 chars shown; readHandle=h-a\)/);
   assert.match(fact, /evidence_first_read_context\(action=read, readHandle, view=body\)/);
   assert.doesNotMatch(fact, /Done\.h|Whole\.h/);
 });
@@ -68,7 +68,7 @@ test("ranges of one file are grouped with their line numbers, and quoting hidden
   assert.equal(count, 5);
   assert.match(fact, /across 2 source\(s\)/);
   const characterLine = fact.split("\n").find(line => line.includes("Character.cpp"));
-  assert.match(characterLine, /lines 1-100 .*lines 101-200 .*lines 201-300 .*lines 301-420 \(chars 0-512 of 7000 shown; readHandle=h3\)/);
+  assert.match(characterLine, /lines 1-100 .*lines 101-200 .*lines 201-300 .*lines 301-420 \(512 of 7000 chars shown; readHandle=h3\)/);
   assert.match(fact, /GameMode\.cpp: lines 1-100/);
   assert.match(fact, /UPROPERTY\/UFUNCTION specifiers, is not in this input/);
   assert.match(fact, /code quoted in your earlier notes or validation packets is not the source/);

@@ -163,22 +163,22 @@ function createReadCapabilities(context) {
     }
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const explicitWindow = args.offsetBytes !== undefined || args.maxBytes !== undefined;
-    // Source is located first at any size; only small non-source files read whole.
+    const engineFile = resolution.resolvedRootType === "installed_engine", sourceFile = isSourceLikeExt(path.extname(resolution.absolutePath));
+    // Small project source reads whole as the numbered read_file_range 1..N payload (2026-10-20 audit: refused
+    // headers and 100-line pages split the code the model compared); engine and larger source are located first.
+    if (!explicitWindow && !engineFile && sourceFile && initialStat.size <= limits.wholeSourceReadMaxBytes) return readFileRange({ ...args, startLine: 1, endLine: Number.MAX_SAFE_INTEGER, lineNumbers: true }, requestContext);
     const wholeReadRefusal = explicitWindow ? null
-      : resolution.resolvedRootType === "installed_engine" ? "engine source requires a targeted read"
-        : isSourceLikeExt(path.extname(resolution.absolutePath)) ? "source files are located first, not read whole"
+      : engineFile ? "engine source requires a targeted read"
+        : sourceFile ? `source files are located first, not read whole, above ${limits.wholeSourceReadMaxBytes} bytes`
           : initialStat.size > limits.wholeReadMaxBytes ? `files over ${limits.wholeReadMaxBytes} bytes require a targeted read` : null;
     if (wholeReadRefusal) {
+      const counted = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes), totalLines = counted.ok ? counted.content.split(/\r?\n/).length : undefined;
       return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
-        `${args.path} is ${initialStat.size} bytes; ${wholeReadRefusal}. `
+        `${args.path} is ${initialStat.size} bytes${totalLines ? ` (${totalLines} lines)` : ""}; ${wholeReadRefusal}. `
         + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
-          retryAllowed: true, retryMode: "different_arguments",
-          suggestion: locateAlternatives(args)[0],
-          details: { size: initialStat.size, alternatives: [
-            ...locateAlternatives(args),
-            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },
-          ] },
-        });
+          retryAllowed: true, retryMode: "different_arguments", suggestion: locateAlternatives(args)[0],
+          details: { size: initialStat.size, ...(totalLines ? { totalLines } : {}), alternatives: [...locateAlternatives(args),
+            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) }] } });
     }
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {

@@ -1,6 +1,6 @@
 import { Chat, type PredictionLoopHandlerController } from "@lmstudio/sdk";
 import { minimumReadResultTokens } from "./budget-broker";
-import { resolveGenerationBudget } from "./context-budget";
+import { boundPastReasoning, resolveGenerationBudget } from "./context-budget";
 import { buildCompactedHistory, composeModelHistory, ContextManager, createInputAssembler, type ShownDataBlocks,
   measureContext, prepareWorkingInput } from "./context-manager";
 import { updateSemanticContext } from "./semantic-handoff";
@@ -16,7 +16,11 @@ import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-sele
 import type { ToolScope } from "./tool-scope";
 import { referenceGuidanceScope } from "./reference-context";
 
-type RetainedGuidance = { ids: readonly string[]; instruction: string; selectionScope: string };
+/** Older reasoning a projection round keeps, newest first, when no
+ * pastReasoningTokens budget is configured. */
+const PROJECTION_ROUND_REASONING_TOKENS = 2048;
+/** tokens: the measured cost of the instruction when last admitted. */
+type RetainedGuidance = { ids: readonly string[]; instruction: string; selectionScope: string; tokens?: number };
 /** Optional reference text admitted earlier in this execution, or the one it dropped. */
 export type GuidanceRetention = { kept?: RetainedGuidance; dropped?: RetainedGuidance };
 type RoundInputOptions = {
@@ -138,20 +142,36 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     }
   }
   // Exposure does not prove review completion. Keep returned bodies while the
-  // measured shared budget permits; pressure is owned by ContextManager.
+  // measured shared budget permits; pressure is owned by ContextManager. A
+  // retained instruction counts toward that pressure: dropping it alone changes
+  // the system message and costs a full prompt rebuild, so the round that must
+  // rewrite the input makes room for it instead.
+  const retainedGuidanceTokens = options.guidanceRetention?.kept?.tokens ?? 0;
   if (workingContext && !finalizing && contextManager.shouldProjectEvidence(assembledInput.measurement,
-    roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) {
+    roundTools.some(hasReadCapability), minimumReadBudget(roundTools), retainedGuidanceTokens)) {
     const projected = evidenceManager.project(workingHistory,
       { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRaw: true },
       config.toolResultProjectionChars);
+    let reasoningBounded = false;
     if (projected.changed) {
       workingHistory = projected.history;
       projectionApplied = true;
+      // This rewrite already discards the reusable prefix, so older reasoning
+      // goes in the same rewrite: it would otherwise outlive the bodies it
+      // described and be quoted as if it were source (2026-10-20 run, r13).
+      const counter = tokenSource as { countTokens?: (text: string) => Promise<number> };
+      if (counter.countTokens) {
+        const bounded = await boundPastReasoning(workingHistory,
+          config.pastReasoningTokens > 0 ? config.pastReasoningTokens : PROJECTION_ROUND_REASONING_TOKENS,
+          text => counter.countTokens!(text));
+        reasoningBounded = bounded !== workingHistory;
+        workingHistory = bounded;
+      }
       assembledInput = await assembleModelInput(workingHistory);
     }
     if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
       changed: projected.changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
-      inputTokens: assembledInput.measurement.inputTokens, exact: assembledInput.measurement.exact });
+      reasoningBounded, inputTokens: assembledInput.measurement.inputTokens, exact: assembledInput.measurement.exact });
   }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const measurePressure = async () => {
@@ -332,15 +352,18 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     if (retention?.dropped && !readmitCause) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
     else if (retention?.dropped && included) {
       Object.assign(telemetry, { reason: "sticky_readmitted", stickyCause: readmitCause });
-      retention.kept = retention.dropped; retention.dropped = undefined;
+      retention.kept = { ...retention.dropped, tokens: telemetry.addedTokens }; retention.dropped = undefined;
     } else if (retention?.dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: `${readmitCause}:${telemetry.reason}` });
     else if (retention && (kept || rescoped) && !included) {
       Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: (rescoped ? "scope_changed:" : "") + telemetry.reason });
       retention.dropped = retention.kept; retention.kept = undefined;
-    } else if (kept) telemetry.reason = "sticky_kept";
-    else if (retention && included && guidance.selectedInstruction !== undefined) {
+    } else if (kept) {
+      telemetry.reason = "sticky_kept";
+      if (retention?.kept) retention.kept.tokens = telemetry.addedTokens;
+    } else if (retention && included && guidance.selectedInstruction !== undefined) {
       if (rescoped) telemetry.stickyCause = "scope_changed";
-      retention.kept = { ids: telemetry.selectedIds, instruction: guidance.selectedInstruction, selectionScope };
+      retention.kept = { ids: telemetry.selectedIds, instruction: guidance.selectedInstruction, selectionScope,
+        tokens: telemetry.addedTokens };
     }
     if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,

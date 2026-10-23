@@ -146,7 +146,10 @@ export function readResultContract(tool: RemoteToolLike) {
   // Token allowance per requested unit. UTF-8 bytes use the shared estimate;
   // raw file bytes may expand under JSON escaping; UTF-16 characters are
   // bounded for CJK text (about one token per character) plus escaping.
-  return { field, defaultValue, multiplier: field === "byteBudget" ? 1 / UTF8_BYTES_PER_TOKEN_ESTIMATE
+  // Only the provider default (not a tool's own published default) adapts.
+  const adaptiveDefault = field === "byteBudget" && byteBudgetDefault !== undefined
+    && contract.$comment === "direct-json-text-utf8" && contract.default === undefined;
+  return { field, defaultValue, adaptiveDefault, multiplier: field === "byteBudget" ? 1 / UTF8_BYTES_PER_TOKEN_ESTIMATE
     : field === "maxBytes" ? 1.25 / UTF8_BYTES_PER_TOKEN_ESTIMATE : 1.25,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
@@ -175,6 +178,9 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
   return Math.max(sourceMinimum, archive ? minimumFor(archive) : 0);
 }
 
+/** The smallest default byteBudget an adaptive default shrinks to. */
+const DEFAULT_READ_FLOOR_BYTES = 8192;
+
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
   args: Record<string, unknown>) {
   const contract = readResultContract(tool);
@@ -183,7 +189,15 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   // This allocation does not replace the final exact tokenizer gate.
   const multiplier = field ? contract.multiplier : 1;
   const envelopeTokens = 1024;
-  const requested = field ? tokens(args[field] === undefined ? contract.defaultValue : Number(args[field])) : 3072;
+  // An omitted byteBudget takes at most half of what the batch still has, so a
+  // large default reads small files whole in a wide context and parallel reads
+  // still fit a narrow one; never below the former fixed 8 KiB default.
+  const adaptive = field !== null && contract.adaptiveDefault && args[field] === undefined
+    && contract.defaultValue > DEFAULT_READ_FLOOR_BYTES;
+  const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
+  const requested = field ? tokens(args[field] === undefined
+    ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
+    : Number(args[field])) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;

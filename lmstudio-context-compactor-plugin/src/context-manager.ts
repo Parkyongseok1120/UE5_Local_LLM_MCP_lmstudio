@@ -500,10 +500,13 @@ export class ContextManager {
     readonly requiredIndexes: (history: Chat) => number[] = () => []) { }
   /** Exact measurements are deterministic per execution/model handle. */
   readonly measurementCache = new Map<string, ContextMeasurement>();
-  shouldProjectEvidence(measurement: ContextMeasurement, hasReadTools: boolean, minimumReadTokens: number) {
+  /** reservedTokens: material this round will add after the evidence window
+   * (a retained instruction), counted so one rewrite makes room for both. */
+  shouldProjectEvidence(measurement: ContextMeasurement, hasReadTools: boolean, minimumReadTokens: number, reservedTokens = 0) {
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !measurement.exact) return false;
     const water = this.broker.watermarks(measurement, 0, hasReadTools, minimumReadTokens);
-    return measurement.remainingTokens < 0 || measurement.inputTokens > water.effectiveHighWaterTokens;
+    return measurement.remainingTokens < reservedTokens
+      || measurement.inputTokens + reservedTokens > water.effectiveHighWaterTokens;
   }
   /** Add optional material only after the existing evidence window is ready.
    * Admission reuses the exact assembler and shared broker; it never compacts

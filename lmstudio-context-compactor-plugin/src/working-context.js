@@ -123,6 +123,100 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
   return pinned;
 }
 
+// A body projection keeps every fact the model reads (more pages, totals,
+// coverage at read time, range/proof facts) and the digests that key coverage.
+// Bookkeeping it never needs stays in the archive record: digests the kept
+// sourceQueryKey/sourceVersion supersede, the project scope inside
+// sourceIdentity (sourceIdentityDigest keys it), envelope range arrays a body
+// view leaves empty, and "unknown" placeholders (2026-10-20 run: 2,852 chars
+// per projection, 559 of them code).
+const BODY_PROJECTION_DROPPED = ["provider", "semanticQueryDigest", "sourceHash", "rangeUnit", "archivedRanges",
+  "projectedRawRanges", "projectedSanitizedRanges", "omittedRanges"];
+
+function compactBodyProjection(projection) {
+  for (const key of BODY_PROJECTION_DROPPED) delete projection[key];
+  for (const [key, value] of Object.entries(projection)) if (value === "unknown") delete projection[key];
+  if (projection.redacted === false) delete projection.redacted;
+  if (projection.sourceIdentity && typeof projection.sourceIdentity === "object" && projection.sourceIdentity.path)
+    projection.sourceIdentity = { path: projection.sourceIdentity.path };
+  const { evidenceId, version, readHandle } = projection.archiveRef;
+  projection.archiveRef = { evidenceId, version, readHandle };
+}
+
+const fileKey = value => String(value || "").replace(/\\/g, "/").split("/").pop().toLowerCase();
+
+// Line citations in assistant text and tool arguments: path:line[-line] by file
+// name, and "Line N[-M]" by the stem of the nearest file named before it in the
+// same text, so a header/source pair both match (the 2026-10-20 notes cited
+// lines that way). A wrong attribution only finds no such line in that file.
+const CITATION = /([\w./\\-]+\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|cs|ini|md|json|ts|js|py))(?::(\d+)(?:\s*-\s*(\d+))?)?\b|\b[Ll]ines? (\d+)(?:\s*-\s*(\d+))?/g;
+const fileStem = value => fileKey(value).replace(/\.[^.]+$/, "");
+function citedLineRanges(messages) {
+  const cited = new Map();
+  const add = (key, start, end) => {
+    if (!key || !Number.isInteger(start) || end < start || end - start > 400) return;
+    cited.set(key, [...(cited.get(key) || []), [start, end]]);
+  };
+  for (const message of messages) {
+    if (message.getRole() !== "assistant") continue;
+    const texts = [message.getText(), ...message.getToolCallRequests().map(request => JSON.stringify(request.arguments || {}))];
+    for (const text of texts) {
+      let file = "";
+      for (const match of text.matchAll(CITATION)) {
+        if (match[1]) {
+          file = match[1];
+          if (match[2]) add(fileKey(file), Number(match[2]), Number(match[3] || match[2]));
+        } else if (file) add(`stem:${fileStem(file)}`, Number(match[4]), Number(match[5] || match[4]));
+      }
+    }
+  }
+  return cited;
+}
+
+// A shortened name (GameMode.cpp) matches the file it ends (…CombatGameMode.cpp).
+const namesMatch = (cited, own) => cited === own || (cited.length >= 5 && own.endsWith(cited));
+
+// The cited lines (±1) of a line-numbered body, within maxChars, as body offsets.
+function citedExcerpt(body, parsed, citations, maxChars) {
+  const own = fileKey(parsed.projectRelativePath || parsed.path), ownStem = fileStem(own);
+  const ranges = [...citations].filter(([key]) => key.startsWith("stem:")
+    ? namesMatch(key.slice(5), ownStem) : namesMatch(key, own)).flatMap(([, value]) => value);
+  if (!ranges.length || parsed.lineNumbers !== true) return null;
+  const lines = [];
+  let offset = 0;
+  for (const text of body.split("\n")) {
+    const number = /^(\d+)\t/.exec(text);
+    lines.push({ start: offset, end: offset + text.length, number: number ? Number(number[1]) : null });
+    offset += text.length + 1;
+  }
+  const wanted = lines.filter(line => line.number !== null
+    && ranges.some(([start, end]) => line.number >= start - 1 && line.number <= end + 1));
+  if (!wanted.length) return null;
+  const segments = [];
+  let shown = 0;
+  for (const line of wanted) {
+    const last = segments.at(-1);
+    const length = line.end - line.start + (last && last[1] === line.start - 1 ? 1 : 4);
+    if (shown + length > maxChars) break;
+    if (last && last[1] === line.start - 1) last[1] = line.end; else segments.push([line.start, line.end]);
+    shown += line.end - line.start;
+  }
+  if (!segments.length) return null;
+  const numberAt = offset => lines.find(line => line.start === offset)?.number;
+  const numberEnding = offset => lines.find(line => line.end === offset)?.number;
+  return { ranges: segments, shown: segments.reduce((total, [start, end]) => total + end - start, 0),
+    excerpt: segments.map(([start, end]) => body.slice(start, end)).join("\n…\n"),
+    lines: segments.map(([start, end]) => `${numberAt(start)}-${numberEnding(end)}`).join(", ") };
+}
+
+function complementRanges(ranges, length) {
+  const omitted = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) { if (start > cursor) omitted.push([cursor, start]); cursor = end; }
+  if (cursor < length) omitted.push([cursor, length]);
+  return omitted;
+}
+
 function serializedResultContent(content) {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
@@ -463,6 +557,7 @@ class WorkingContext {
     let changed = false, archiveFailed = false, preservedFirstConsumer = false;
     const messages = history.getMessagesArray();
     const pinned = pinnedWorkingSet(messages, index, metadata);
+    const citations = citedLineRanges(messages);
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
       const message = messages[messageIndex];
       const results = message.getToolCallResults();
@@ -543,6 +638,20 @@ class WorkingContext {
           bodyComplete: false,
           fullRawProvided: false, currentFile: false, grantsMutation: false,
           excerpt: "" };
+        if (bodyFirst) {
+          compactBodyProjection(projection);
+          // Lines the model cited later are the ones it will quote again.
+          const cited = citedExcerpt(boundedBody, parsed, citations, Math.max(maxChars * 2, 1024));
+          if (cited) {
+            Object.assign(projection, { projectedBodyRanges: cited.ranges,
+              omittedBodyRanges: complementRanges(cited.ranges, boundedBody.length),
+              bodyOmittedChars: boundedBody.length - cited.shown, bodyComplete: false, excerpt: cited.excerpt,
+              projectionCoverage: "partial",
+              notice: `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
+            const citedContent = JSON.stringify(projection);
+            if (citedContent.length < originalEnvelope.length) { changed = true; return { ...result, content: citedContent }; }
+          }
+        }
         const fixedCost = JSON.stringify(projection).length;
         projectedEnd = Math.min(bodyFirst ? maxChars : projectedEnd,
           Math.max(0, originalEnvelope.length - fixedCost - 1));
@@ -552,7 +661,6 @@ class WorkingContext {
           projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
           projection.excerpt = semanticBody.slice(0, projectedEnd);
         } else {
-          projection.omittedRanges = [[0, record.body.length]];
           projection.projectedBodyRanges = [[0, Math.min(projectedEnd, boundedBody.length)]];
           projection.omittedBodyRanges = [[Math.min(projectedEnd, boundedBody.length), boundedBody.length]];
           projection.bodyOmittedChars = Math.max(0, boundedBody.length - projectedEnd);

@@ -36,7 +36,7 @@ import { runOneToolRound } from "./round-loop";
 import { decideReasoningRecovery, reasoningRecoveryOutputCap } from "./reasoning-recovery";
 import { runtimeInstallationIdentity } from "./runtime-identity";
 import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
-import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, readOnlyReviewRequest, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import {
   bindProjectArguments,
   detectMentionedProject,
@@ -143,9 +143,13 @@ export function createPredictionLoopHandler(
     const allModelTools = capabilityRegistry.tools;
     const evidenceManager = new EvidenceManager(workingContext, allModelTools);
     evidenceManager.initializeChangeOrigins(originalHistory);
-    const modelTools = config.auditCompletionMode === "bounded"
-      ? capabilityRegistry.readProfile()
-      : allModelTools;
+    // A review-only request withholds the file/project mutation schemas it
+    // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
+    // schema chars per call).
+    const latestUserText = originalHistory.getMessagesArray().filter(message => message.getRole() === "user").at(-1)?.getText() || "";
+    const readOnlyReview = !config.observeOnly && readOnlyReviewRequest(latestUserText);
+    const modelTools = config.auditCompletionMode === "bounded" ? capabilityRegistry.readProfile()
+      : readOnlyReview ? capabilityRegistry.reviewProfile() : allModelTools;
     if (config.showDebugInfo) ctl.debug({
       event: "direct_runtime_identity",
       executionId,
@@ -157,6 +161,7 @@ export function createPredictionLoopHandler(
         schema: tool.parametersJsonSchema || null,
       }))),
       fullToolCount: modelTools.length,
+      toolProfile: config.auditCompletionMode === "bounded" ? "bounded_audit" : readOnlyReview ? "read_only_review" : "full",
       contextManagementMode: config.contextManagementMode,
       configuredWorkingInputTargetTokens: config.workingInputTargetTokens,
       configuredWorkingInputTriggerTokens: config.workingInputTriggerTokens,

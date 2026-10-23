@@ -35,7 +35,7 @@ function partialProjections(messages: ChatMessage[]): ProjectionView[] {
 
 function projectionLine(path: string, views: ProjectionView[]): string {
   const ranges = views.slice(-MAX_RANGES_PER_FILE).map(view => (view.lines ? `lines ${view.lines[0]}-${view.lines[1]}` : view.toolName)
-    + ` (chars 0-${view.shown} of ${view.total} shown; readHandle=${view.readHandle})`);
+    + ` (${view.shown} of ${view.total} chars shown; readHandle=${view.readHandle})`);
   const more = views.length > MAX_RANGES_PER_FILE ? `; ${views.length - MAX_RANGES_PER_FILE} older partial result(s)` : "";
   return `- ${path || "(path not recorded)"}: ${ranges.join("; ")}${more}`;
 }

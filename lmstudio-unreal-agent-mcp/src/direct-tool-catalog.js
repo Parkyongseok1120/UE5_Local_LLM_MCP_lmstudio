@@ -201,7 +201,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file",
-      description: "UTF-8 small non-source files. Source: locate first (search/read_symbol/range); explicit byte window for recovery.",
+      description: "Small files whole; project source <=24 KB as numbered lines. Else locate first; byte window to recover.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),

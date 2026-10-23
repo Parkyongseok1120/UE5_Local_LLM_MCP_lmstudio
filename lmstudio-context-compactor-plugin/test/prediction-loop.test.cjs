@@ -1644,6 +1644,25 @@ test("bounded audit exposes read-only research tools and gives the same model on
   assert.equal(finalMeasurement.outputReserve, 4096);
 });
 
+for (const [request, expected, profile] of [
+  ["캐릭터 RPC 계약에서 잘못된 것들을 찾아서 정리해줘.", ["read_file"], "read_only_review"],
+  ["캐릭터 RPC 계약을 찾아서 고쳐줘.", ["read_file", "write_file"], "full"],
+]) test(`a ${profile} request exposes ${expected.join(", ")} without bounded audit limits`, async () => {
+  const tools = [
+    { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" },
+    { name: "write_file", description: "Write source", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" }];
+  const seen = [];
+  const model = { identifier: "qwen/qwen3.8-27b", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+    async act(_chat, actTools, options) { seen.push(actTools.map(tool => tool.name)); completeRecoveryReply(options, "Report."); } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: request }]), model, {}, tools);
+  await handlePredictionLoop(ctl);
+  assert.deepEqual(seen, [expected]);
+  const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
+  assert.equal(identity.toolProfile, profile);
+  assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
+});
+
 test("bounded audit converts research output exhaustion into one tool-free final report", async () => {
   const history = Chat.from([{ role: "user", content: "Audit until the research output limit." }]);
   const readTool = { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" },
@@ -3344,7 +3363,8 @@ test("deterministic working context projects a completed large result and expose
   assert.equal(result.viewMode, "body_first_bounded");
   assert.equal(result.bodyField, "body");
   assert.ok(result.omittedBodyRanges[0][1] > result.projectedBodyRanges[0][1]);
-  assert.deepEqual(result.projectedRawRanges, []);
+  // A body view provides no raw envelope range; it omits the empty array.
+  assert.equal(result.projectedRawRanges?.length ?? 0, 0);
   assert.ok(receivedTools.some(tool => tool.name === "evidence_first_read_context"));
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.workingContext.projectionApplied, true);
@@ -5506,6 +5526,63 @@ test('admitted guidance keeps one system text across rounds, and a dropped one r
   assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
   assert.equal(run.systems[3], run.systems[0]);
   assert.equal(run.systems[4], run.systems[0]);
+});
+
+// 2026-10-20 run: dropping the instruction alone rebuilt a 55.7k prompt (71.7s)
+// one round before a projection rebuilt it again. One rewrite now does both.
+test('a retained instruction that would cross high water is kept by projecting evidence in the same round', async () => {
+  const { REASONING_SEPARATOR } = require('../dist/context-budget');
+  const systems = [], inputs = [];
+  let calls = 0;
+  const tool = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const latest = (ctl, event) => ctl.debugValues.filter(e => e.event === event).at(-1);
+  const lineChars = 50;
+  let ctl;
+  const model = { identifier: 'sticky-projection', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt()).getText());
+      inputs.push(chat.toString());
+      if (n === 2) { completeRecoveryReply(options, 'Done.'); return; }
+      let lines = 400;
+      if (n === 1) {
+        // Size the second read so the next base input sits under high water by
+        // less than the retained instruction costs.
+        const high = latest(ctl, 'context_low_water').effectiveHighWaterTokens;
+        const { baseInputTokens, addedTokens } = latest(ctl, 'design_guidance_input');
+        assert.ok(addedTokens > 200);
+        // A JSON-escaped line is two chars longer (tab, newline); the new exchange adds ~120 tokens.
+        lines = Math.max(1, Math.floor((high - addedTokens / 2 - 120 - baseInputTokens) * 4 / (lineChars + 2)));
+      }
+      const request = { type: 'function', id: `sp-${n}`, name: 'read_file_range', arguments: { path: `project://Source/A${n}.cpp` } };
+      await options.guardToolCall(0, 7500 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      // Round 0 leaves a long reasoning note; the projecting round trims it.
+      const reasoning = n === 0 ? [{ type: 'text', text: `${'OLD_REASONING '.repeat(700)}${REASONING_SEPARATOR}Reading.` }] : [];
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [...reasoning, { type: 'toolCallRequest', toolCallRequest: request }] }));
+      const content = Array.from({ length: lines }, (_, i) => `${i + 1}\tvoid L${n}_${i}() {}`.padEnd(lineChars - 1, ' ')).join('\n');
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `project://Source/A${n}.cpp`, startLine: 1, endLine: lines,
+          lineNumbers: true, content }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  ctl = fakeController(Chat.from([{ role: 'user', content: '멀티플레이 RPC 코드를 감사해' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
+  await handlePredictionLoop(ctl);
+  const events = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_kept']);
+  const projection = ctl.debugValues.find(e => e.event === 'working_context_projection' && e.roundIndex === 2);
+  assert.equal(projection?.changed, true);
+  assert.equal(projection.reasoningBounded, true);
+  assert.equal(systems[2], systems[0]);
+  assert.match(inputs[1], /OLD_REASONING/);
+  assert.doesNotMatch(inputs[2], /OLD_REASONING/);
+  assert.match(inputs[2], /Reading\./);
+  assert.match(inputs[2], /sp-0/);
 });
 
 test('a dropped guidance stays out between low and high water instead of alternating', async () => {

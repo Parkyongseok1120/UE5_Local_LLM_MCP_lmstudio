@@ -321,9 +321,10 @@ test("whole read of a large engine file is refused with targeted alternatives; e
   assert.match(paged.content, /Field399/);
 });
 
-// Source is located first at any size; only a small non-source file reads whole,
-// and an explicit byte window remains the recovery path for both.
-test("implicit whole reads refuse project source at any size and allow small non-source files only", async (t) => {
+// Small project source reads whole as numbered lines (the read_file_range 1..N
+// payload); larger source is located first. A small non-source file reads whole,
+// and an explicit byte window remains the recovery path for all of them.
+test("implicit whole reads number small project source, refuse larger source and allow small non-source files", async (t) => {
   const { runtime, projectRoot } = fixture(t);
   const write = (relative, bytes) => {
     fs.mkdirSync(path.dirname(path.join(projectRoot, relative)), { recursive: true });
@@ -331,10 +332,23 @@ test("implicit whole reads refuse project source at any size and allow small non
     return `project://${relative}`;
   };
   for (const source of ["project://Source/Game/Lines.h", "project://Source/Game/Game.Build.cs",
-    write("Source/Game/Tiny.cpp", 16), write("Source/Game/Upper.CPP", 16), write("Source/Game/Mixed.Hpp", 16)]) {
+    write("Source/Game/Tiny.cpp", 16), write("Source/Game/Upper.CPP", 16), write("Source/Game/Edge.Hpp", 24 * 1024)]) {
+    const whole = await call(runtime, "read_file", { path: source });
+    assert.equal(whole.ok, true, source);
+    assert.equal(whole.lineNumbers, true, source);
+    assert.equal(whole.startLine, 1);
+    assert.equal(whole.endLine, whole.totalLines);
+    assert.equal(whole.rangeComplete, true);
+    assert.match(whole.content, /^1\t/u);
+  }
+  const lines = await call(runtime, "read_file", { path: "project://Source/Game/Lines.h" });
+  assert.equal(lines.totalLines, 30);
+  assert.match(lines.content, /\n30\t\/\/ line 30$/u);
+  for (const source of [write("Source/Game/Big.cpp", 24 * 1024 + 1), write("Source/Game/Mixed.Hpp", 64 * 1024)]) {
     const refused = await call(runtime, "read_file", { path: source });
     assert.equal(refused.errorCode, "WHOLE_READ_TOO_LARGE", source);
-    assert.match(refused.message, /source files are located first/u);
+    assert.match(refused.message, /\(1 lines\); source files are located first, not read whole, above 24576 bytes/u);
+    assert.equal(refused.totalLines, 1);
     assert.deepEqual(refused.alternatives.map((item) => item.tool), ["search_files", "read_symbol", "read_file_range"]);
     assert.equal(refused.suggestion.tool, "search_files");
     assert.equal(refused.suggestion.args, undefined);
@@ -357,8 +371,9 @@ test("implicit whole reads refuse project source at any size and allow small non
   }
 });
 
-test("the implicit whole-read limit stays configurable but never admits source", async (t) => {
-  const { runtime, projectRoot } = fixture(t, { DIRECT_WHOLE_READ_MAX_BYTES: String(16 * 1024) });
+test("the implicit whole-read limits stay configurable, and the source limit is separate", async (t) => {
+  const { runtime, projectRoot } = fixture(t, { DIRECT_WHOLE_READ_MAX_BYTES: String(16 * 1024),
+    DIRECT_WHOLE_SOURCE_READ_MAX_BYTES: "0" });
   fs.mkdirSync(path.join(projectRoot, "Config"), { recursive: true });
   fs.writeFileSync(path.join(projectRoot, "Config", "DefaultEngine.ini"), "x".repeat(12 * 1024), "utf8");
   assert.equal((await call(runtime, "read_file", { path: "project://Config/DefaultEngine.ini" })).ok, true);
