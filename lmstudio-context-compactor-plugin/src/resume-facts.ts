@@ -5,9 +5,12 @@ import { toolMemory } from "./context-ports";
 // read. They are views of state the chat and the archive already own: nothing
 // here is stored, and nothing selects or blocks a tool.
 
-const MAX_PROJECTION_LINES = 6;
+const MAX_PROJECTION_FILES = 10;
+const MAX_RANGES_PER_FILE = 4;
+const MAX_PROJECTION_FACT_CHARS = 2400;
 
-type ProjectionView = { toolName: string; path: string; shown: number; total: number; readHandle: string };
+type ProjectionView = { toolName: string; path: string; shown: number; total: number; readHandle: string;
+  lines: [number, number] | null };
 
 function partialProjections(messages: ChatMessage[]): ProjectionView[] {
   const views: ProjectionView[] = [];
@@ -20,30 +23,53 @@ function partialProjections(messages: ChatMessage[]): ProjectionView[] {
       if (typeof readHandle !== "string" || !readHandle) continue;
       const total = Number(value.bodyTotalChars);
       const omitted = Number(value.bodyOmittedChars);
+      const start = Number(value.sourceFacts?.startLine), end = Number(value.sourceFacts?.endLine);
       views.push({ toolName: String(value.toolName || "tool"), path: String(value.sourceIdentity?.path || "").slice(0, 160),
         shown: Number.isFinite(total) && Number.isFinite(omitted) ? Math.max(0, total - omitted) : 0,
-        total: Number.isFinite(total) ? total : 0, readHandle });
+        total: Number.isFinite(total) ? total : 0, readHandle,
+        lines: Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start ? [start, end] : null });
     }
   }
   return views;
 }
 
-/** One short list of the results this input carries only in part. Each
- * result's own notice stays; this gathers them where the model reads its
- * runtime facts, so "read earlier" is not mistaken for "present now". */
+function projectionLine(path: string, views: ProjectionView[]): string {
+  const ranges = views.slice(-MAX_RANGES_PER_FILE).map(view => (view.lines ? `lines ${view.lines[0]}-${view.lines[1]}` : view.toolName)
+    + ` (chars 0-${view.shown} of ${view.total} shown; readHandle=${view.readHandle})`);
+  const more = views.length > MAX_RANGES_PER_FILE ? `; ${views.length - MAX_RANGES_PER_FILE} older partial result(s)` : "";
+  return `- ${path || "(path not recorded)"}: ${ranges.join("; ")}${more}`;
+}
+
+/** One short list of the results this input carries only in part, by file.
+ * Each result's own notice stays; this gathers them where the model reads its
+ * runtime facts, so "read earlier" is not mistaken for "present now". It is
+ * derived from the input being assembled, so the round that compacts a body
+ * already carries it. */
 export function partialProjectionFact(messages: ChatMessage[]): { fact: string | null; count: number } {
   const views = partialProjections(messages);
   if (!views.length) return { fact: null, count: 0 };
-  const lines = views.slice(-MAX_PROJECTION_LINES).map(view =>
-    `- ${view.toolName} ${view.path || "(path not recorded)"}: chars 0-${view.shown} of ${view.total}; readHandle=${view.readHandle}`);
-  const more = views.length > MAX_PROJECTION_LINES ? [`- ${views.length - MAX_PROJECTION_LINES} more partial results not listed`] : [];
+  const byPath = new Map<string, ProjectionView[]>();
+  for (const view of views) byPath.set(view.path, [...(byPath.get(view.path) || []), view]);
+  const files = [...byPath].slice(-MAX_PROJECTION_FILES);
+  const lines: string[] = [];
+  let used = 0;
+  for (const [path, entries] of files.reverse()) {
+    const line = projectionLine(path, entries);
+    if (used + line.length > MAX_PROJECTION_FACT_CHARS) break;
+    lines.unshift(line); used += line.length;
+  }
+  const hiddenFiles = byPath.size - lines.length;
+  const more = hiddenFiles > 0 ? [`- ${hiddenFiles} more file(s) with partial results not listed`] : [];
   return { count: views.length, fact: [
-    `Runtime evidence observation: ${views.length} earlier tool result(s) are present in this input only in part (compacted).`,
+    `Runtime evidence observation: ${views.length} earlier tool result(s) are present in this input only in part (compacted), across ${byPath.size} source(s).`,
     ...lines, ...more,
     "Partial here does not mean the source was never read, and it does not require restoring every omitted body. "
-      + "Use the evidence already present when it answers the current question. When a specific claim needs omitted text, "
-      + "page only that scope with evidence_first_read_context(action=read, readHandle, view=body), or read the focused "
-      + "current source range if the handle is unavailable. Do not claim whole-source review or absence from a partial body.",
+      + "Use the evidence already present when it answers the current question. The omitted text of these ranges, "
+      + "including exact calls, arguments, conditions and UPROPERTY/UFUNCTION specifiers, is not in this input; "
+      + "code quoted in your earlier notes or validation packets is not the source. Before quoting such code or "
+      + "stating that something is absent there, page only that scope with evidence_first_read_context(action=read, "
+      + "readHandle, view=body), or read the focused current source range if the handle is unavailable. "
+      + "Do not claim whole-source review or absence from a partial body.",
   ].join("\n") };
 }
 

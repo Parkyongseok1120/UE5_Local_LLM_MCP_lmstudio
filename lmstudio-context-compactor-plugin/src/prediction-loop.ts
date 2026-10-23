@@ -24,6 +24,8 @@ import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityN
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted } from "./resume-facts";
+import { packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines, validatePackets,
+  type QuoteMismatch } from "./quote-anchoring";
 import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
@@ -241,11 +243,13 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "projection" | "prior_turn", string>();
+    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check", string>();
     // Data blocks sent in this execution, by anchor. Earlier blocks are resent
     // unchanged so each model input extends the previous one; discarded with
     // the execution.
     const shownDataBlocks = new Map<string, readonly string[]>();
+    // Code names in the latest validated packet that no returned source shows.
+    let packetQuoteGaps: QuoteMismatch[] = [];
     // Admitted reference text for this execution only; discarded with it, so
     // the next user turn selects again.
     const guidanceRetention: GuidanceRetention = {};
@@ -254,7 +258,6 @@ export function createPredictionLoopHandler(
     const resumeProjection = partialProjectionFact(workingHistory.getMessagesArray());
     const resumedAfterInterruption = priorTurnInterrupted(originalHistory.getMessagesArray());
     if (!config.observeOnly) {
-      if (resumeProjection.fact) runtimeFacts.set("projection", resumeProjection.fact);
       if (resumedAfterInterruption) runtimeFacts.set("prior_turn", PRIOR_TURN_INTERRUPTED_FACT);
     }
     if (config.showDebugInfo) ctl.debug({ event: "resume_state", executionId,
@@ -390,7 +393,12 @@ export function createPredictionLoopHandler(
           guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
-          getRuntimeFacts: () => [...runtimeFacts.values()],
+          // The projection view is derived from the input being assembled, so
+          // the round that compacts a body already lists it.
+          getRuntimeFacts: (history: Chat) => {
+            const projection = config.observeOnly ? null : partialProjectionFact(history.getMessagesArray()).fact;
+            return [...(projection ? [projection] : []), ...runtimeFacts.values()];
+          },
           shownDataBlocks,
           finalizationTrigger: execution.finalizationTrigger,
           reportContinuation,
@@ -461,13 +469,6 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const retainedIndexes = compactionCheckpoint?.retainedIndexes || [];
         const retainedIndexLimit = 64;
         const inputEvidence = messageEvidenceTelemetry(modelInput.getMessagesArray());
-        if (!config.observeOnly) {
-          // Kept current for the next input: a projection made for this round
-          // is listed from the next round on.
-          const projectionView = partialProjectionFact(modelInput.getMessagesArray());
-          if (projectionView.fact) runtimeFacts.set("projection", projectionView.fact);
-          else runtimeFacts.delete("projection");
-        }
         if (config.showDebugInfo) {
           // What the model input actually carries per tool result (no body text):
           // which results are partial projections, and whether each still has its
@@ -1079,6 +1080,19 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             normalizeMessages(captured.messages),
           ));
         }
+        const packets = config.observeOnly ? [] : validatePackets(captured.messages);
+        if (packets.length) {
+          // The visible recorder keeps every returned body, including ones the
+          // working input has since compacted.
+          packetQuoteGaps = packetQuoteMismatches(packets.at(-1), returnedSourceLines(
+            [...visibleTranscript.snapshot().getMessagesArray(), ...captured.messages]));
+          const quoteFact = quoteCheckFact(packetQuoteGaps);
+          if (quoteFact) runtimeFacts.set("quote_check", quoteFact);
+          else runtimeFacts.delete("quote_check");
+          if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_check", executionId, roundIndex,
+            packets: packets.length, mismatches: packetQuoteGaps.map(({ claimPath, location, kind, missingTokens }) =>
+              ({ claimPath, location, kind, missingTokens })) });
+        }
         if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
           const stagnation = toolStagnation.observe(captured.messages, recoveryProgress);
           const failure = stagnation.repeatedFailure;
@@ -1397,6 +1411,11 @@ event: decision.trigger === "research_recovery_exhausted"
       if (searchNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(searchNotice);
         if (config.showDebugInfo) ctl.debug({ event: "partial_search_scope_notice", executionId });
+      }
+      const quoteNotice = visibleTranscript.lastAnswerText ? quoteAnchoringNotice(packetQuoteGaps) : null;
+      if (quoteNotice) {
+        visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(quoteNotice);
+        if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_notice", executionId, mismatches: packetQuoteGaps.length });
       }
     } catch (error) {
       executionFailure = error;

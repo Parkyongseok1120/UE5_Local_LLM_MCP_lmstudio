@@ -34,20 +34,46 @@ test("partial projections in the input are listed once with their read handles",
   const { fact, count } = partialProjectionFact(history.getMessagesArray());
   assert.equal(count, 1);
   assert.match(fact, /1 earlier tool result\(s\) are present in this input only in part/);
-  assert.match(fact, /read_file project:\/\/Source\/Game\/GameMode\.cpp: chars 0-512 of 5988; readHandle=h-a/);
+  assert.match(fact, /- project:\/\/Source\/Game\/GameMode\.cpp: read_file \(chars 0-512 of 5988 shown; readHandle=h-a\)/);
   assert.match(fact, /evidence_first_read_context\(action=read, readHandle, view=body\)/);
   assert.doesNotMatch(fact, /Done\.h|Whole\.h/);
 });
 
-test("the projection list is bounded and says how many it left out", () => {
+test("the projection list is bounded by file and says how many it left out", () => {
   const history = Chat.empty();
   history.append(ChatMessage.from({ role: "user", content: "Audit" }));
-  for (let i = 0; i < 9; i++) exchange(history, `p${i}`, "read_file", {}, projection(`p${i}`, `project://F${i}.h`, 2000, 512, `h${i}`));
+  for (let i = 0; i < 12; i++) exchange(history, `p${i}`, "read_file", {}, projection(`p${i}`, `project://F${i}.h`, 2000, 512, `h${i}`));
   const { fact, count } = partialProjectionFact(history.getMessagesArray());
-  assert.equal(count, 9);
-  assert.equal(fact.split("\n").filter(line => line.startsWith("- read_file")).length, 6);
-  assert.match(fact, /- 3 more partial results not listed/);
+  assert.equal(count, 12);
+  assert.equal(fact.split("\n").filter(line => line.startsWith("- project://")).length, 10);
+  assert.match(fact, /across 12 source\(s\)/);
+  assert.match(fact, /- 2 more file\(s\) with partial results not listed/);
+  assert.match(fact, /F11\.h/);
+  assert.doesNotMatch(fact, /F0\.h|F1\.h:/);
   assert.equal(partialProjectionFact([]).fact, null);
+});
+
+// 2026-10-20 run: 20 range reads of five files were compacted in one round and
+// the next analysis rebuilt calls and specifiers that the bodies no longer showed.
+test("ranges of one file are grouped with their line numbers, and quoting hidden code needs a re-read", () => {
+  const history = Chat.empty();
+  history.append(ChatMessage.from({ role: "user", content: "Audit" }));
+  const path = "project://Source/Game/Character.cpp";
+  for (const [i, start, end] of [[0, 1, 100], [1, 101, 200], [2, 201, 300], [3, 301, 420]])
+    exchange(history, `r${i}`, "read_file_range", {}, { ...projection(`r${i}`, path, 7000, 512, `h${i}`),
+      toolName: "read_file_range", sourceFacts: { startLine: start, endLine: end } });
+  exchange(history, "g", "read_file_range", {}, { ...projection("g", "project://Source/Game/GameMode.cpp", 4000, 512, "hg"),
+    toolName: "read_file_range", sourceFacts: { startLine: 1, endLine: 100 } });
+  const { fact, count } = partialProjectionFact(history.getMessagesArray());
+  assert.equal(count, 5);
+  assert.match(fact, /across 2 source\(s\)/);
+  const characterLine = fact.split("\n").find(line => line.includes("Character.cpp"));
+  assert.match(characterLine, /lines 1-100 .*lines 101-200 .*lines 201-300 .*lines 301-420 \(chars 0-512 of 7000 shown; readHandle=h3\)/);
+  assert.match(fact, /GameMode\.cpp: lines 1-100/);
+  assert.match(fact, /UPROPERTY\/UFUNCTION specifiers, is not in this input/);
+  assert.match(fact, /code quoted in your earlier notes or validation packets is not the source/);
+  assert.match(fact, /stating that something is absent there/);
+  assert.ok(fact.length < 3600);
 });
 
 test("a previous turn that ended after tool results without an answer reports only the observed missing final answer", () => {

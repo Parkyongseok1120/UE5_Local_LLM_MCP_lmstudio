@@ -16,8 +16,9 @@ import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-sele
 import type { ToolScope } from "./tool-scope";
 import { referenceGuidanceScope } from "./reference-context";
 
-/** Optional reference text admitted earlier in this execution, or a drop. */
-export type GuidanceRetention = { kept?: { ids: readonly string[]; instruction: string; selectionScope: string }; dropped?: boolean };
+type RetainedGuidance = { ids: readonly string[]; instruction: string; selectionScope: string };
+/** Optional reference text admitted earlier in this execution, or the one it dropped. */
+export type GuidanceRetention = { kept?: RetainedGuidance; dropped?: RetainedGuidance };
 type RoundInputOptions = {
   ctl: PredictionLoopHandlerController; config: DirectConfig;
   tokenSource: Awaited<ReturnType<PredictionLoopHandlerController["tokenSource"]>>;
@@ -38,7 +39,7 @@ type RoundInputOptions = {
   guidanceRetention?: GuidanceRetention;
   guidanceScope?: ToolScope;
   referenceRecovery?: boolean;
-  getRuntimeFacts?: () => string[];
+  getRuntimeFacts?: (history: Chat) => string[];
   /** Data blocks this execution already sent (owned by the prediction loop). */
   shownDataBlocks?: ShownDataBlocks;
   finalizationTrigger: string | null;
@@ -301,13 +302,22 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // between rounds discards the server's reusable prefix. Within one
     // execution the first admitted instruction is re-admitted unchanged while
     // it fits (only the per-round reference data, kept outside the system
-    // message, follows the current observations); once dropped it stays out.
-    // Newly returned engine/version evidence or a topic it adds (the selection
+    // message, follows the current observations). A dropped instruction stays
+    // out until a round that already rewrote this input (projection or
+    // compaction) or one back under low water: re-admitting it there costs no
+    // prefix the round still had, and the gap to high water keeps it from
+    // alternating. Newly returned engine/version evidence or a topic it adds (the selection
     // scope) is the one input that may select again. Catalogue/generator output and runtime
     // identity are assumed fixed for the execution.
     const retention = options.guidanceRetention;
     const rescoped = Boolean(retention?.kept && retention.kept.selectionScope !== selectionScope);
-    const kept = rescoped ? undefined : retention?.kept;
+    const readmitCause = retention?.dropped
+      ? projectionApplied || compacted || lowWater.changed ? "input_reshaped"
+        // Configured, not effective, low water: a mandatory-floor exception
+        // raises the effective one to high water, which would remove the gap.
+        : assembledInput.measurement.inputTokens <= (lowWater.telemetry?.configuredLowWaterTokens ?? -1) ? "low_water" : undefined
+      : undefined;
+    const kept = rescoped ? undefined : retention?.kept || (readmitCause ? retention?.dropped : undefined);
     const keptCandidates = kept ? [...new Map([...candidates, {}].map(({ referenceData, dataIds }: Partial<GuidanceCandidate>) =>
       [referenceData, { ids: kept.ids, instruction: kept.instruction, referenceData, dataIds }])).values()] : [];
     const guidance = await contextManager.addOptionalReferences(assembledInput,
@@ -319,10 +329,14 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     assembledInput = guidance.assembled;
     const telemetry: typeof guidance.telemetry & { stickyCause?: string } = { ...guidance.telemetry };
     const included = telemetry.reason === "included";
-    if (retention?.dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
+    if (retention?.dropped && !readmitCause) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
+    else if (retention?.dropped && included) {
+      Object.assign(telemetry, { reason: "sticky_readmitted", stickyCause: readmitCause });
+      retention.kept = retention.dropped; retention.dropped = undefined;
+    } else if (retention?.dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: `${readmitCause}:${telemetry.reason}` });
     else if (retention && (kept || rescoped) && !included) {
       Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: (rescoped ? "scope_changed:" : "") + telemetry.reason });
-      retention.kept = undefined; retention.dropped = true;
+      retention.dropped = retention.kept; retention.kept = undefined;
     } else if (kept) telemetry.reason = "sticky_kept";
     else if (retention && included && guidance.selectedInstruction !== undefined) {
       if (rescoped) telemetry.stickyCause = "scope_changed";

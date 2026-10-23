@@ -31,10 +31,12 @@ RESULT_FLAGS = ("connection", "reasonCode", "compilationOutcome", "testStatus", 
 SOURCE_READS = {"read_file", "read_file_range", "read_symbol", "git_read_file"}
 MUTATIONS = {"replace_in_file", "write_file", "apply_edit_bundle", "patch_file"}
 KEPT_EVENTS = {"working_context_projection", "model_input_evidence_summary", "execution_outcome", "batch_budget",
-               "working_context_restore", "resume_state", "partial_search_scope_notice", "verification_scope_notice"}
+               "working_context_restore", "resume_state", "partial_search_scope_notice", "verification_scope_notice",
+               "design_guidance_input", "quote_anchoring_check", "quote_anchoring_notice"}
 KEPT_EVENT_FIELDS = ("event", "roundIndex", "reason", "changed", "disposition", "reportState", "executionOutcome",
                      "results", "modelInputId", "toolResults", "projections", "partialProjections", "status",
-                     "priorTurnInterrupted", "restoredWindow")
+                     "priorTurnInterrupted", "restoredWindow", "outcome", "stickyCause", "baseInputTokens",
+                     "finalInputTokens", "mismatches")
 READ_FAMILY = {"read_file", "read_file_range", "read_symbol", "list_directory", "search_files",
                "unreal_symbol_lookup", "unreal_rag_search", "evidence_first_read_context", "git_read_file"}
 OVERCLAIM = re.compile(r"항상|한 번도|무조건|절대로?|검증 완료|확정|\balways\b|\bnever\b|\bverified\b", re.IGNORECASE)

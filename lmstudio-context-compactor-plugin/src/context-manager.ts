@@ -358,7 +358,7 @@ export type InputAssemblyOptions = {
   roundScopeInstructions: Array<string>; getRoundOutputReserve: () => number;
   modelInputId: string; noteEnabled: boolean; getNote: () => ContinuityNote | null;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
-  getRuntimeFacts?: () => Array<string>;
+  getRuntimeFacts?: (history: Chat) => Array<string>;
   /** Execution-scoped exact-measurement cache owned by ContextManager. */
   measurementCache?: Map<string, ContextMeasurement>;
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
@@ -399,7 +399,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const profileOutputReserve = profile.outputReserve ?? getRoundOutputReserve();
     const profileModelInputId = profile.modelInputId || modelInputId;
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
-    const runtimeFacts = options.getRuntimeFacts?.() || [];
+    const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
     );

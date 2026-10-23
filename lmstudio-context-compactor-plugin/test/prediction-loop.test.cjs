@@ -4684,7 +4684,7 @@ test('reasoning recovery retains partial-result notices and read handles after f
   await createPredictionLoopHandler()(ctl);
   assert.equal(observations.length, 2);
   assert.deepEqual(observations[1].handles, observations[0].handles);
-  assert.equal(observations[0].summaryPresent, false);
+  assert.equal(observations[0].summaryPresent, true, 'the round that compacts a body must already list it');
   assert.equal(observations[1].summaryPresent, true, 'new projection guidance must reach the same-anchor retry');
 });
 
@@ -5489,22 +5489,79 @@ function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
 }
 const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
 
-test('admitted guidance keeps one system text across rounds, and a drop is final for the execution', async () => {
+test('admitted guidance keeps one system text across rounds, and a dropped one returns unchanged under low water', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   assert.ok(high - low > 1000);
   const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
   await handlePredictionLoop(run.ctl);
   const events = run.events();
-  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
-  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
-  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_readmitted', 'sticky_kept']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'low_water', undefined]);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'included', 'included']);
   assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
+  assert.deepEqual(events[3].selectedIds, events[0].selectedIds);
   assert.equal(run.systems.length, 5);
   assert.match(run.systems[0], /\[Optional design reference\]/);
   assert.equal(run.systems[1], run.systems[0]);
   assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
-  assert.equal(run.systems[3], run.systems[2]);
-  assert.equal(run.systems[4], run.systems[2]);
+  assert.equal(run.systems[3], run.systems[0]);
+  assert.equal(run.systems[4], run.systems[0]);
+});
+
+test('a dropped guidance stays out between low and high water instead of alternating', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const mid = Math.floor((low + high) / 2);
+  const run = stickyGuidanceRun({ bases: [low - 2000, high - 100, mid, mid] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.equal(run.systems[2], run.systems[1]);
+  assert.equal(run.systems[3], run.systems[1]);
+});
+
+test('a validated packet quoting code the returned source lacks reaches the next input and the answer footer', async () => {
+  const inputs = [];
+  let calls = 0;
+  const read = { type: 'function', id: 'quote-read', name: 'read_file_range', arguments: { path: 'project://Source/A.cpp' } };
+  const validate = { type: 'function', id: 'quote-validate', name: 'evidence_first_validate', arguments: { packet: { mode: 'audit',
+    claims: [{ claim: 'sync load', evidence: [{ kind: 'project_source', location: 'Source/A.cpp:12',
+      observation: 'UGameplayStatics::PlaySound2D(this, Sound.LoadSynchronous())' }] }] } } };
+  const results = {
+    'quote-read': JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, path: 'project://Source/A.cpp',
+      projectRelativePath: 'Source/A.cpp', lineNumbers: true, startLine: 11, endLine: 12,
+      content: '11\tif (Sound)\n12\t\tUGameplayStatics::PlaySoundAtLocation(this, Sound.LoadSynchronous(), Start);' }) }]),
+    'quote-validate': JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, summary: 'structure_valid; facts_not_verified',
+      validationScope: 'packet_structure_and_record_consistency', factualEvidenceVerified: false }) }]),
+  };
+  const model = { identifier: 'quote-check', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      inputs.push(chat.toString());
+      if (n === 2) { completeRecoveryReply(options, 'Report.'); return; }
+      const request = n === 0 ? read : validate;
+      await options.guardToolCall(0, 7400 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: results[request.id] }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const tools = [
+    { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent', parametersJsonSchema: { type: 'object' } },
+    { name: 'evidence_first_validate', description: 'Validate', pluginIdentifier: 'mcp/evidence-first', parametersJsonSchema: { type: 'object' } }];
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '사운드 로딩을 감사해 줘' }]), model,
+    { contextManagementMode: 'hybrid' }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3);
+  assert.doesNotMatch(inputs[1], /the last evidence packet quotes/);
+  assert.match(inputs[2], /the last evidence packet quotes 1 code name\(s\)/);
+  assert.match(inputs[2], /PlaySound2D appears in no source text returned in this execution; returned text there: 12: UGameplayStatics::PlaySoundAtLocation/);
+  const check = ctl.debugValues.find(e => e.event === 'quote_anchoring_check');
+  assert.deepEqual(check.mismatches.map(m => m.missingTokens), [['PlaySound2D']]);
+  assert.ok(ctl.blocks.some(block => /\[인용 대조\].*1건/s.test(block.text)));
 });
 
 test('the next user turn selects again, and a canceled execution leaves no retained guidance behind', async () => {
@@ -5512,7 +5569,7 @@ test('the next user turn selects again, and a canceled execution leaves no retai
   const handler = createPredictionLoopHandler();
   const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
   await handler(dropped.ctl);
-  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_readmitted']);
   const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
   await handler(next.ctl);
   assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);
