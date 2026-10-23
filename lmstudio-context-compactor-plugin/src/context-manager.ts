@@ -592,8 +592,12 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
 };
     }
   }
+  /** deepen: this round already rewrote the adopted input (an evidence
+   * projection), so its prefix is not reusable; reaching the low-water target
+   * here saves a rewrite a few rounds later. Unlike force, an unmet target does
+   * not block a round whose input already fits under high water. */
   async enforceLowWater(history: Chat, assemble: (history: Chat) => Promise<AssembledInput>,
-    options: { force?: boolean; hasReadTools: boolean; minimumReadTokens?: number }) {
+    options: { force?: boolean; deepen?: boolean; hasReadTools: boolean; minimumReadTokens?: number }) {
     const before = await assemble(history);
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
       || before.measurement.contextLengthSource !== "model") {
@@ -614,8 +618,9 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
     const water = this.broker.watermarks(before.measurement, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
     const measurements: Array<{ candidate: string; finalExactInputTokens: number; accepted: boolean }> = [];
     let selected = { history, assembled: before, checkpoint: null as CheckpointResult | null, name: "unchanged" };
-    const pressured = options.force || before.measurement.inputTokens > water.effectiveHighWaterTokens
+    const required = options.force || before.measurement.inputTokens > water.effectiveHighWaterTokens
       || water.preDispatchCompaction;
+    const pressured = required || Boolean(options.deepen);
     if (pressured && before.measurement.inputTokens > water.effectiveLowWaterTokens) {
       const caps = [...new Set([128, 64, 32, 16, 8, 4, 2].filter(cap => cap <= history.length))];
       // Most-retaining first: keep the last one or two complete user turns
@@ -654,10 +659,10 @@ history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
       && final.inputTokens <= water.hardInputCeiling;
     const finalWater = this.broker.watermarks(final, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
     const hardFit = final.exact && final.inputTokens <= water.hardInputCeiling;
-    const canRun = hardFit && finalWater.nextActionFit && (!pressured || success);
+    const canRun = hardFit && finalWater.nextActionFit && (!required || success);
     const disposition = !hardFit ? "blocked_hard_limit" : !finalWater.nextActionFit ? "blocked_next_action"
-      : pressured && !success ? "blocked_low_target" : water.targetUnreachable ? "mandatory_floor_exception"
-        : pressured ? "compacted_to_low" : "normal_growth";
+      : required && !success ? "blocked_low_target" : water.targetUnreachable ? "mandatory_floor_exception"
+        : pressured && !success ? "projection_target_unmet" : pressured ? "compacted_to_low" : "normal_growth";
     return {
       history: selected.history, assembled: selected.assembled, checkpoint: selected.checkpoint,
       changed: selected.history !== history, success, canRun, disposition, floorMeasurement: floor.measurement,

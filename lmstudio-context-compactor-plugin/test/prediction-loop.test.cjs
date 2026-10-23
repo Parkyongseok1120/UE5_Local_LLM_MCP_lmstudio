@@ -5641,6 +5641,181 @@ test('a validated packet quoting code the returned source lacks reaches the next
   assert.ok(ctl.blocks.some(block => /\[인용 대조\].*1건/s.test(block.text)));
 });
 
+// Engine observations per round drive the selection scope while bases move the
+// input between low and high water (stickyGuidanceRun's charging scheme).
+function scopedGuidanceRun({ bases, engines, guidanceTokens = 300 }) {
+  const project = 'C:/Projects/Net/Net.uproject';
+  const lookup = { name: 'unreal_symbol_lookup', description: 'Engine symbol', pluginIdentifier: 'mcp/unreal-rag',
+    parametersJsonSchema: { type: 'object', properties: { symbol: { type: 'string' } } } };
+  const read = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const engine = version => ({ ok: true, canonicalProject: project, sourceMode: 'engine_local',
+    observedEngineIdentity: { status: 'observed', engineRoot: `C:/Engines/UE_${version}`, version, hashScope: 'file', sha256: 'e'.repeat(64) } });
+  const original = Chat.from([{ role: 'user', content: 'Which engine version does the project use?' }]);
+  original.append(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: {
+    type: 'function', id: 'prior-engine', name: lookup.name, arguments: { symbol: 'AActor' } } }] }));
+  original.append(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior-engine',
+    content: JSON.stringify(engine('5.8')) }] }));
+  original.append('assistant', 'The installed engine is Unreal Engine 5.8.');
+  original.append('user', 'Review whether this Client RPC replication is a defect.');
+  const systems = [];
+  let calls = 0;
+  const model = { identifier: 'scoped-guidance', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) {
+      const round = text.split('SCOPE_RESULT_').length - 1;
+      return bases[Math.min(round, bases.length - 1)] + (text.includes('[Optional design reference]') ? guidanceTokens : 0);
+    },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt())?.getText() || '');
+      if (n >= bases.length - 1) { completeRecoveryReply(options, 'Reviewed.'); return; }
+      // An engine version observes engine identity; null reads project source only.
+      const request = engines[n] ? { type: 'function', id: `scope-${n}`, name: lookup.name, arguments: { symbol: `S${n}` } }
+        : { type: 'function', id: `scope-${n}`, name: read.name, arguments: { path: `project://Source/R${n}.cpp` } };
+      await options.guardToolCall(0, 7600 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify(engines[n] ? { ...engine(engines[n]), marker: `SCOPE_RESULT_${n}` }
+          : { ok: true, canonicalProject: project, path: `project://Source/R${n}.cpp`, startLine: 1, endLine: 1, totalLines: 1,
+            lineNumbers: true, content: `1	void R${n}(); // SCOPE_RESULT_${n}`, sha256: 'c'.repeat(64) }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'auto',
+    designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [lookup, read]);
+  const events = () => ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  return { ctl, systems, events };
+}
+
+const ENGINE_DEFAULTS = 'unreal-networking/engine-defaults';
+
+// Review of 7043e1a: guidance dropped for budget came back unchanged after a
+// 4.27 observation made its 5.8 engine defaults inapplicable, for one round.
+// Each round adds visible prose and one large read; length/4 token counting.
+function proseAndReadRun({ rounds, proseChars, readLines, contextLength = 38912, overrides = {} }) {
+  let calls = 0;
+  const inputs = [];
+  const tool = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const model = { identifier: 'projection-depth', async getContextLength() { return contextLength; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      inputs.push(chat.toString());
+      if (n >= rounds) { completeRecoveryReply(options, 'Reviewed.'); return; }
+      const request = { type: 'function', id: `depth-${n}`, name: tool.name, arguments: { path: `project://Source/D${n}.cpp` } };
+      await options.guardToolCall(0, 7700 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [
+        { type: 'text', text: `NOTE_${n} ${'analysis '.repeat(Math.floor(proseChars / 9))}` },
+        { type: 'toolCallRequest', toolCallRequest: request }] }));
+      const content = Array.from({ length: readLines }, (_, i) => `${i + 1}\tvoid D${n}_${i}() { Work(${i}); } // body`).join('\n');
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `project://Source/D${n}.cpp`, startLine: 1, endLine: readLines,
+          totalLines: readLines, lineNumbers: true, content }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '전투 코드를 검토해' }]), model,
+    { contextManagementMode: 'hybrid', ...overrides }, [tool]);
+  const byRound = event => ctl.debugValues.filter(e => e.event === event);
+  return { ctl, inputs, byRound };
+}
+
+// Review of e55663b (plan B2): a projection that left the input between low and
+// high water stopped there, and the next round rewrote the prompt again.
+test('a round that projects its input below high water but above low water reaches the target in the same rewrite', async () => {
+  const run = proseAndReadRun({ rounds: 10, proseChars: 6000, readLines: 220 });
+  await handlePredictionLoop(run.ctl);
+  const lows = new Map(run.byRound('context_low_water').map(e => [run.byRound('context_low_water').indexOf(e), e]));
+  const projected = run.byRound('working_context_projection').filter(e => e.changed).map(e => e.roundIndex);
+  assert.deepEqual(projected, [6, 8]);
+  const r8 = lows.get(8);
+  assert.ok(r8.beforeExactInputTokens > r8.effectiveLowWaterTokens && r8.beforeExactInputTokens <= r8.effectiveHighWaterTokens);
+  assert.equal(r8.compactionRequested, true);
+  assert.notEqual(r8.selectedCandidate, 'unchanged');
+  assert.ok(r8.finalExactInputTokens <= r8.effectiveLowWaterTokens);
+  assert.equal(r8.disposition, 'compacted_to_low');
+  // Rounds that did not rewrite their input were not compacted or changed.
+  for (const round of [0, 1, 2, 3, 4, 5, 7, 9]) {
+    assert.equal(lows.get(round).compactionRequested, false, `round ${round}`);
+    assert.equal(lows.get(round).selectedCandidate, 'unchanged', `round ${round}`);
+  }
+  // The round's unconsumed result and its request stay whole and paired.
+  assert.match(run.inputs[8], /void D7_219\(\) \{ Work\(219\); \}/);
+  assert.match(run.inputs[8], /NOTE_7/);
+  // Projected bodies stay recoverable from the archive.
+  assert.match(run.inputs[8], /readHandle=h_|"readHandle":"h_/);
+});
+
+test('a projection that already lands under low water changes nothing more, and no projection means no new compaction', async () => {
+  const run = proseAndReadRun({ rounds: 7, proseChars: 6000, readLines: 220 });
+  await handlePredictionLoop(run.ctl);
+  const lows = run.byRound('context_low_water');
+  const r6 = lows[6];
+  assert.ok(r6.beforeExactInputTokens <= r6.effectiveLowWaterTokens);
+  assert.equal(r6.selectedCandidate, 'unchanged');
+  assert.equal(r6.canRun, true);
+  assert.equal(run.byRound('conversation_prose_archived').length, 0);
+});
+
+test('retained guidance is still admitted within budget after a projection round reaches the target', async () => {
+  const run = proseAndReadRun({ rounds: 10, proseChars: 6000, readLines: 220,
+    overrides: { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 } });
+  await handlePredictionLoop(run.ctl);
+  const guidance = run.byRound('design_guidance_input');
+  const lows = run.byRound('context_low_water');
+  const projectedRounds = run.byRound('working_context_projection').filter(e => e.changed).map(e => e.roundIndex);
+  assert.ok(projectedRounds.length > 0);
+  for (const round of projectedRounds) {
+    const low = lows[round], admitted = guidance.find(e => e.roundIndex === round);
+    assert.ok(low.finalExactInputTokens <= low.effectiveLowWaterTokens, `round ${round} reached the target`);
+    assert.equal(admitted.outcome, 'included', `round ${round}`);
+    assert.ok(admitted.finalInputTokens <= low.effectiveHighWaterTokens, `round ${round} guidance within high water`);
+  }
+  const measurement = run.byRound('direct_context_measurement');
+  assert.ok(measurement.every(e => e.finalFit !== false));
+});
+
+test('a dropped instruction is not readmitted for a changed scope; the current candidates are selected', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, low - 2000, low - 2000], engines: ['5.8', '4.27', '4.27'] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
+    ['sticky_dropped', 'scope_changed:budget_omitted'], ['included', 'scope_changed'], ['sticky_kept', undefined]]);
+  assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.match(run.systems[0], /reference id=unreal-networking\/engine-defaults/);
+  assert.ok(!events[2].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.doesNotMatch(run.systems[2], /reference id=unreal-networking\/engine-defaults/);
+  assert.ok(events[2].omissionReasons.includes('contract_sections_engine_version_unvalidated'));
+  // The kept round reports the instruction it actually reused.
+  assert.deepEqual(events[3].selectedIds, events[2].selectedIds);
+  assert.deepEqual(events[3].omissionReasons, events[2].omissionReasons);
+  assert.equal(run.systems[3], run.systems[2]);
+});
+
+test('a rescope that does not fit leaves no stale instruction and selects the new scope when the input allows', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const mid = Math.floor((low + high) / 2);
+  const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, mid, low - 2000, low - 2000], engines: ['4.27', null, null, null] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
+    ['sticky_dropped', 'scope_changed:budget_omitted'], ['sticky_dropped', 'dropped_earlier'],
+    ['sticky_readmitted', 'low_water'], ['sticky_kept', undefined]]);
+  for (const index of [1, 2]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
+  assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.ok(events[3].selectedIds.length > 0);
+  assert.ok(!events[3].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.doesNotMatch(run.systems[3], /reference id=unreal-networking\/engine-defaults/);
+  assert.deepEqual(events[4].selectedIds, events[3].selectedIds);
+  assert.deepEqual(events[4].omissionReasons, events[3].omissionReasons);
+});
+
 test('the next user turn selects again, and a canceled execution leaves no retained guidance behind', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   const handler = createPredictionLoopHandler();

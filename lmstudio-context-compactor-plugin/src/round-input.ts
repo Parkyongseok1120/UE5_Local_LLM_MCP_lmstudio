@@ -19,8 +19,11 @@ import { referenceGuidanceScope } from "./reference-context";
 /** Older reasoning a projection round keeps, newest first, when no
  * pastReasoningTokens budget is configured. */
 const PROJECTION_ROUND_REASONING_TOKENS = 2048;
-/** tokens: the measured cost of the instruction when last admitted. */
-type RetainedGuidance = { ids: readonly string[]; instruction: string; selectionScope: string; tokens?: number };
+/** tokens: the measured cost of the instruction when last admitted;
+ * omissionReasons: its candidate's, from when it was selected. A dropped entry
+ * without an instruction records only the scope a rescope could not fit. */
+type RetainedGuidance = { ids: readonly string[]; instruction?: string; selectionScope: string; tokens?: number;
+  omissionReasons?: readonly string[] };
 /** Optional reference text admitted earlier in this execution, or the one it dropped. */
 export type GuidanceRetention = { kept?: RetainedGuidance; dropped?: RetainedGuidance };
 type RoundInputOptions = {
@@ -59,6 +62,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted,
     executionId, modelInputId, roundIndex } = options;
   let { workingHistory, roundOutputReserve, activeNote, semanticSummaryCooldownUntilRound, projectionApplied } = options;
+  // projectionApplied also records projections of recovery candidates; this
+  // records only a projection of the input this round adopts.
+  let workingInputProjected = false;
   const minimumReadBudget = (tools: RemoteToolLike[]) => minimumReadResultTokens(
     tools.filter(hasReadCapability), Boolean(workingContext?.hasArchivedEvidence));
   let outputCapSource: "configured" | "headroom_clamp" = "configured";
@@ -155,7 +161,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     let reasoningBounded = false;
     if (projected.changed) {
       workingHistory = projected.history;
-      projectionApplied = true;
+      projectionApplied = true; workingInputProjected = true;
       // This rewrite already discards the reusable prefix, so older reasoning
       // goes in the same rewrite: it would otherwise outlive the bodies it
       // described and be quoted as if it were source (2026-10-20 run, r13).
@@ -213,7 +219,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
           pinnedWorkingSetMaxChars: 0 },
         config.toolResultProjectionChars);
       if (projected.changed) {
-        workingHistory = projected.history; projectionApplied = true;
+        workingHistory = projected.history; projectionApplied = true; workingInputProjected = true;
         assembledInput = await assembleModelInput(workingHistory);
       }
       if (config.showDebugInfo) ctl.debug({ event: preserve ? "working_context_first_consumer_batch" : "working_context_projection",
@@ -246,8 +252,10 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       assembledInput = await assembleModelInput(workingHistory);
     }
   }
+  // A round that projected its adopted input has already lost the reusable
+  // prefix: reach the low-water target in the same rewrite (plan B2).
   let lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-    force: compacted, hasReadTools: roundTools.some(hasReadCapability),
+    force: compacted, deepen: workingInputProjected, hasReadTools: roundTools.some(hasReadCapability),
     minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
@@ -275,7 +283,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // contract; the summary completion itself never authorizes dispatch.
     if (activeNote !== priorNote) {
       lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-        force: compacted, hasReadTools: roundTools.some(hasReadCapability),
+        force: compacted, deepen: workingInputProjected, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools) });
       assembledInput = lowWater.assembled; acceptLow();
     }
@@ -329,50 +337,69 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // alternating. Newly returned engine/version evidence or a topic it adds (the selection
     // scope) is the one input that may select again. Catalogue/generator output and runtime
     // identity are assumed fixed for the execution.
+    // Retained material is reused only for the scope it was selected for, kept
+    // or dropped alike; a changed scope selects from the current candidates at
+    // once, and a dropped entry never outlives its scope.
     const retention = options.guidanceRetention;
-    const rescoped = Boolean(retention?.kept && retention.kept.selectionScope !== selectionScope);
-    const readmitCause = retention?.dropped
-      ? projectionApplied || compacted || lowWater.changed ? "input_reshaped"
+    const retained = retention?.kept || retention?.dropped;
+    const rescoped = Boolean(retained && retained.selectionScope !== selectionScope);
+    if (retention && rescoped) { retention.kept = undefined; retention.dropped = undefined; }
+    const dropped = retention?.dropped;
+    const readmitCause = dropped
+      ? workingInputProjected || compacted || lowWater.changed ? "input_reshaped"
         // Configured, not effective, low water: a mandatory-floor exception
         // raises the effective one to high water, which would remove the gap.
         : assembledInput.measurement.inputTokens <= (lowWater.telemetry?.configuredLowWaterTokens ?? -1) ? "low_water" : undefined
       : undefined;
-    const kept = rescoped ? undefined : retention?.kept || (readmitCause ? retention?.dropped : undefined);
-    const keptCandidates = kept ? [...new Map([...candidates, {}].map(({ referenceData, dataIds }: Partial<GuidanceCandidate>) =>
-      [referenceData, { ids: kept.ids, instruction: kept.instruction, referenceData, dataIds }])).values()] : [];
-    const guidance = await contextManager.addOptionalReferences(assembledInput,
-      kept ? keptCandidates : retention?.dropped ? [] : candidates,
+    // A dropped scope with no admitted instruction (a rescope that did not fit)
+    // selects again from the current candidates when it may be readmitted.
+    const reuse = retention?.kept || (readmitCause && dropped?.instruction !== undefined ? dropped : undefined);
+    const offered = reuse ? [...new Map([...candidates, {}].map(({ referenceData, dataIds }: Partial<GuidanceCandidate>) =>
+      [referenceData, { ids: reuse.ids, instruction: reuse.instruction!, referenceData, dataIds }])).values()]
+      : dropped && !readmitCause ? [] : candidates;
+    const guidance = await contextManager.addOptionalReferences(assembledInput, offered,
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
-        admissionWater: kept || topicBacked ? "high" : "low" });
+        admissionWater: reuse || topicBacked ? "high" : "low" });
     assembledInput = guidance.assembled;
     const telemetry: typeof guidance.telemetry & { stickyCause?: string } = { ...guidance.telemetry };
     const included = telemetry.reason === "included";
-    if (retention?.dropped && !readmitCause) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
-    else if (retention?.dropped && included) {
+    // The omission reasons describe the instruction actually offered.
+    const omissionReasons = reuse ? reuse.omissionReasons || [] : candidates[0]?.omissionReasons || [];
+    const scopeCause = (cause: string) => rescoped ? `scope_changed${cause ? `:${cause}` : ""}` : cause;
+    if (retention && dropped && !readmitCause) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: "dropped_earlier" });
+    else if (retention && dropped && included) {
       Object.assign(telemetry, { reason: "sticky_readmitted", stickyCause: readmitCause });
-      retention.kept = { ...retention.dropped, tokens: telemetry.addedTokens }; retention.dropped = undefined;
-    } else if (retention?.dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: `${readmitCause}:${telemetry.reason}` });
-    else if (retention && (kept || rescoped) && !included) {
-      Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: (rescoped ? "scope_changed:" : "") + telemetry.reason });
+      retention.kept = { ids: telemetry.selectedIds, instruction: guidance.selectedInstruction!, selectionScope,
+        tokens: telemetry.addedTokens, omissionReasons };
+      retention.dropped = undefined;
+    } else if (retention && dropped) Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: `${readmitCause}:${telemetry.reason}` });
+    else if (retention && reuse && !included) {
+      Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: telemetry.reason });
       retention.dropped = retention.kept; retention.kept = undefined;
-    } else if (kept) {
+    } else if (reuse) {
       telemetry.reason = "sticky_kept";
       if (retention?.kept) retention.kept.tokens = telemetry.addedTokens;
     } else if (retention && included && guidance.selectedInstruction !== undefined) {
       if (rescoped) telemetry.stickyCause = "scope_changed";
       retention.kept = { ids: telemetry.selectedIds, instruction: guidance.selectedInstruction, selectionScope,
-        tokens: telemetry.addedTokens };
+        tokens: telemetry.addedTokens, omissionReasons };
+    } else if (retention && rescoped) {
+      // A rescope that did not fit leaves only its scope: the old instruction
+      // is invalid there, and the current candidates select again when the
+      // input may take them back (low water or a rewritten round).
+      Object.assign(telemetry, { reason: "sticky_dropped", stickyCause: scopeCause(telemetry.reason) });
+      retention.dropped = { ids: [], selectionScope };
     }
     if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
       configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
       effectiveDelivery: focused ? "focused" : "documents", objectiveFingerprint,
-      omissionReasons: candidates[0]?.omissionReasons || [],
+      omissionReasons,
       outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
-        selectionReasonCodes: [...selection.reasons, ...(candidates[0]?.omissionReasons || [])],
+        selectionReasonCodes: [...selection.reasons, ...omissionReasons],
         selectionObservationIds: selection.observationIds } : {}), ...telemetry });
   } else if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
     configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,

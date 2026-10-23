@@ -118,3 +118,157 @@ test("only validator requests carry packets", () => {
     type: "function", id: "v1", name: "evidence_first_validate", arguments: { packet: packet() } } }] }));
   assert.equal(validatePackets(messages).length, 1);
 });
+
+function exchanges(...reads) {
+  const messages = [];
+  reads.forEach(([name, result], index) => exchange(messages, `x${index}`, name, {}, result));
+  return returnedSourceLines(messages);
+}
+const tickRead = ["read_file_range", { ok: true, path: "Source/A.cpp", lineNumbers: true, startLine: 12, endLine: 12,
+  content: "12\tvoid Tick() { DoWork(); }" }];
+const cleanupRead = ["read_file_range", { ok: true, path: "Source/B.cpp", lineNumbers: true, startLine: 50, endLine: 51,
+  content: "50\tvoid Cleanup() {}\n51\tvoid DoWork() {}" }];
+
+// Review of 7043e1a: an observation saying a call is absent was reported as a
+// misquote of that call, and the warning reached the next input and the answer.
+test("names an observation denies, compares or proposes are not claims, in English and Korean", () => {
+  const files = exchanges(tickRead);
+  for (const observation of [
+    "Tick() calls DoWork() but never calls Cleanup().",
+    "Tick() calls DoWork() without calling Cleanup().",
+    "Cleanup() is not called from Tick().",
+    "Tick() should call Cleanup() after DoWork().",
+    "Tick() calls DoWork() instead of Cleanup().",
+    "Tick()은 DoWork()를 호출하지만 Cleanup()은 호출하지 않는다.",
+    "Tick()에서 Cleanup() 호출이 없다.",
+    "Cleanup() 호출이 누락되어 DoWork()만 실행된다.",
+    "Tick()은 Cleanup()을 호출해야 한다.",
+  ]) assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12", observation)), files), [], observation);
+  assert.deepEqual(observedCodeTokens("Tick() calls DoWork() but never calls Cleanup()."), ["Tick", "DoWork"]);
+});
+
+test("a denial in one clause does not hide a misquote in another clause of the same sentence", () => {
+  const files = exchanges(tickRead);
+  const [english] = packetQuoteMismatches(packet(evidence("Source/A.cpp:12",
+    "Tick() calls PlaySound2D() but never calls Cleanup().")), files);
+  assert.deepEqual([english.kind, english.missingTokens], ["not_in_returned_source", ["PlaySound2D"]]);
+  const [korean] = packetQuoteMismatches(packet(evidence("Source/A.cpp:12",
+    "Tick()은 PlaySound2D()를 호출하지만 Cleanup()은 호출하지 않는다.")), files);
+  assert.deepEqual([korean.kind, korean.missingTokens], ["not_in_returned_source", ["PlaySound2D"]]);
+});
+
+// Review of 7043e1a: a mid-file byte window (the long-line recovery read) was
+// registered as lines 1.. and overwrote the file's real first lines.
+test("a mid-file byte window registers no lines and leaves earlier numbered lines intact", () => {
+  const files = exchanges(
+    ["read_file_range", { ok: true, path: "Source/A.cpp", lineNumbers: true, startLine: 1, endLine: 2,
+      content: "1\tvoid Begin() {}\n2\tvoid Second() {}" }],
+    ["read_file", { ok: true, path: "Source/A.cpp", offsetBytes: 4000, nextOffsetBytes: 4031, hasMore: true,
+      content: "TailOfOtherLine();\nSomething();" }]);
+  assert.deepEqual([...files[0].lines], [[1, "void Begin() {}"], [2, "void Second() {}"]]);
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:1", "Begin() is defined here.")), files), []);
+  assert.deepEqual(exchanges(["read_file", { ok: true, path: "Source/C.cpp", offsetBytes: 900, content: "Orphan();" }]), []);
+});
+
+test("a byte window from the file start keeps its line positions and drops a cut last line", () => {
+  const [file] = exchanges(["read_file", { ok: true, path: "Source/A.cpp", offsetBytes: 0, nextOffsetBytes: 30,
+    hasMore: true, truncated: true, content: "void Begin() {}\nvoid Sec" }]);
+  assert.deepEqual([...file.lines], [[1, "void Begin() {}"]]);
+  const [whole] = exchanges(["read_file", { ok: true, path: "Source/D.ini", offsetBytes: 0, nextOffsetBytes: 10,
+    hasMore: false, content: "a=1\nb=2" }]);
+  assert.deepEqual([...whole.lines], [[1, "a=1"], [2, "b=2"]]);
+  // A small project source read whole by read_file comes back numbered from line 1.
+  const [source] = exchanges(["read_file", { ok: true, path: "Source/E.h", lineNumbers: true, startLine: 1, endLine: 2,
+    totalLines: 2, rangeComplete: true, content: "1\t#pragma once\n2\tvoid E();" }]);
+  assert.deepEqual([...source.lines], [[1, "#pragma once"], [2, "void E();"]]);
+});
+
+// Review of 7043e1a: a name misquoted on one file's line passed because a
+// different returned file contained it.
+test("a short cite is checked against its own file even when another file has the name", () => {
+  const files = exchanges(tickRead, cleanupRead);
+  const [mismatch, ...rest] = packetQuoteMismatches(packet(evidence("Source/A.cpp:12", "Tick() calls Cleanup().")), files);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([mismatch.kind, mismatch.missingTokens], ["not_at_cited_lines", ["Cleanup"]]);
+  assert.deepEqual(mismatch.returnedLines, ["12: void Tick() { DoWork(); }"]);
+  // A call on the cited line is fine although its definition is in another file.
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12", "Tick() calls DoWork().")), files), []);
+  // An observation that cites further lines itself may describe code there.
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12",
+    "Tick() calls DoWork(); the Cleanup() body (B.cpp:50) is empty.")), files), []);
+  // A wider range describes a path into other files and is not held to exact lines.
+  const range = exchanges(["read_file_range", { ok: true, path: "Source/A.cpp", lineNumbers: true, startLine: 10, endLine: 16,
+    content: [10, 11, 12, 13, 14, 15, 16].map(n => `${n}\t${n === 12 ? "void Tick() { DoWork(); }" : "//"}`).join("\n") }], cleanupRead);
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:10-16", "Tick() leads to Cleanup().")), range), []);
+});
+
+test("repeating the cited location in prose never exempts a wrong short quote", () => {
+  const files = exchanges(tickRead, cleanupRead);
+  for (const observation of [
+    "Line 12: Tick() calls Cleanup().",
+    "Source/A.cpp:12 calls Cleanup().",
+    "12행에서 Tick()은 Cleanup()을 호출한다.",
+    "Tick() calls Cleanup() (Source/A.cpp:12).",
+  ]) {
+    const mismatches = packetQuoteMismatches(packet(evidence("Source/A.cpp:12", observation)), files);
+    assert.deepEqual(mismatches.map(m => [m.kind, m.missingTokens]),
+      [["not_at_cited_lines", ["Cleanup"]]], observation);
+  }
+});
+
+test("additional citations apply only to their own clauses and returned ranges", () => {
+  const files = exchanges(tickRead, cleanupRead);
+  const mismatches = packetQuoteMismatches(packet(evidence("Source/A.cpp:12",
+    "Tick() calls Cleanup(); the Cleanup() body (B.cpp:50) is empty.")), files);
+  assert.deepEqual(mismatches.map(m => [m.kind, m.missingTokens]), [["not_at_cited_lines", ["Cleanup"]]]);
+  const distant = exchanges(tickRead, ["read_file_range", { ok: true, path: "Source/B.cpp", lineNumbers: true,
+    content: "50\tvoid Cleanup() {}\n100\tvoid DoWork() {}" }]);
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12",
+    "Tick() calls DoWork(); the Cleanup() body (B.cpp:100) is here.")), distant)
+    .map(m => m.missingTokens), [["Cleanup"]]);
+  // A returned sibling implementation cited using only its extension is usable.
+  const sibling = exchanges(
+    ["read_file_range", { ok: true, path: "Source/Public/Character.h", lineNumbers: true,
+      content: "92\tvoid Update();" }],
+    ["read_file_range", { ok: true, path: "Source/Private/Character.cpp", lineNumbers: true,
+      content: "315\tvoid Update() { GetWorld()->GetTimeSeconds(); }" }]);
+  assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/Public/Character.h:92",
+    "Update() (cpp:315-317) calls GetWorld()->GetTimeSeconds().")), sibling), []);
+});
+
+test("English and Korean negative lists retain their meaning across commas", () => {
+  const files = exchanges(tickRead);
+  for (const observation of [
+    "Tick() calls DoWork() but never calls Cleanup(), Destroy(), or Reset().",
+    "Tick() does not call Cleanup(), Destroy(), or Reset().",
+    "Tick() should call Cleanup(), Destroy(), and Reset().",
+    "Tick()은 DoWork()를 호출하지만 Cleanup(), Destroy() 호출은 없다.",
+    "Tick()은 Cleanup(), Destroy()를 호출하지 않는다.",
+  ]) assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12", observation)), files), [], observation);
+});
+
+test("a negative list does not exempt a separate affirmative clause", () => {
+  const files = exchanges(tickRead);
+  for (const observation of [
+    "Tick() calls PlaySound2D() but never calls Cleanup(), Destroy(), or Reset().",
+    "Tick() never calls Cleanup(), Destroy(), but calls PlaySound2D().",
+    "Cleanup(), Destroy() are absent, Tick() calls PlaySound2D().",
+    "Tick()은 PlaySound2D()를 호출하지만 Cleanup(), Destroy() 호출은 없다.",
+    "Cleanup(), Destroy() 호출은 없지만 Tick()은 PlaySound2D()를 호출한다.",
+  ]) assert.deepEqual(packetQuoteMismatches(packet(evidence("Source/A.cpp:12", observation)), files)
+    .map(m => m.missingTokens), [["PlaySound2D"]], observation);
+});
+
+test("a partial byte read ending at a newline cannot overwrite the next known line", () => {
+  for (const newline of ["\n", "\r\n"]) {
+    const [file] = exchanges(
+      ["read_file_range", { ok: true, path: "A.cpp", lineNumbers: true,
+        content: "1\tvoid Begin() {}\n2\t\n3\tvoid Important() {}" }],
+      ["read_file", { ok: true, path: "A.cpp", offsetBytes: 0, hasMore: true, truncated: true,
+        content: `void Begin() {}${newline}${newline}` }]);
+    assert.deepEqual([...file.lines], [[1, "void Begin() {}"], [2, ""], [3, "void Important() {}"]]);
+  }
+  const [whole] = exchanges(["read_file", { ok: true, path: "A.cpp", offsetBytes: 0,
+    hasMore: false, truncated: false, content: "void Begin() {}\n" }]);
+  assert.deepEqual([...whole.lines], [[1, "void Begin() {}"], [2, ""]]);
+});
