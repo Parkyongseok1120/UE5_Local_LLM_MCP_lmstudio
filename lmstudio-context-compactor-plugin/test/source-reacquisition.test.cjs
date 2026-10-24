@@ -294,8 +294,8 @@ test("a full read, a projection, then the identical read returns an UNCHANGED fa
   assert.equal(manager.observe(again.messages).redundantRereadCount, 1);
   const after = Chat.from(projected); for (const message of again.messages) after.append(message);
   const ledgerFact = manager.readLedgerFact(after);
-  assert.match(ledgerFact, /LedgerCharacter\.cpp sha 3c3c3c3c: delivered lines 1-420 \(complete\) in round 1, 1 repeated read\(s\) answered UNCHANGED; visible now: a compacted excerpt only; readHandle=h_[a-f0-9]{24}; verified: none recorded/);
-  assert.match(ledgerFact, /Remaining \(no check recorded at the current sha\): LedgerCharacter\.cpp/);
+  assert.match(ledgerFact, /LedgerCharacter\.cpp sha 3c3c3c3c: delivered lines 1-420 \(complete\) in round 1, 1 repeated read\(s\) answered UNCHANGED; visible now: a compacted excerpt only; readHandle=h_[a-f0-9]{24}; recorded claims: none recorded/);
+  assert.match(ledgerFact, /No claim recorded at this sha: LedgerCharacter\.cpp/);
 });
 
 test("the same path with a new sha returns its full body; a narrower range keeps its body and says it is unchanged", () => {
@@ -359,7 +359,7 @@ test("a version from another record explains whose it is and that the source is 
     view: "body", startLine: 1, endLine: 2 }, environment)).ok, true);
 });
 
-test("verified checks are tied to the sha they were done against and shown as verified versus remaining", () => {
+test("accepted cited claims stay bound to their observed sha without claiming verification", () => {
   const { manager } = ledgerSetup();
   returnRound(manager, exchangeMessages("t1", "read_file", { path: TYPES }, readResult(TYPES, shaOf("54"), "struct FLedgerTypes {};\n".repeat(60))), 1);
   const packet = { claims: [
@@ -367,13 +367,120 @@ test("verified checks are tied to the sha they were done against and shown as ve
       evidence: [{ kind: "project_source", location: "Source/Game/LedgerCharacter.cpp:200-203", observation: "Fire()" }] },
     { claim: "proposal only", claimType: "wiring", proofLevel: "Proposed",
       evidence: [{ kind: "project_source", location: "Source/Game/LedgerTypes.h:1", observation: "x" }] }] };
-  assert.equal(manager.recordChecks(packet, 2), 1);
+  assert.equal(manager.recordChecks(packet, 2), 0, "a request alone cannot record a claim");
+  assert.equal(manager.recordChecks(packet, 2, true), 1);
   const empty = Chat.from([{ role: "user", content: "x" }]);
   const fact = manager.readLedgerFact(empty);
-  assert.match(fact, /LedgerCharacter\.cpp sha 3c3c3c3c: .*verified: behavior/);
-  assert.match(fact, /LedgerTypes\.h sha 54545454: .*verified: none recorded/);
-  assert.match(fact, /Remaining \(no check recorded at the current sha\): LedgerTypes\.h\./);
+  assert.match(fact, /LedgerCharacter\.cpp sha 3c3c3c3c: .*recorded claims: behavior/);
+  assert.match(fact, /LedgerTypes\.h sha 54545454: .*recorded claims: none recorded/);
+  assert.match(fact, /No claim recorded at this sha: LedgerTypes\.h\./);
+  assert.match(fact, /not factual verification or file-level audit completion/);
   // A new version of the file makes its earlier check a re-check.
   returnRound(manager, exchangeMessages("c9", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("4d"), characterBody + "\n// edit")), 3);
-  assert.match(manager.readLedgerFact(empty), /LedgerCharacter\.cpp sha 4d4d4d4d: .*verified: none recorded; re-check at this sha: behavior/);
+  assert.match(manager.readLedgerFact(empty), /LedgerCharacter\.cpp sha 4d4d4d4d: .*recorded claims: none recorded; earlier-version claims need re-check: behavior/);
+  assert.equal(manager.recordChecks(packet, 4, true), 0, "an old path-only packet cannot bind to another sha");
+});
+
+test("focused reads preserve the complete recovery record and exact repeats are suppressed only while visible", async () => {
+  const { context, manager, history, archiveTool } = ledgerSetup();
+  const originalRef = manager.ledger.latestFor(SOURCE).archiveRef;
+  const value = readResult(SOURCE, shaOf("3c"), characterBody.split("\n").slice(199, 203).join("\n"),
+    { startLine: 200, endLine: 203, totalLines: 420 });
+  let focusId = 0;
+  const focus = () => exchangeMessages(`focused-${++focusId}`, "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 }, value);
+  const first = returnRound(manager, focus(), 1);
+  assert.equal(first.focusedReads, 1);
+  assert.ok(resultOf(first).content);
+  assert.deepEqual(manager.ledger.latestFor(SOURCE).archiveRef, originalRef);
+  const repeat = returnRound(manager, focus(), 2);
+  assert.equal(repeat.replaced, 1);
+  const whole = returnRound(manager, exchangeMessages("whole", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 3);
+  const page = await archiveTool.implementation({ action: "read", readHandle: resultOf(whole).archiveRef.readHandle,
+    view: "body", startLine: 1, endLine: 5, maxChars: 4096 }, environment);
+  assert.equal(page.ok, true);
+  for (const round of [first, repeat, whole]) for (const message of round.messages) history.append(message);
+  manager.captureExposure(history, "focused-body-consumed", true);
+  // A later compaction retains only the recovery fact, omitting completed raw exchanges.
+  const compacted = Chat.from([{ role: "user", content: "Continue the audit." }]);
+  for (const message of whole.messages) compacted.append(message);
+  manager.captureExposure(compacted, "focused-body-missing");
+  assert.deepEqual([...manager.visibleReads], [], "no raw source remains in this input");
+  const restored = returnRound(manager, focus(), 4);
+  assert.equal(restored.replaced, 0);
+  assert.equal(restored.focusedReads, 1);
+  assert.ok(resultOf(restored).content);
+});
+
+test("a real A-B-A source transition updates latest observations and preserves raw body", () => {
+  const { manager } = ledgerSetup();
+  returnRound(manager, exchangeMessages("b", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("4d"), characterBody + "\n// B")), 1);
+  const revert = returnRound(manager, exchangeMessages("a", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 2);
+  assert.equal(revert.replaced, 0);
+  assert.equal(revert.newDeliveries, 1);
+  assert.equal(resultOf(revert).content, characterBody);
+  assert.equal(manager.ledger.latestFor(SOURCE).sourceVersion, shaOf("3c"));
+});
+
+test("rejected packets, invalid proof levels and unread citation ranges do not become recorded claims", () => {
+  const { manager } = ledgerSetup();
+  const claim = { claim: "confirmed", claimType: "behavior", proofLevel: "SourceVerified",
+    evidence: [{ kind: "project_source", location: "Source/Game/LedgerCharacter.cpp:999" }] };
+  assert.equal(manager.recordChecks({ claims: [claim] }, 2, true), 0);
+  for (const proofLevel of [undefined, "NotVerified", "Proposed"])
+    assert.equal(manager.recordChecks({ claims: [{ ...claim, proofLevel, evidence: [{ kind: "project_source", location: "Source/Game/LedgerCharacter.cpp:200" }] }] }, 2, true), 0);
+  assert.deepEqual(manager.ledger.latestFor(SOURCE).checks, []);
+});
+
+test("only an unambiguously paired structure-accepted validator result can record a cited assistant claim", () => {
+  const { acceptedValidatePackets, validatePackets } = require('../dist/quote-anchoring');
+  const { manager } = ledgerSetup();
+  const packet = { claims: [{ claim: 'Fire is declared', claimType: 'existence', proofLevel: 'SourceVerified',
+    evidence: [{kind:'project_source',location:'Source/Game/LedgerCharacter.cpp:200-203'}] }] };
+  const denied = exchangeMessages('validate-denied', 'evidence_first_validate', {packet}, {ok:false,errorCode:'INVALID_PACKET'});
+  assert.equal(validatePackets(denied).length, 1);
+  assert.equal(acceptedValidatePackets(denied).length, 0);
+  const accepted = exchangeMessages('validate-ok', 'evidence_first_validate', {packet},
+    {ok:true,validationScope:'packet_structure_and_record_consistency',factualEvidenceVerified:false});
+  const packets = acceptedValidatePackets(accepted);
+  assert.equal(packets.length, 1);
+  assert.equal(manager.recordChecks(packets[0], 1, true), 1);
+  const fact = manager.readLedgerFact(Chat.from([{role:'user',content:'Continue'}]));
+  assert.match(fact, /recorded claims: existence/);
+  assert.match(fact, /not factual verification or file-level audit completion/);
+  assert.doesNotMatch(fact, /verified: existence|audit complete/i);
+  const ambiguous = [...accepted, accepted[1]];
+  assert.equal(acceptedValidatePackets(ambiguous).length, 0);
+});
+
+test("disjoint partial records never suppress a range their locator cannot recover", () => {
+  const context = new WorkingContext(scope), manager = new EvidenceManager(context, [rangeTool]);
+  const part = (id, start, end) => exchangeMessages(id, "read_file_range", { path: SOURCE, startLine: start, endLine: end },
+    readResult(SOURCE, shaOf("3c"), characterBody.split("\n").slice(start - 1, end).join("\n"), { startLine: start, endLine: end, totalLines: 420 }));
+  returnRound(manager, part("p1", 1, 10), 0);
+  returnRound(manager, part("p2", 11, 20), 1);
+  const again = returnRound(manager, part("p3", 1, 10), 2);
+  assert.equal(again.replaced, 0, "fallback preserves the body when the current locator covers a different range");
+  assert.ok(resultOf(again).content);
+});
+
+test("a focused range already visible through the archive is not counted as another needed restoration", async () => {
+  const { manager, archiveTool } = ledgerSetup();
+  const value = readResult(SOURCE, shaOf("3c"), characterBody.split("\n").slice(199, 203).join("\n"),
+    { startLine: 200, endLine: 203, totalLines: 420 });
+  returnRound(manager, exchangeMessages("focus1", "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 }, value), 1);
+  const locator = manager.ledger.latestFor(SOURCE).archiveRef;
+  const page = await archiveTool.implementation({ action: "read", evidenceId: locator.evidenceId, version: locator.version,
+    view: "body", startLine: 200, endLine: 203, maxChars: 4096 }, environment);
+  assert.equal(page.ok, true);
+  const restored = exchangeMessages("archive-focus", "evidence_first_read_context", { action: "read", evidenceId: locator.evidenceId, version: locator.version }, page);
+  returnRound(manager, restored, 2);
+  const history = Chat.from([{ role: "user", content: "Check this function." }]);
+  for (const message of restored) history.append(message);
+  manager.captureExposure(history, "archive-range-visible", true);
+  assert.equal(manager.ledger.classify(require('../src/read-ledger.js').readFacts(value)).status, 'redundant');
+  assert.equal(manager.visibleRead(require('../src/read-ledger.js').readFacts(value)), true);
+  const repeat = returnRound(manager, exchangeMessages("focus2", "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 }, value), 3);
+  assert.equal(repeat.replaced, 1);
+  assert.equal(repeat.focusedReads, 0);
+  assert.equal(resultOf(repeat).content, undefined);
 });

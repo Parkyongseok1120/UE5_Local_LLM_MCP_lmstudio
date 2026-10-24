@@ -298,8 +298,11 @@ export function composeModelHistory(
     for (const part of blocks.get(index) || []) composed.append("assistant", part);
     if (!message.isSystemPrompt()) composed.append(message);
   });
+  const latestUserText = latestUser >= 0 ? messages[latestUser].getText() : "";
+  const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:"];
   const privateDataParts = [...blocks.values()].flat().filter(part =>
-    part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data"));
+    part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data")
+    || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
   return { history: composed, overhead, privateDataParts, ...(dataBlock ? { dataBlock } : {}) };
 }
 

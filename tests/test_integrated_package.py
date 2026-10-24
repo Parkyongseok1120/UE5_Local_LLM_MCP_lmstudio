@@ -356,6 +356,7 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/round-loop.ts",
         "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
         "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
+        "lmstudio-context-compactor-plugin/src/read-ledger.js",
         "lmstudio-context-compactor-plugin/src/tool-scope.ts",
         "lmstudio-context-compactor-plugin/src/attachment-tools.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",

@@ -233,6 +233,19 @@ export function validatePackets(messages: ChatMessage[]): unknown[] {
     .filter(packet => packet !== undefined);
 }
 
+/** Structure acceptance is necessary for recording a claim, never proof of its truth. */
+export function acceptedValidatePackets(messages: ChatMessage[]): unknown[] {
+  const requests = messages.flatMap(message => message.getToolCallRequests()).filter(r => r.name === VALIDATE_TOOL);
+  const results = messages.flatMap(message => message.getToolCallResults());
+  return requests.flatMap(request => {
+    const paired = results.filter(result => String(result.toolCallId) === String(request.id));
+    if (paired.length !== 1 || requests.filter(r => r.id === request.id).length !== 1) return [];
+    const value = toolMemory.decodeToolResultRecord(paired[0].content).value;
+    const packet = (request.arguments as { packet?: unknown } | undefined)?.packet;
+    return value?.ok === true && !value.errorCode && packet !== undefined ? [packet] : [];
+  });
+}
+
 function describe(mismatch: QuoteMismatch): string {
   const what = mismatch.kind === "not_in_returned_source"
     ? `${mismatch.missingTokens.join(", ")} appears in no source text returned in this execution`

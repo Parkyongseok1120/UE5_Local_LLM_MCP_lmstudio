@@ -16,7 +16,7 @@ const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
 const { sourceOutline } = require("./source-outline.js");
-const { ReadLedger } = require("./read-ledger.js");
+const { ReadLedger, readFacts, pathKey } = require("./read-ledger.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -512,13 +512,19 @@ class WorkingContext {
 
   /** A still-readable archive record as {evidenceId, version, readHandle}, plus
    * its declaration outline when it holds a project source body. */
-  archiveLocator(ref, withOutline = false) {
+  archiveLocator(ref, withOutline = false, expected = null) {
     if (!ref?.evidenceId || !ref?.version) return null;
     const loaded = this.archive.load(ref.evidenceId);
     if (!loaded.ok || loaded.record.archivedBodyHash !== ref.version) return null;
+    const value = decodeToolResultRecord(loaded.record.body).value;
+    if (expected) {
+      const facts = readFacts(value);
+      const contains = (outer, inner) => outer && inner && outer[0] <= inner[0] && outer[1] >= inner[1];
+      if (!facts || pathKey(facts.path) !== expected.key || facts.sourceVersion !== expected.sourceVersion
+        || !(facts.complete || !expected.complete && (contains(facts.lines, expected.lines) || contains(facts.bytes, expected.bytes)))) return null;
+    }
     const locator = { evidenceId: ref.evidenceId, version: ref.version, readHandle: this.archive.readHandleFor(loaded.record) };
     if (withOutline) {
-      const value = decodeToolResultRecord(loaded.record.body).value;
       const body = value && evidenceBodyView(value);
       const outline = body && sourceOutline(body.body, { path: value.path, startLine: value.startLine,
         offsetBytes: value.offsetBytes, lineNumbers: value.lineNumbers === true });

@@ -24,7 +24,7 @@ import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityN
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted, reportNowFact } from "./resume-facts";
-import { packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines, validatePackets,
+import { acceptedValidatePackets, packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines, validatePackets,
   type QuoteMismatch } from "./quote-anchoring";
 import { confirmedProgressStatements, engineClaimFact, engineClaimNotice, gradedSections, packetEngineClaimGaps,
   reportEngineClaimNotice, returnedEngineEvidence, textEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
@@ -778,7 +778,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // UNCHANGED facts; the user's transcript keeps every returned body.
         const screening = config.observeOnly
           ? { messages: captured.messages, replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, newDeliveries: 0,
-            readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] }
+            readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, pending: [], suppressedCallIds: [] }
           : evidenceManager.screenReturnedReads(captured.messages, roundIndex);
         const historyReplacements = new Map(captured.messages.map((message, index) => [message, screening.messages[index]]));
         evidenceManager.captureReturned(screening.messages, executionId, modelInputId);
@@ -1116,8 +1116,6 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           ));
         }
         const packets = config.observeOnly ? [] : validatePackets(captured.messages);
-        // Audit checkpoint: each verified claim is a check of the cited file at its current version.
-        for (const packet of packets) evidenceManager.recordChecks(packet, roundIndex);
         if (packets.length) {
           // The visible recorder keeps every returned body, including ones the
           // working input has since compacted.
@@ -1127,6 +1125,11 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if (quoteFact) runtimeFacts.set("quote_check", quoteFact);
           else runtimeFacts.delete("quote_check");
           packetEngineGaps = packetEngineClaimGaps(packets.at(-1), returnedEngineEvidence(returnedMessages), scope.engine);
+          for (const packet of acceptedValidatePackets(captured.messages)) {
+            if (!packetQuoteMismatches(packet, returnedSourceLines(returnedMessages)).length
+              && !packetEngineClaimGaps(packet, returnedEngineEvidence(returnedMessages), scope.engine).length)
+              evidenceManager.recordChecks(packet, roundIndex, true);
+          }
           if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_check", executionId, roundIndex,
             packets: packets.length, mismatches: packetQuoteGaps.map(({ claimPath, location, kind, missingTokens }) =>
               ({ claimPath, location, kind, missingTokens })) });
@@ -1154,13 +1157,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
         }
         let reportNowFinalize = false;
-        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools && screening.readResults > 0) {
-          // A round of reads that only re-delivered known versions (same-hash
-          // re-reads, archive re-pages, focused re-reads, failed locators)
-          // brings no new evidence. After K such rounds, say to report now.
-          const noNewEvidence = screening.newDeliveries === 0 && screening.otherResults === 0;
+        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
+          // Historical novelty and restoring evidence needed in the current
+          // input are different. Failed reads establish neither unchangedness nor completion.
+          const noNewEvidence = screening.readResults > 0 && screening.failedReads === 0
+            && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
+            && recoveryProgress.restoredWorkingEvidenceUnits === 0;
           noNewEvidenceRounds = noNewEvidence ? noNewEvidenceRounds + 1 : 0;
-          if (!noNewEvidence) runtimeFacts.delete("report_now");
+          if (!noNewEvidence) { runtimeFacts.delete("report_now"); reportNowTriggers = 0; }
           if (noNewEvidence && noNewEvidenceRounds >= config.noNewEvidenceRounds) {
             noNewEvidenceRounds = 0;
             reportNowTriggers += 1;

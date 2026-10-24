@@ -83,8 +83,8 @@ export function partialProjectionFact(messages: ChatMessage[]): { fact: string |
 export function reportNowFact(rounds: number, stats: Record<string, number>): string {
   return `Runtime evidence observation: report_now. The last ${rounds} tool round(s) returned no new file, version or range `
     + `(${stats.redundantRereads || 0} same-sha re-read(s), ${stats.archiveRepages || 0} archive re-page(s) of delivered lines so far). `
-    + "The read ledger lists what was delivered and verified; the files are unchanged. Write the final report from that evidence now, "
-    + "marking unverified items as unresolved. Read only a range that was never delivered, and only if the report cannot be written without it.";
+    + "The ledger lists last-observed source versions and recorded assistant claims, not fresh disk verification or completed audit checks. "
+    + "Write a report from the available evidence, marking unverified items as unresolved. A focused source check or recovery of evidence missing from this input remains allowed when needed for a claim.";
 }
 
 /** The previous assistant turn ended after tool results with no answer text:

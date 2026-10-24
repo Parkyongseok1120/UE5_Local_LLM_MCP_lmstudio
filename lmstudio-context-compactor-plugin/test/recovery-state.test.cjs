@@ -215,8 +215,8 @@ test("report_now names the non-progress counts and asks for the report, not more
   const fact = reportNowFact(3, { redundantRereads: 4, archiveRepages: 2 });
   assert.match(fact, /^Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
   assert.match(fact, /4 same-sha re-read\(s\), 2 archive re-page\(s\)/);
-  assert.match(fact, /Write the final report from that evidence now/);
-  assert.match(fact, /Read only a range that was never delivered/);
+  assert.match(fact, /Write a report from the available evidence/);
+  assert.match(fact, /focused source check or recovery of evidence missing from this input remains allowed/);
 });
 
 test("an archive re-page of delivered lines is not novel to the stagnation detector", () => {

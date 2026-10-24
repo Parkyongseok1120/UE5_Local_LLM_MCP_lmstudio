@@ -76,7 +76,7 @@ export const workingContextModule = require("./working-context.js") as {
     summaryEvidence(maxItems?: number, maxChars?: number): Array<Record<string, unknown>>;
     readLedger: ReadLedgerLike;
     archiveRefFor(request: ToolCallRequest, result: unknown): ArchiveLocator | null;
-    archiveLocator(ref: { evidenceId: string; version: string } | undefined, withOutline?: boolean): ArchiveLocator | null;
+    archiveLocator(ref: { evidenceId: string; version: string } | undefined, withOutline?: boolean, expected?: ReadFacts | null): ArchiveLocator | null;
   };
   serialize(history: Chat): Array<unknown>;
   validateSemanticNote(text: string, refs: Set<string>, generation: number,
@@ -94,7 +94,7 @@ export type ArchiveLocator = { evidenceId: string; version: string; readHandle: 
 /** What one source read, projection or archive page covers of one path+version. */
 export type ReadFacts = { path: string; key: string; sourceVersion: string; lines: [number, number] | null;
   bytes: [number, number] | null; complete: boolean; totalLines: number | null; size: number | null; chars: number;
-  partialPage?: boolean };
+  partialPage?: boolean; bodyVerified?: boolean };
 export type LedgerEntry = { path: string; key: string; sourceVersion: string; lineRanges: Array<[number, number]>;
   byteRanges: Array<[number, number]>; complete: boolean; totalLines: number | null; size: number | null; chars: number;
   firstRound: number | null; firstTurn: string; lastRound: number | null; deliveries: number; redundant: number;
@@ -112,7 +112,7 @@ export type ReadLedgerLike = {
   attachArchiveRef(facts: ReadFacts | null, archiveRef: { evidenceId: string; version: string } | null): LedgerEntry | null;
   noteRedundant(entry: LedgerEntry | null, round: number | null, duplicatedChars?: number, extra?: Record<string, unknown>): void;
   notePage(facts: ReadFacts | null, round: number | null): boolean;
-  recordCheck(location: string, check: string, round?: number | null, claim?: string): boolean;
+  recordCheck(location: string, check: string, round?: number | null, claim?: string, sourceVersion?: string): boolean;
   rememberResultSize(requestKey: string, bytes: number): void;
   knownResultBytes(requestKey: string): number | undefined;
   stats(): Record<string, number>;
@@ -129,6 +129,7 @@ export const readLedgerModule = require("./read-ledger.js") as {
   pathKey(value: unknown): string;
   unchangedReadNotice(entry: LedgerEntry, locator: ArchiveLocator | null): string;
   deliveredText(entry: LedgerEntry): string;
+  visibleRanges(observations: Array<Record<string, unknown>>): Map<string, { line: Array<[number, number]>; utf8_byte: Array<[number, number]> }>;
   ledgerFact(ledger: ReadLedgerLike, options: { observations?: Array<Record<string, unknown>>; excerpts?: Set<string>;
     handles?: Map<string, string>; reportNow?: boolean }): string | null;
 };

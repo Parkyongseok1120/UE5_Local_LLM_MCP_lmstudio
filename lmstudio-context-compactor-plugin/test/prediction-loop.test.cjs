@@ -6235,3 +6235,43 @@ test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then 
   assert.equal(toolCounts.at(-1), 0, "the second trigger ends research with a tool-free report");
   assert.ok(ctl.debugValues.some(value => value.event === "research_recovery_finalization" && value.trigger === "research_no_new_evidence"));
 });
+
+// Independent regression fixtures: meaningful work must not be a duplicate-read episode.
+const auditReadValue=(which='A',start=1,end=60)=>({ok:true,kind:'workspace_file_observation',canonicalProject:'C:/Fixture/Fixture.uproject',path:'project://Source/Game/ReviewA.cpp'.replace('ReviewA',`Review${which}`),sha256:(which==='A'?'3c':'4d').repeat(32),startLine:start,endLine:end,totalLines:60,content:Array.from({length:end-start+1},(_,i)=>`// ${which} line ${start+i} source`).join('\n')});
+async function runProgressScenario(values,extra={}) {
+  let calls=0; const inputs=[],toolCounts=[];
+  const tool={name:'read_file',description:'Read',parametersJsonSchema:{type:'object'},pluginIdentifier:'mcp/unreal-agent'};
+  const model={identifier:'independent-review',async getContextLength(){return 65536;},async applyPromptTemplate(chat){return chat.toString();},async countTokens(text){return Math.ceil(text.length/4);},
+    async act(chat,tools,options){
+      inputs.push(chat.toString());toolCounts.push(tools.length);calls++;
+      if(!tools.length || calls>values.length){options.onMessage(ChatMessage.from({role:'assistant',content:'Report with unresolved items marked.'}));options.onPredictionCompleted({stats:{stopReason:'eosFound'}});return;}
+      const value=values[calls-1];const request={id:`review-${calls}`,type:'function',name:'read_file',arguments:{path:value.path,startLine:value.startLine??calls,endLine:value.endLine??calls}};
+      await options.guardToolCall(0,7,{toolCallRequest:request,allow(){},allowAndOverrideParameters(){},deny(){}});
+      options.onToolCallRequestFinalized(0,7,{toolCallRequest:request});
+      options.onMessage(ChatMessage.from({role:'assistant',content:[{type:'text',text:`Derived distinct contract conclusion ${calls} using source already supplied.`},{type:'toolCallRequest',toolCallRequest:request}]}));
+      options.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:request.id,content:JSON.stringify(value)}]}));options.onRoundEnd(0);throw options.signal.reason;
+    }};
+  const ctl=fakeController(Chat.from([{role:'user',content:'Audit the source and verify each function.'}]),model,{contextManagementMode:'hybrid',toolStagnationAction:'warn',toolStagnationRounds:20,noNewEvidenceRounds:3,maxResearchRounds:30,...extra},[tool]);
+  await handlePredictionLoop(ctl);return {calls,inputs,toolCounts,events:ctl.debugValues,reportNow:ctl.debugValues.filter(e=>e.event==='report_now')};
+}
+
+
+test("distinct focused source checks keep tools until the planned report", async () => {
+  const values = [auditReadValue(), ...Array.from({length:9},(_,i)=>auditReadValue('A',2+i*3,3+i*3))];
+  const r = await runProgressScenario(values);
+  assert.equal(r.calls, 11);
+  assert.ok(r.toolCounts.every(n=>n>0));
+  assert.equal(r.events.filter(e=>e.event==='report_now').length,0);
+});
+test("budget-failed new source reads remain unresolved instead of unchanged and force-complete", async () => {
+  const values = [auditReadValue(), ...Array.from({length:7},(_,i)=>({ok:false,path:`project://Source/Game/Other${i}.cpp`,errorCode:'READ_BUDGET_EXCEEDED'}))];
+  const r = await runProgressScenario(values);
+  assert.equal(r.events.filter(e=>e.event==='report_now').length,0);
+  assert.ok(r.toolCounts.every(n=>n>0));
+  assert.ok(!r.inputs.join('\n').includes('the files are unchanged'));
+});
+test("genuine new evidence ends the previous duplicate-read episode", async () => {
+  const r=await runProgressScenario([auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue('B'),auditReadValue('B'),auditReadValue('B'),auditReadValue('B')]);
+  assert.deepEqual(r.events.filter(e=>e.event==='report_now').map(e=>[e.trigger,e.finalize]),[[1,false],[1,false]]);
+  assert.ok(r.toolCounts.every(n=>n>0));
+});
