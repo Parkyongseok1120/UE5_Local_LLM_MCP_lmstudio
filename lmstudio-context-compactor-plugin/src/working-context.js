@@ -15,6 +15,7 @@ const { retainInterruptedCalls } = require("./interrupted-calls.js");
 const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
+const { sourceOutline } = require("./source-outline.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -591,6 +592,11 @@ class WorkingContext {
         const semanticBody = JSON.stringify(redact(parsed));
         const boundedBody = bodyView?.body || semanticBody;
         const bodyFirst = Boolean(bodyView);
+        // A dropped project source body keeps its declaration spans, so one
+        // span can be re-read with read_file_range instead of the whole file.
+        let outline = bodyFirst && boundedBody.length > maxChars
+          ? sourceOutline(boundedBody, { path: parsed.path ?? identity.path, startLine: parsed.startLine }) : null;
+        if (outline && JSON.stringify(outline).length > originalEnvelope.length / 4) outline = null;
         let projectedEnd = Math.min(maxChars, semanticBody.length);
         const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
         const projection = { kind: "archived_tool_result_projection", originalCallId: result.toolCallId,
@@ -637,6 +643,7 @@ class WorkingContext {
           bodyOmittedChars: bodyFirst ? boundedBody.length : undefined,
           bodyComplete: false,
           fullRawProvided: false, currentFile: false, grantsMutation: false,
+          ...(outline ? { sourceOutline: outline } : {}),
           excerpt: "" };
         if (bodyFirst) {
           compactBodyProjection(projection);
@@ -672,7 +679,8 @@ class WorkingContext {
           const shown = Math.min(projectedEnd, total);
           projection.projectionCoverage = shown < total ? "partial" : "complete";
           if (shown < total) {
-            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`;
+            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
+              + (outline ? "; sourceOutline lists declaration line spans to re-read with a line-range source read" : "");
           } else delete projection.notice;
         };
         announcePartialBody();
@@ -708,7 +716,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: "Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. Keep maxChars fixed across pages and use nextOffset; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.",
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -716,6 +724,8 @@ class WorkingContext {
           readHandle: { type: "string" }, view: { type: "string", enum: ["body", "envelope"] },
           continuation: { type: "string", description: "Copy catalog nextContinuation exactly; unavailable after execution restart." },
           startOffset: { type: "integer", minimum: 0, description: "UTF-16 offset in the selected representation; use read nextOffset." },
+          startLine: { type: "integer", minimum: 1, description: "First source-file line of a view=body read; use read nextStartLine to continue." },
+          endLine: { type: "integer", minimum: 1, description: "Last source-file line (inclusive) with startLine; omitted reads to the body end." },
           maxChars: { type: "integer", minimum: 1, maximum: ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
             description: "Whole serialized JSON response budget, including metadata and escaping. Default 4096. Keep fixed while paging; do not subtract already-read content." } },
         anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
@@ -730,9 +740,13 @@ class WorkingContext {
             || args.continuation && args.catalogVersion === 1) return { ok: false, errorCode: "pagination_conflict" };
           return args.catalogVersion === 2 || args.continuation ? this.archive.catalogPage(args) : this.archive.catalog(args);
         }
+        if (args.endLine !== undefined && args.startLine === undefined) return { ok: false, errorCode: "start_line_required" };
+        if (args.startLine !== undefined && args.startOffset !== undefined) return { ok: false, errorCode: "pagination_conflict" };
+        const lines = args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
         if (args.readHandle) return this.archive.readByHandle(args.readHandle,
-          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body");
-        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "envelope");
+          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body", lines);
+        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars,
+          args.view ?? (lines ? "body" : "envelope"), lines);
       } });
   }
 

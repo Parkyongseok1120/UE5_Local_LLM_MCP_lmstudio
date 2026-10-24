@@ -661,6 +661,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/input-availability.js",
     "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
     "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/source-outline.js",
     "lmstudio-context-compactor-plugin/src/working-context.js",
     "lmstudio-context-compactor-plugin/src/working-context-boundary.ts",
     "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js",

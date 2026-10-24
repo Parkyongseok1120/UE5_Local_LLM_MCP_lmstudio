@@ -20,6 +20,37 @@ function evidenceBodyView(payload) {
   return null;
 }
 
+// Line numbers are source-file lines: a body archived from a range read that
+// began at line N holds line N at offset 0. A whole-file body begins at line 1.
+function bodyLineRange(body, firstLine, startLine, endLine) {
+  const first = Number.isSafeInteger(firstLine) && firstLine > 0 ? firstLine : 1;
+  const starts = [0];
+  for (let i = body.indexOf("\n"); i >= 0 && i + 1 < body.length; i = body.indexOf("\n", i + 1)) starts.push(i + 1);
+  const last = first + starts.length - 1;
+  const to = endLine === undefined ? last : Math.min(endLine, last);
+  if (!Number.isSafeInteger(startLine) || startLine < first || startLine > last || !Number.isSafeInteger(to) || to < startLine)
+    return { ok: false, availableLines: [first, last] };
+  const lineAt = offset => {
+    let low = 0, high = starts.length - 1;
+    while (low < high) { const mid = (low + high + 1) >> 1; if (starts[mid] <= offset) low = mid; else high = mid - 1; }
+    return first + low;
+  };
+  return { ok: true, startLine, endLine: to, lineAt,
+    start: starts[startLine - first], end: to + 1 - first < starts.length ? starts[to + 1 - first] : body.length };
+}
+
+// Archived prose is this run's own earlier text. A record from the current
+// lineage was written in this execution; an inherited one in an earlier turn.
+function conversationOrigin(record, lineage) {
+  if (record.metadata?.sourceKind !== "conversation_message") return null;
+  const sameExecution = record.lineage === lineage;
+  const role = record.metadata?.semanticFacts?.role === "user" ? "user" : "assistant";
+  return { conversationOrigin: sameExecution ? "earlier_round_same_execution" : "earlier_turn_same_conversation",
+    notice: `Archived ${role} text from ${sameExecution ? "an earlier round of this same execution (current run)"
+      : "an earlier turn of this same conversation"}, removed from input by compaction; not a previous session.`
+      + (role === "assistant" ? " Its claims are your own unverified working hypotheses." : "") };
+}
+
 function evidenceSemanticFacts(payload) {
   const facts = {};
   if (!payload || typeof payload !== "object") return facts;
@@ -465,6 +496,8 @@ class EvidenceArchive {
       const entry = { evidenceId: r.evidenceId, version: r.archivedBodyHash, toolName: r.metadata?.toolName,
         path: r.metadata?.sourceIdentity?.path, sourceVersion: r.metadata?.sourceVersion,
         sourceRange: r.metadata?.originRanges, resultStatus: r.metadata?.resultStatus };
+      const origin = conversationOrigin(r, this.lineage);
+      if (origin) entry.conversationOrigin = origin.conversationOrigin;
       result.entries.push(entry); result.hasMore = i + 1 < records.length;
       result.nextOffset = result.hasMore ? i + 1 : null;
       if (JSON.stringify(result).length > maxChars) {
@@ -481,14 +514,14 @@ class EvidenceArchive {
     return `h_${hash([this.scope, this.lineage, record.evidenceId, record.archivedBodyHash, view]).slice(0, 24)}`;
   }
 
-  readByHandle(handle, start = 0, maxChars = 4096, view = "body") {
+  readByHandle(handle, start = 0, maxChars = 4096, view = "body", lines = null) {
     if (!/^h_[a-f0-9]{24}$/.test(String(handle)) || !["body", "envelope"].includes(view))
       return { ok: false, errorCode: "invalid_read_handle" };
     const candidates = this.entries().map(e => this.load(e.key)).filter(e => e.ok
       && this.readHandleFor(e.record, view) === handle);
     if (candidates.length !== 1) return { ok: false, errorCode: "read_handle_unavailable", currentFile: false, grantsMutation: false };
     const record = candidates[0].record;
-    return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view);
+    return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view, lines);
   }
 
   // Bounded execution-local snapshots make continuation insensitive to GC and
@@ -520,6 +553,8 @@ class EvidenceArchive {
       const entry = { evidenceId: id, version, readHandle: this.readHandleFor(r), view: "body",
         path: r.metadata?.sourceIdentity?.path, toolName: r.metadata?.toolName,
         sourceVersion: r.metadata?.sourceVersion, sourceRange: r.metadata?.originRanges };
+      const origin = conversationOrigin(r, this.lineage);
+      if (origin) entry.conversationOrigin = origin.conversationOrigin;
       result.entries.push(entry);
       result.hasMore = index + 1 < snapshot.refs.length;
       result.nextContinuation = result.hasMore ? `catalog_${key}.${index + 1}` : null;
@@ -593,7 +628,7 @@ class EvidenceArchive {
     } catch { return { ok: false, errorCode: "archive_write_failed" }; }
   }
 
-  read(id, version, start = 0, maxChars = 4096, view = "envelope") {
+  read(id, version, start = 0, maxChars = 4096, view = "envelope", lines = null) {
     this.stats.reads++;
     if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > ARCHIVE_READ_CONTRACT.maximumEnvelopeChars)
       return { ok: false, errorCode: "invalid_range" };
@@ -613,6 +648,16 @@ class EvidenceArchive {
     if (start > body.length) return { ok: false, errorCode: "invalid_range" };
     const identity = r.metadata?.sourceIdentity || {};
     const sourceFacts = bodyFacts || r.metadata?.semanticFacts || {};
+    // A line selection is a bounded window of the same body view; paging past
+    // the budget continues from nextStartLine, never a guessed offset.
+    let limit = body.length, lineView = null;
+    if (lines) {
+      if (!selected) return { ok: false, errorCode: "line_range_requires_body_view", retryView: "body", evidenceId: id, version };
+      lineView = bodyLineRange(body, sourceFacts.startLine, lines.startLine, lines.endLine);
+      if (!lineView.ok) return { ok: false, errorCode: "line_range_outside_body", availableLines: lineView.availableLines,
+        evidenceId: id, version, currentFile: false, grantsMutation: false };
+      start = lineView.start; limit = lineView.end;
+    }
     const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
       originalCallId: r.metadata?.providerRequestId,
       sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
@@ -636,12 +681,23 @@ class EvidenceArchive {
       redacted: r.redacted, currentFile: false, grantsMutation: false,
       rangeUnit: r.rangeUnit, representation: selected ? "sanitized_body" : "sanitized_archived_tool_envelope",
       ...(selected ? { viewVersion: 1, bodyField: selected.field, readHandle: this.readHandleFor(r), sourceFacts } : {}),
+      ...conversationOrigin(r, this.lineage),
       totalChars: body.length, availableRange: [0, body.length], responseBudgetChars: maxChars };
     const totalBudget = maxChars;
     const overhead = JSON.stringify({ ...base, returnedRange: [start, start], hasMore: true,
       reachedEnd: false, fullRawProvided: false, coverageState: "partial", content: "" }).length;
     const contentBudget = Math.max(0, totalBudget - overhead);
-    let end = Math.min(body.length, start + contentBudget);
+    // A budget-cut line window ends on a whole line when one fits.
+    const lineEnd = value => {
+      if (!lineView || value >= limit) return value;
+      const newline = body.lastIndexOf("\n", value - 1);
+      return newline >= start ? newline + 1 : value;
+    };
+    let end = lineEnd(Math.min(limit, start + contentBudget));
+    const lineFacts = () => !lineView ? {} : { requestedLines: [lineView.startLine, lineView.endLine],
+      returnedLines: [lineView.startLine, end > start ? lineView.lineAt(end - 1) : lineView.startLine - 1],
+      // A single line longer than the budget continues by nextOffset instead.
+      lineRangeComplete: end === limit, nextStartLine: end === limit || body[end - 1] !== "\n" ? null : lineView.lineAt(end) };
     const response = () => {
       const reachedEnd = end === body.length;
       const fullRawProvided = !selected && start === 0 && reachedEnd && r.redacted === false;
@@ -651,17 +707,18 @@ class EvidenceArchive {
         hasMore: !reachedEnd, reachedEnd,
         fullRawProvided, coverageState: fullRawProvided ? "complete" : "partial",
         ...(selected ? { bodyComplete: start === 0 && reachedEnd } : {}),
+        ...lineFacts(),
         content: body.slice(start, end) };
     };
     let result = response(), serialized = JSON.stringify(result);
     while (serialized.length > totalBudget && end > start) {
-      end = Math.max(start, end - Math.max(16, serialized.length - totalBudget + 16));
+      end = lineEnd(Math.max(start, end - Math.max(16, serialized.length - totalBudget + 16)));
       result = response();
       serialized = JSON.stringify(result);
     }
-    if (serialized.length > totalBudget || end - start < Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, body.length - start)) {
+    if (serialized.length > totalBudget || end - start < Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, limit - start)) {
       return { ok: false, errorCode: "response_budget_too_small", evidenceId: id,
-        minimumBodyChars: Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, body.length - start),
+        minimumBodyChars: Math.min(ARCHIVE_READ_CONTRACT.minimumBodyChars, limit - start),
         responseBudgetChars: maxChars,
         recommendedMaxChars: Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
           Math.max(ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, serialized.length + ARCHIVE_READ_CONTRACT.minimumBodyChars)),
