@@ -23,6 +23,10 @@ KINDS = frozenset({"engine_fact", "project_policy"})
 TOPICS = frozenset({"lifecycle", "subsystem", "threading", "networking", "verification"})
 _CONTRACT_KEYS = {"id", "revision", "kind", "topic", "applicability", "statement", "preconditions",
                   "exceptions", "evidenceRefs", "guidanceRefs"}
+# claimMarkers: short patterns naming report wording that depends on this
+# engine fact. Runtime claim checks compile them with JavaScript (flags "iu"),
+# so only syntax shared by Python re and JavaScript RegExp is accepted.
+_OPTIONAL_CONTRACT_KEYS = {"claimMarkers"}
 _LIFECYCLE_KEYS = {"description", "parents", "overrides", "alternatives", "extraOverrideCandidates",
                    "invalidOverrideNames", "contractRefs"}
 
@@ -71,7 +75,8 @@ def _validate_lifecycle(value: Any) -> None:
 
 
 def _validate_contract(value: Any, versions: list[str], engine: str) -> None:
-    _require(isinstance(value, dict) and set(value) == _CONTRACT_KEYS, f"contract has unexpected keys: {value!r}"[:200])
+    _require(isinstance(value, dict) and _CONTRACT_KEYS <= set(value) <= _CONTRACT_KEYS | _OPTIONAL_CONTRACT_KEYS,
+             f"contract has unexpected keys: {value!r}"[:200])
     cid = value["id"]
     _require(isinstance(cid, str) and cid and cid == cid.strip(), "contract id must be a non-empty string")
     _require(type(value["revision"]) is int and value["revision"] >= 1, f"{cid}: revision must be a positive int")
@@ -96,6 +101,15 @@ def _validate_contract(value: Any, versions: list[str], engine: str) -> None:
         _require(isinstance(ref["path"], str) and ref["path"].startswith("Engine/" if engine == "unreal" else "Data/") and ".." not in ref["path"] and "\\" not in ref["path"],
                  f"{cid}: evidence path must be engine-root relative")
         _require("line" not in ref or (type(ref["line"]) is int and ref["line"] >= 1), f"{cid}: bad evidence line")
+    if "claimMarkers" in value:
+        _require(value["kind"] == "engine_fact", f"{cid}: only an engine fact carries claimMarkers")
+        for marker in _string_list(value["claimMarkers"], f"{cid}: claimMarkers"):
+            _require(not re.search(r"\(\?P|\(\?<(?![=!])|\(\?[aiLmsux]", marker),
+                     f"{cid}: claim marker uses syntax JavaScript and Python read differently")
+            try:
+                re.compile(marker)
+            except re.error as exc:
+                raise ContractError(f"{cid}: invalid claim marker {marker!r}: {exc}") from exc
 
 
 def validate_contracts(data: Any, expected_engine: str | None = None) -> dict[str, Any]:

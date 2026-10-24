@@ -5425,18 +5425,28 @@ test('focused final delivery omits references and makes no extra model call', as
   assert.equal(calls, 2);
 });
 
+// A reasoning recovery round selects no new focused material, but it keeps the
+// reference the failed round already had: the 2026-10-24 audit retried without
+// its engine contracts and reversed a correct Client RPC conclusion.
 for (const delivery of ['documents', 'focused']) test(`${delivery} follows its explicit reasoning recovery reference policy`, async () => {
-  let calls = 0;
+  let calls = 0, firstReference;
+  const reference = text => text.slice(text.indexOf('[Optional design reference]'), text.indexOf('[End optional design reference]'));
   const model = reasoningModel(async (chat, _tools, options) => {
-    if (++calls === 1) { assert.match(chat.toString(), /Optional design reference/); emitReasoningLimit(options); return; }
+    if (++calls === 1) {
+      assert.match(chat.toString(), /Optional design reference/);
+      firstReference = reference(chat.toString()); emitReasoningLimit(options); return;
+    }
     assert.equal(calls, 2);
-    if (delivery === 'focused') assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
-    else assert.match(chat.toString(), /Optional design reference/);
+    assert.match(chat.toString(), /Optional design reference/);
+    assert.equal(reference(chat.toString()), firstReference);
+    if (delivery === 'focused') assert.doesNotMatch(chat.toString(), /Derived reference data/);
     completeRecoveryReply(options, 'Continued under the existing recovery policy.');
   });
-  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
-    { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' }));
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
+    { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' });
+  await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
+  if (delivery === 'focused') assert.equal(ctl.debugValues.filter(e => e.event === 'design_guidance_input').at(-1).reason, 'sticky_kept');
 });
 
 for (const delivery of ['documents', 'focused']) test(`Auto uses a bounded focused pack with saved ${delivery} delivery and no extra act call`, async () => {

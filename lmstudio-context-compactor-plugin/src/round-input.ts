@@ -293,8 +293,12 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // Optional references never enter workingHistory or the persisted checkpoint.
   // Always derive a fresh, measured candidate from the same evidence history.
   const focused = config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto";
+  // A recovery round adds no new focused material, but the instruction this
+  // execution already admitted stays: dropping it would rewrite the system
+  // message and take away the engine contracts the failed round reasoned with.
+  const recoveryReuse = focused && options.referenceRecovery ? options.guidanceRetention?.kept : undefined;
   if (lowWater.canRun && !config.observeOnly && !finalizing && config.designGuidanceMode !== "off"
-    && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery)) {
+    && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery || recoveryReuse)) {
     let candidates: GuidanceCandidate[] = [];
     let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
     let selectionScope = "unscoped";
@@ -302,7 +306,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // baseline measurement still belong to their existing execution owners.
     ctl.guardAbort();
     try {
-      if (focused && options.guidanceScope) {
+      if (recoveryReuse) selectionScope = recoveryReuse.selectionScope;
+      else if (focused && options.guidanceScope) {
         const snapshot = evidenceManager.referenceSnapshot(workingHistory);
         const guidanceScope = referenceGuidanceScope(options.guidanceScope, snapshot);
         selectionScope = JSON.stringify([guidanceScope.engine, guidanceScope.source, snapshot.applicability]);

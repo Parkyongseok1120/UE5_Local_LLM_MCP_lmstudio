@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const { Chat } = require("@lmstudio/sdk");
 const { designGuidanceMode, selectDesignGuidance, designGuidanceCandidates } = require("../dist/design-guidance");
 const { bundledDesignGuidance } = require("../dist/generated-design-guidance");
-const { renderBundle } = require("../scripts/build-design-guidance.cjs");
+const { loadContractSets, renderBundle } = require("../scripts/build-design-guidance.cjs");
 const { readConfig } = require("../dist/execution-config");
 const { ContextManager, createInputAssembler } = require("../dist/context-manager");
 const { BudgetBroker } = require("../dist/budget-broker");
@@ -44,7 +44,7 @@ test("engine selection is per execution and never imports the audited project's 
 test("generated deployment content is derived exactly from canonical Markdown", () => {
   const plugin = path.resolve(__dirname, "..");
   assert.equal(fs.readFileSync(path.join(plugin, "src/generated-design-guidance.ts"), "utf8").replace(/\r\n/g, "\n"),
-    renderBundle(path.resolve(plugin, "../docs/model-guidance")));
+    renderBundle(path.resolve(plugin, "../docs/model-guidance"), loadContractSets(path.resolve(plugin, "../config"))));
 });
 
 test("fallbacks retain whole documents and deduplicate references", () => {

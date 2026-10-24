@@ -3,6 +3,7 @@
 export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",
+  "Framework or engine behavior stated in that unfinished reasoning is not evidence either way; before rating a finding on it, check it against the engine contracts in this input or the engine source.",
   "Choose the next small useful step. Avoid re-deriving the whole design or drafting the entire implementation in reasoning.",
   "Keep reasoning brief: state the conclusion or the next tool request first, then only the essential justification.",
   "If an operation is needed, use the registered structured tool interface with a small coherent batch and inspect its results before further work.",

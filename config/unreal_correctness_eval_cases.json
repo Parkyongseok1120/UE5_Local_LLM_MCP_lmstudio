@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@4",
+  "contractRevision": "unreal_contracts@5",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
@@ -757,6 +757,49 @@
             "(?:곧바로|바로|직접)\\s*AActor::TakeDamage",
             "goes (?:straight|directly) to AActor::TakeDamage",
             "ACharacter[^.\\n]{0,40}(?:기본|내장|built-in)[^.\\n]{0,30}(?:Health|체력|OnDeath|사망\\s*처리)[^.\\n]{0,20}(?:있|수행|호출|has|calls)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "player_controller_tick_drives_input",
+      "origin": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp:5377-5526 (TickActor -> PlayerTick), PlayerController.cpp:2309-2326 (TickPlayerInput), Controller.cpp:58",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.controller.player-tick-input",
+        "policy.claims.engine-path-change"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "이 PlayerController의 Tick 본문은 Shipping에서 Super::Tick만 호출한다. Shipping 빌드에서 bCanEverTick을 꺼도 되는가? 엔진 기본 동작과 함께 설명하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewPlayerController.cpp",
+          "content": "AReviewPlayerController::AReviewPlayerController()\n{\n\tPrimaryActorTick.bCanEverTick = true;\n}\n\nvoid AReviewPlayerController::Tick(float DeltaTime)\n{\n\tSuper::Tick(DeltaTime);\n#if !UE_BUILD_SHIPPING\n\tif (bSmokeEnabled) TickSmoke();\n#endif\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "player_controller_tick_drives_input",
+          "points": 3.0,
+          "diagnosis": [
+            "TickActor",
+            "PlayerTick",
+            "(TickPlayerInput|입력|input)",
+            "(AController|기본값|default)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "player_controller_tick_drives_input_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:Shipping|쉬핑)[^.\\n]{0,80}bCanEverTick\\s*=\\s*false",
+            "불필요한\\s*틱|틱\\s*오버헤드|\\bunnecessary\\s+tick",
+            "bCanEverTick[^.\\n]{0,40}(?:꺼도\\s*(?:된다|됩니다|무방)|끄는\\s*것이\\s*(?:좋|맞))"
           ]
         }
       ]

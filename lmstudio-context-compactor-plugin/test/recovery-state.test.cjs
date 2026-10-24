@@ -130,6 +130,17 @@ for (const answer of ["A: 검증 완료.\nB: 미검증.", "B is not verified; A 
     assert.ok(verificationScopeNotice(turnWithValidation(structureOnly), answer));
   });
 
+// The 2026-10-24 audit called a structure-only pass "validation passed".
+for (const answer of ["Good, the validation passed.", "The packet passed validation.", "P1 (검증 통과)", "근거 패킷이 검증을 통과함"])
+  test(`passed-validation wording after a structure-only check gets the scope footer: ${answer}`, () => {
+    assert.match(verificationScopeNotice(turnWithValidation(structureOnly), answer), /형식과 기록 일관성만 확인/u);
+  });
+
+for (const answer of ["Validation has not passed yet.", "검증을 통과하지 못했습니다.", "형식 검증만 통과했습니다."])
+  test(`negated or structure-qualified passed wording needs no notice: ${answer}`, () => {
+    assert.equal(verificationScopeNotice(turnWithValidation(structureOnly), answer), null);
+  });
+
 for (const answer of ["검증 완료가 아닙니다.", "사실 확인 완료는 아님.", "The claim is not yet verified.",
   "형식 검증만 완료했습니다.", "검증을 마치지 않았습니다."])
   test(`locally negated or structure-qualified wording needs no notice: ${answer}`, () => {

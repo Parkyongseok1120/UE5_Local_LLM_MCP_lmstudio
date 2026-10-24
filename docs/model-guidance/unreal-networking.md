@@ -9,7 +9,7 @@
 엔진이 이미 제공하는 동작을 프로젝트에 없는 기능으로 보고하지 않는다. 프로젝트가 같은 동작을 다시 구현했는지, 엔진 동작에 의존하는지 구분한다.
 
 <!-- contract-summary: engine-defaults -->
-엔진 계약 unreal_contracts@4 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@5 (UE 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.net.cmc-prediction` (엔진 사실) UCharacterMovementComponent already performs owning-client movement prediction: the client moves locally and sends moves with ReplicateMoveToServer, and the server corrects significant errors with ClientAdjustPosition. A project without its own prediction layer still has engine movement prediction. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h:2394 외 1
 - `ue.render.owner-visibility` (엔진 사실) bOnlyOwnerSee and bOwnerNoSee are rendering visibility flags on UPrimitiveComponent. They do not control replication, relevancy or whether the component exists on a machine. 근거: Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h:497 외 1
 - `ue.net.netmode` (엔진 사실) ENetMode is NM_Standalone, NM_DedicatedServer, NM_ListenServer or NM_Client; every value below NM_Client is some kind of server. A NetMode != NM_DedicatedServer branch runs on standalone, listen servers and clients, not only on remote clients. 근거: Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:981 외 2

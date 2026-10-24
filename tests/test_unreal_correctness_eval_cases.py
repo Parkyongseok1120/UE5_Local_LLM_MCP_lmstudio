@@ -122,7 +122,7 @@ def test_cli_accepts_the_case_set(tmp_path):
 
 def test_engine_regressions_record_version_and_source_locations():
     regressions = [c for c in CASES.values() if "harness_regression" in c["category"]]
-    assert len(regressions) == 9
+    assert len(regressions) == 10
     for case in regressions:
         assert case["engineVersion"] == "5.7"
         assert re.search(r"\.(?:cpp|h):\d+", case["origin"])
@@ -139,3 +139,11 @@ ANSWERS.update({
         "확인하고 AActor 구현을 호출한 뒤 LastHitBy를 기록한다. 엔진에는 체력이나 사망 처리가 없으므로 프로젝트 사망 처리와 충돌하지 않는다.",
         "ACharacter에는 기본 Health와 OnDeath 사망 처리가 있다. Super::TakeDamage는 곧바로 AActor::TakeDamage로 가서 엔진 사망을 호출하므로 충돌한다."),
 })
+
+# 2026-10-24 audit regression: the derived Tick body looked empty in Shipping,
+# so the report proposed disabling the controller's tick and its input with it.
+ANSWERS["player_controller_tick_drives_input"] = (
+    "끄면 안 된다. AController 생성자가 이미 bCanEverTick을 켜는 기본값이고, APlayerController::TickActor가 로컬 컨트롤러에서 "
+    "PlayerTick을 호출하며 PlayerTick이 TickPlayerInput으로 입력을 처리한다. 파생 Tick 본문이 비어 보여도 엔진 경로는 사용 중이다. "
+    "프로젝트 생성자의 bCanEverTick = true 줄은 중복일 뿐이다.",
+    "Tick 본문은 Shipping에서 Super::Tick만 호출하므로 불필요한 틱 오버헤드다. Shipping에서는 PrimaryActorTick.bCanEverTick = false로 설정한다.")

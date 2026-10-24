@@ -602,6 +602,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/execution-state.ts",
     "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
     "lmstudio-context-compactor-plugin/src/quote-anchoring.ts",
+    "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts",
     "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
     "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",
     "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",

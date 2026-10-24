@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 4,
+  "revision": 5,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.8"
@@ -401,6 +401,54 @@
       ]
     },
     {
+      "id": "ue.controller.player-tick-input",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "5.8"
+        ],
+        "types": [
+          "AController",
+          "APlayerController"
+        ]
+      },
+      "statement": "Disabling a PlayerController's actor tick (bCanEverTick = false or SetActorTickEnabled(false)) stops player input processing: APlayerController::TickActor calls PlayerTick for a local or autonomous controller, and PlayerTick runs TickPlayerInput and the control-rotation update. AController's constructor already sets PrimaryActorTick.bCanEverTick = true, so a subclass whose own Tick body is empty still needs its actor tick.",
+      "preconditions": [
+        "A report proposes disabling a PlayerController's tick, or calls its tick unnecessary because the subclass Tick body does nothing."
+      ],
+      "exceptions": [
+        "A controller with no local player and no input (for example a server-side placeholder) does not depend on PlayerTick for input."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Controller.cpp",
+          "symbol": "AController::AController",
+          "line": 62
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
+          "symbol": "APlayerController::TickActor",
+          "line": 5647
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
+          "symbol": "APlayerController::PlayerTick",
+          "line": 2326
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ],
+      "claimMarkers": [
+        "\\bbCanEverTick\\b",
+        "PlayerController[^.\\n]{0,60}\\b[Tt]ick",
+        "\\bSetActorTickEnabled\\(\\s*false",
+        "틱[^.\\n]{0,20}(?:끄|꺼|비활성|불필요)"
+      ]
+    },
+    {
       "id": "ue.thread.uobject-game-thread",
       "revision": 1,
       "kind": "project_policy",
@@ -652,6 +700,11 @@
       ],
       "guidanceRefs": [
         "unreal-networking.md#engine-defaults"
+      ],
+      "claimMarkers": [
+        "\\bClient\\s*RPC",
+        "UFUNCTION\\(\\s*Client\\b",
+        "\\bClient\\w*[^.\\n]{0,80}(?:\\ball\\s+(?:connected\\s+|relevant\\s+)?(?:clients|players)\\b|\\bbroadcast|모든\\s*(?:연결된\\s*)?(?:클라이언트|플레이어)|브로드캐스트)"
       ]
     },
     {
@@ -747,6 +800,26 @@
       "statement": "Super:: names the direct parent class, not the first engine class that declares the function. Only when a claim describes an engine call chain, check each intermediate class for an override (for example APawn between ACharacter and AActor): search_files for the function name in that class, then read only the override's range.",
       "preconditions": [
         "A report describes what Super:: or an engine base implementation does."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.engine-path-change",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "A fix that disables an actor or component tick, removes or reorders a Super:: call, or changes an RPC or replication specifier changes what the engine base class runs. Before proposing it, read the engine base implementation on that path (for example TickActor/Tick, the overridden Super function, or AActor::GetFunctionCallspace) and name what it does there; a derived body that looks empty is not evidence that the engine path is unused.",
+      "preconditions": [
+        "A report recommends disabling tick, removing a Super:: call, or changing a UFUNCTION/UPROPERTY network specifier."
       ],
       "exceptions": [],
       "evidenceRefs": [],
