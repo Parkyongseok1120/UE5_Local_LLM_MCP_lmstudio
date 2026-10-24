@@ -4,7 +4,8 @@ import {
   type Tool,
   type ToolCallRequest
 } from "@lmstudio/sdk";
-import { UNREAL_AGENT_OBSERVATION_TOOL_NAMES, UNREAL_RAG_OBSERVATION_TOOL_NAMES } from "./generated-tool-contract";
+import { UNREAL_AGENT_MUTATION_TOOL_NAMES, UNREAL_AGENT_OBSERVATION_TOOL_NAMES, UNREAL_RAG_MUTATION_TOOL_NAMES,
+  UNREAL_RAG_OBSERVATION_TOOL_NAMES } from "./generated-tool-contract";
 
 export function isUnregisteredGitReadIntent(name: string): boolean {
   const normalized = String(name || "").trim();
@@ -40,6 +41,8 @@ export function hasReadCapability(tool: RemoteToolLike): boolean {
 export const UNITY_OBSERVATION_TOOLS = new Set(UNITY_OBSERVATION_TOOL_NAMES);
 
 export const UNREAL_OBSERVATION_TOOLS = new Set(UNREAL_AGENT_OBSERVATION_TOOL_NAMES);
+const UNREAL_AGENT_MUTATIONS = new Set(UNREAL_AGENT_MUTATION_TOOL_NAMES);
+const UNREAL_RAG_MUTATIONS = new Set(UNREAL_RAG_MUTATION_TOOL_NAMES);
 
 /**
  * Known observations do not require confirmation. Mutations and long-running
@@ -96,6 +99,18 @@ provider: tool.pluginIdentifier || "local", name: tool.name, scope: capabilitySc
 export function isObservationOnlyToolCall(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) {
   return resolveCapability(tool, request).effect === "read";
 }
+const REVIEW_REQUEST = /검토|감사|리뷰|분석|점검|조사|찾아|확인해|설명|평가|진단|\b(?:review|audit|analy[sz]e|inspect|find|explain|assess|diagnose|investigate)\b/iu;
+const CHANGE_REQUEST = /수정|고쳐|고치|구현|추가해|추가하|변경|바꿔|바꾸|적용|리팩|삭제|지워|만들어|작성해|생성|패치|개선해|빌드|컴파일|실행|돌려|커밋|푸시|\b(?:fix|implement|change|modify|edit|apply|refactor|delete|remove|create|write|add|patch|build|compile|run|execute|commit|push|rename)\b/iu;
+const NO_CHANGE = /(?:코드\s*)?(?:수정|변경)하지\s*(?:말고|마|않고)|바꾸지\s*(?:말고|마|않고)|(?:do not|don't)\s+(?:edit|change|modify)\b[^.,]*|without\s+(?:changing|editing|modifying)\b[^.,]*|no\s+(?:code\s+)?changes/giu;
+
+/** A request that asks only to review, find or explain, naming no change,
+ * build or run: its rounds need no file/project mutation schemas.
+ * Ambiguous or elliptical requests keep the full surface. */
+export function readOnlyReviewRequest(text: string): boolean {
+  const request = String(text || "").replace(NO_CHANGE, " ");
+  return REVIEW_REQUEST.test(request) && !CHANGE_REQUEST.test(request);
+}
+
 export class ToolCapabilityRegistry {
   readonly tools: Array<RemoteToolLike>;
   readonly collisions: Array<string>;
@@ -104,6 +119,16 @@ export class ToolCapabilityRegistry {
     this.tools = tools.filter(t => !this.collisions.includes(t.name));
   }
   resolve(name: string) { return this.tools.find(t => t.name === name); }
+  /** Every tool except the manifest's known file/project mutations, for a
+   * review-only request. Validators, long-running checks and tools of other
+   * providers stay: only what the request ruled out is withheld. */
+  reviewProfile() {
+    return this.tools.filter(tool => {
+      const plugin = String(tool.pluginIdentifier || "").trim().toLowerCase();
+      return !(plugin === ENGINE_PROFILES.unreal.fileProvider && UNREAL_AGENT_MUTATIONS.has(tool.name))
+        && !(plugin === "mcp/unreal-rag" && UNREAL_RAG_MUTATIONS.has(tool.name));
+    });
+  }
   readProfile() {
     return this.tools.filter(hasReadCapability).map(tool => {
       const actions = tool.pluginIdentifier === ENGINE_PROFILES.unity.fileProvider ? readOperations[tool.name] : undefined;

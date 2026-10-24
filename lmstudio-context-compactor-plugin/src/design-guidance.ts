@@ -214,8 +214,12 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   const top = (automatic ? primaryPacks.find(p => p.every(s => s.engine === "common")) : undefined)
     || primaryPacks[0] || corePack;
   const combined = new Map(top.map(s => [s.id, s]));
+  // The engine verification section spans every topic; it has its own reserved
+  // role below and must not stand in for the requested supplement.
+  const verificationSection = (s: GuidanceSection) => s.engine !== "common" && s.documentId === s.engine
+    && s.id === `${s.engine}/verification`;
   const secondary = automatic && primaryPacks.length && supplement ? packs.find(p => p.some(s =>
-    s.documentId !== "core" && s.topics.includes(supplement))) || [] : [];
+    s.documentId !== "core" && !verificationSection(s) && s.topics.includes(supplement))) || [] : [];
   const minimum = new Map(combined);
   const omissionReasons: string[] = [];
   if (scope.reason) omissionReasons.push(scope.reason);
@@ -235,6 +239,19 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
   if (contractPack && new Set([...minimum.keys(), ...contractPack.map(s => s.id)]).size <= REFERENCE_LIMITS.sections) {
     contractPack.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });
   } else if (contractPack) omissionReasons.push("contract_pack_omitted_section_limit");
+  // The engine's verification section holds the claim policies (severity,
+  // absence, engine paths, build evidence). An audit judged without them
+  // repeats known misreadings, so it is reserved like the contract pack.
+  const verificationPack = automatic ? packs.find(p => p.some(verificationSection) && p.some(s => !minimum.has(s.id))) : undefined;
+  if (verificationPack && new Set([...minimum.keys(), ...verificationPack.map(s => s.id)]).size <= REFERENCE_LIMITS.sections) {
+    verificationPack.forEach(s => { minimum.set(s.id, s); combined.set(s.id, s); });
+  } else if (verificationPack) omissionReasons.push("verification_pack_omitted_section_limit");
+  // Under a tight token allowance these two roles outlast the engine pack and
+  // the supplement; only then does selection fall back to the bare top pack.
+  const judged = new Map(top.map(s => [s.id, s]));
+  for (const pack of [contractPack, verificationPack]) for (const s of pack || []) if (minimum.has(s.id)) judged.set(s.id, s);
+  const policiesOnly = new Map(top.map(s => [s.id, s]));
+  for (const s of verificationPack || []) if (minimum.has(s.id)) policiesOnly.set(s.id, s);
   // Name the gap when contract facts matched the request but the engine
   // version that would make them applicable was not established.
   const contractSections = sections.filter(s => s.contractIds?.length && inScope(s));
@@ -264,7 +281,8 @@ function composeFocusedGuidance(mode: GuidanceTopic, supplement: GuidanceSupplem
     { selected: automatic ? [...minimum.values()] : top, data: latestDiagnostic ? [latestDiagnostic] : [] },
     // Reserved roles (engine and contract packs, supplement) are kept before data
     // when only the data pushes them over the token allowance.
-    ...(automatic ? [{ selected: [...minimum.values()], data: [] }] : []),
+    ...(automatic ? [{ selected: [...minimum.values()], data: [] },
+      { selected: [...judged.values()], data: [] }, { selected: [...policiesOnly.values()], data: [] }] : []),
     { selected: top, data: [] },
     { selected: corePack, data: [] },
   ];

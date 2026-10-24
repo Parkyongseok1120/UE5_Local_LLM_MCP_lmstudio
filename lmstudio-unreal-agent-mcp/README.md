@@ -33,7 +33,7 @@ Direct에서는 모델이 필요한 도구와 순서를 정합니다. Strict는 
 
 `ALLOW_WRITE=1`이 있어야 수정할 수 있습니다. 기존 파일은 읽기 결과의 `fileVersionReceipt` 또는 유효한 `expectedHash`를 매번 직접 보내야 합니다. 자동 선택은 하지 않습니다. 수정 성공 후 새로 받은 값으로 다음 수정이 가능합니다.
 
-`replace_in_file`은 한 구간만 고칩니다. `expectedOccurrences=1`, 기존 글 1,200자, 새 글 2,800자·32줄, 합계 4,000자가 한도입니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩, 합계 64줄까지만 허용합니다. 새 파일은 만들지 않습니다.
+`replace_in_file`은 한 구간만 고칩니다. `expectedOccurrences=1`, 기존 글 1,200자, 새 글 2,800자·32줄, 합계 4,000자가 한도입니다. 기존 글 대신 `startLine`, `endLine`, `expectedRangeSha256`(`read_file_range`·`read_symbol`이 돌려준 `rangeSha256`)으로 그 줄들을 통째로 바꿀 수도 있습니다. 현재 줄의 해시가 다르면 바꾸지 않고 지금 그 구간의 글(`currentRange`)을 돌려주며, 빈 `newText`는 그 줄들을 지웁니다. `apply_edit_bundle`은 서로 다른 기존 파일 1~2개에서 한 구간씩, 합계 64줄까지만 허용합니다. 새 파일은 만들지 않습니다.
 
 새 파일은 단독 `write_file`로 생성합니다. 기존 파일 덮어쓰기는 금지하며 12,000자·160줄 한도가 있습니다. 충돌이나 `FILE_SNAPSHOT_*` 오류가 나오면 현재 파일을 다시 읽어야 합니다.
 
@@ -45,7 +45,7 @@ Direct에서는 모델이 필요한 도구와 순서를 정합니다. Strict는 
 
 빌드와 테스트는 같은 실행 관리 코드를 사용합니다. 시간이 초과되면 자식 프로세스까지 종료하고 출력은 앞뒤 일부만 남길 수 있습니다. `fullLogPath`와 함께 생략 정보를 확인해야 합니다.
 
-`static_validate_project`는 참고용 코드 검사이며 빌드를 허가하거나 막지 않습니다. `run_command`는 `ALLOW_COMMANDS=1`일 때 허용 목록의 진단 명령만 실행합니다.
+`static_validate_project`는 참고용 코드 검사입니다. `build_unreal_project`는 UBT 전에 이 서버가 마지막 성공 빌드 이후 고친 Source 파일만 같은 검사로 확인해 `staticPrecheck`로 돌려줍니다. 없는 include 경로나 `.generated.h` 규칙 위반 같은 확정 오류가 있으면 UBT를 실행하지 않고 `buildSkipped: "static_errors"`와 발견 내용을 반환하며, `force: true`이면 그래도 빌드합니다. `BUILD_STATIC_PRECHECK=0`으로 끌 수 있습니다. 빌드가 성공하면 바뀐 모듈의 프로젝트 자동화 테스트가 있을 때 `run_unreal_automation_tests` 제안을 붙입니다. `run_command`는 `ALLOW_COMMANDS=1`일 때 허용 목록의 진단 명령만 실행합니다.
 
 성공한 읽기는 원문을 반환합니다. 같은 대화가 앞선 `repeatReceipt`를 직접 보낸 경우에만 줄여서 반환합니다. 반복 실패는 줄여도 실패로 표시합니다.
 

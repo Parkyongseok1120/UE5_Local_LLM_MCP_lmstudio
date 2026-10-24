@@ -1,0 +1,839 @@
+{
+  "description": "Minimal reproductions of 51 failed build_unreal_project results (UE 5.7.4) recorded in local LM Studio sessions. Each case is a small hand-written snippet, not user code.",
+  "failedBuilds": 51,
+  "engineStub": "engine_stub",
+  "cases": [
+    {
+      "id": "include_input_mapping_context_engine_dir",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'Engine/InputMappingContext.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "#include \"Engine/InputMappingContext.h\"",
+          "new": "#include \"InputMappingContext.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_enhanced_input_local_player_subsystem",
+      "class": "engine_include_not_found",
+      "failedBuilds": 2,
+      "buildError": "C1083: Cannot open include file: 'EnhancedInputLocalPlayerSubsystem.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "#include \"EnhancedInputLocalPlayerSubsystem.h\"",
+          "new": "#include \"EnhancedInputSubsystems.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_enhanced_input_prefixed_subsystem",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'EnhancedInput/EnhancedInputLocalPlayerSubsystem.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "#include \"EnhancedInput/EnhancedInputLocalPlayerSubsystem.h\"",
+          "new": "#include \"EnhancedInputSubsystems.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_enhanced_input_umbrella",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'EnhancedInput.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "#include \"EnhancedInput.h\"",
+          "new": "#include \"EnhancedInputComponent.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_damage_events_gameframework_dir",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'GameFramework/DamageEvents.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"GameFramework/DamageEvents.h\"",
+          "new": "#include \"Engine/DamageEvents.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_damage_events_bare",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'DamageEvents.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"DamageEvents.h\"",
+          "new": "#include \"Engine/DamageEvents.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_enhanced_input_types",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'EnhancedInput/Types.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Public/DemoCharacter.h",
+        "line": 5
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoCharacter.h",
+          "old": "#include \"EnhancedInput/Types.h\"",
+          "new": "#include \"InputActionValue.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_enhanced_input_user",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'EnhancedInputUser.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"EnhancedInputUser.h\"",
+          "new": "#include \"EnhancedInputSubsystems.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_keys_types",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'KeysTypes.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 2
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"KeysTypes.h\"",
+          "new": "#include \"InputCoreTypes.h\""
+        }
+      ]
+    },
+    {
+      "id": "include_sound_base_engine_dir",
+      "class": "engine_include_not_found",
+      "failedBuilds": 1,
+      "buildError": "C1083: Cannot open include file: 'Engine/SoundBase.h'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_INCLUDE_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Public/DemoCharacter.h",
+        "line": 5
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoCharacter.h",
+          "old": "#include \"Engine/SoundBase.h\"",
+          "new": "#include \"Sound/SoundBase.h\""
+        }
+      ]
+    },
+    {
+      "id": "member_add_mapping_context_on_input_component",
+      "class": "engine_member_not_found",
+      "failedBuilds": 2,
+      "buildError": "C2039: 'AddMappingContext': is not a member of 'UEnhancedInputComponent'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_MEMBER_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 11
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "\tif (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))\n\t{\n\t\tEIC->AddMappingContext(DefaultMappingContext, 0);",
+          "new": "\tif (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))\n\t{\n\t\tSubsystem->AddMappingContext(DefaultMappingContext, 0);"
+        }
+      ]
+    },
+    {
+      "id": "member_add_mapping_context_on_player_controller",
+      "class": "engine_member_not_found",
+      "failedBuilds": 1,
+      "buildError": "C2039: 'AddMappingContext': is not a member of 'APlayerController'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_MEMBER_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 15
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "\t\tPC->AddMappingContext(DefaultMappingContext, 0);",
+          "new": "\t\tif (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))\n\t\t{\n\t\t\tSubsystem->AddMappingContext(DefaultMappingContext, 0);\n\t\t}"
+        }
+      ]
+    },
+    {
+      "id": "member_soft_object_ptr_load",
+      "class": "engine_member_not_found",
+      "failedBuilds": 1,
+      "buildError": "C2039: 'Load': is not a member of 'TSoftObjectPtr<UInputMappingContext>'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_MEMBER_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerController.cpp",
+        "line": 8
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerController.cpp",
+          "old": "CombatMappingContext.Load()",
+          "new": "CombatMappingContext.LoadSynchronous()"
+        }
+      ]
+    },
+    {
+      "id": "member_invented_actor_flag_in_constructor",
+      "class": "engine_member_not_found",
+      "failedBuilds": 1,
+      "buildError": "C2065: 'bAutoDestroyWhenHealthLessThanOrEqualToZero': undeclared identifier",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_MEMBER_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 6
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "bAutoDestroyWhenHealthLessThanOrEqualToZero = false;",
+          "new": "bAutoDestroyWhenFinished = false;"
+        }
+      ]
+    },
+    {
+      "id": "qualified_fkey_letter_member",
+      "class": "engine_member_not_found",
+      "failedBuilds": 1,
+      "buildError": "C2039: 'W': is not a member of 'FKey'",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "KNOWN_INVALID_ENGINE_SYMBOL",
+          "ENGINE_MEMBER_NOT_FOUND"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 14
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "FKey::W",
+          "new": "EKeys::W"
+        }
+      ]
+    },
+    {
+      "id": "invented_ekeyevent_enum",
+      "class": "engine_member_not_found",
+      "failedBuilds": 2,
+      "buildError": "C2653: 'EKeyEvent': is not a class or namespace name",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "KNOWN_INVALID_ENGINE_SYMBOL"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 12
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "EKeyEvent::Pressed",
+          "new": "IE_Pressed"
+        }
+      ]
+    },
+    {
+      "id": "invented_fcollisionobjecttypes",
+      "class": "engine_member_not_found",
+      "failedBuilds": 2,
+      "buildError": "C2653: 'FCollisionObjectTypes': is not a class or namespace name",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "KNOWN_INVALID_ENGINE_SYMBOL"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 14
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "FCollisionObjectTypes::AllStatic",
+          "new": "FCollisionObjectQueryParams(FCollisionObjectQueryParams::AllStaticObjects)"
+        }
+      ]
+    },
+    {
+      "id": "invented_einputvaluetype_enum",
+      "class": "engine_member_not_found",
+      "failedBuilds": 2,
+      "buildError": "C2061: syntax error: identifier 'EInputValueType'",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "KNOWN_INVALID_ENGINE_SYMBOL"
+        ],
+        "path": "Source/Demo/Public/DemoCharacter.h",
+        "line": 20
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoCharacter.h",
+          "old": "EInputValueType Type",
+          "new": "EInputActionValueType Type"
+        },
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "EInputValueType Type",
+          "new": "EInputActionValueType Type"
+        }
+      ]
+    },
+    {
+      "id": "invented_uenhancedinputuser_type",
+      "class": "engine_member_not_found",
+      "failedBuilds": 1,
+      "buildError": "C2065: 'UEnhancedInputUser': undeclared identifier",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "KNOWN_INVALID_ENGINE_SYMBOL"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 13
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "if (UEnhancedInputUser* InputUser = Cast<UEnhancedInputUser>(PC))",
+          "new": "if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))"
+        }
+      ]
+    },
+    {
+      "id": "doreplifetime_without_unreal_network",
+      "class": "engine_type_without_include",
+      "failedBuilds": 5,
+      "buildError": "C2275: 'ADemoGameState': expected an expression instead of a type (DOREPLIFETIME without Net/UnrealNetwork.h)",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "path": "Source/Demo/Private/DemoGameState.cpp",
+        "line": 6
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoGameState.cpp",
+          "old": "#include \"DemoGameState.h\"\n",
+          "new": "#include \"DemoGameState.h\"\n#include \"Net/UnrealNetwork.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "character_movement_component_incomplete",
+      "class": "engine_type_without_include",
+      "failedBuilds": 1,
+      "buildError": "C2027: use of undefined type 'UCharacterMovementComponent'",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 5
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"DemoCharacter.h\"\n",
+          "new": "#include \"DemoCharacter.h\"\n#include \"GameFramework/CharacterMovementComponent.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "damage_event_incomplete",
+      "class": "engine_type_without_include",
+      "failedBuilds": 2,
+      "buildError": "C2027: use of undefined type 'FDamageEvent'",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "path": "Source/Demo/Private/DemoCharacter.cpp",
+        "line": 12
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "#include \"DemoCharacter.h\"\n",
+          "new": "#include \"DemoCharacter.h\"\n#include \"Engine/DamageEvents.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "character_incomplete_for_possess",
+      "class": "engine_type_without_include",
+      "failedBuilds": 1,
+      "buildError": "C2664: 'AController::Possess': cannot convert argument 1 from 'ACharacter *' to 'APawn *'",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "path": "Source/Demo/Private/DemoGameMode.cpp",
+        "line": 6
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoGameMode.cpp",
+          "old": "#include \"Engine/World.h\"\n",
+          "new": "#include \"Engine/World.h\"\n#include \"GameFramework/Character.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "input_action_value_undeclared_in_header",
+      "class": "engine_type_without_include",
+      "failedBuilds": 1,
+      "buildError": "C4430: missing type specifier - int assumed (FInputActionValue)",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "PLUGIN_TYPE_NOT_DECLARED"
+        ],
+        "path": "Source/Demo/Public/DemoCharacter.h",
+        "line": 17
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoCharacter.h",
+          "old": "#include \"DemoCharacter.generated.h\"",
+          "new": "#include \"InputActionValue.h\"\n#include \"DemoCharacter.generated.h\""
+        }
+      ]
+    },
+    {
+      "id": "input_mapping_context_undeclared_in_header",
+      "class": "engine_type_without_include",
+      "failedBuilds": 1,
+      "buildError": "C2065: 'UInputMappingContext': undeclared identifier",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "PLUGIN_TYPE_NOT_DECLARED"
+        ],
+        "path": "Source/Demo/Public/DemoPlayerController.h",
+        "line": 17
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoPlayerController.h",
+          "old": "UCLASS()",
+          "new": "class UInputMappingContext;\n\nUCLASS()"
+        }
+      ]
+    },
+    {
+      "id": "duplicate_uenum_across_headers",
+      "class": "unreal_header_tool",
+      "failedBuilds": 1,
+      "buildError": "UHT: Enum 'ECombatState' shares engine name 'ECombatState' with enum 'ECombatState' in another header",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "DUPLICATE_REFLECTED_TYPE_NAME"
+        ],
+        "path": "Source/Demo/Public/Data/CombatTypes.h",
+        "line": 7
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/Data/CombatTypes.h",
+          "old": "UENUM(BlueprintType)\nenum class ECombatState : uint8\n{\n\tIdle,\n\tFiring,\n\tDead\n};\n",
+          "new": "#include \"Data/ECombatState.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "uproperty_shadows_engine_base_member",
+      "class": "unreal_header_tool",
+      "failedBuilds": 2,
+      "buildError": "UHT: Member variable declaration: 'PlayerStateClass' cannot be defined in 'ADemoGameMode' as it is already defined in scope 'AGameModeBase' (shadowing is not allowed)",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "UPROPERTY_SHADOWS_BASE_MEMBER"
+        ],
+        "path": "Source/Demo/Public/DemoGameMode.h",
+        "line": 16
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoGameMode.h",
+          "old": "TSubclassOf<APlayerState> PlayerStateClass;",
+          "new": "TSubclassOf<APlayerState> DemoPlayerStateClass;"
+        }
+      ]
+    },
+    {
+      "id": "ufunction_redeclares_engine_ufunction",
+      "class": "unreal_header_tool",
+      "failedBuilds": 1,
+      "buildError": "UHT: Override of UFUNCTION 'OnRep_Score' in parent 'APlayerState' cannot have a UFUNCTION() declaration above it",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "UFUNCTION_OVERRIDE_REDECLARED"
+        ],
+        "path": "Source/Demo/Public/DemoPlayerState.h",
+        "line": 19
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoPlayerState.h",
+          "old": "\tUFUNCTION()\n\tvoid OnRep_Score();",
+          "new": "\tvirtual void OnRep_Score() override;"
+        }
+      ]
+    },
+    {
+      "id": "replicated_using_function_not_ufunction",
+      "class": "unreal_header_tool",
+      "failedBuilds": 1,
+      "buildError": "UHT: Replication notification function 'OnRep_Team' not found",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "REPLICATED_USING_FUNCTION_MISSING"
+        ],
+        "path": "Source/Demo/Public/DemoPlayerState.h",
+        "line": 15
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoPlayerState.h",
+          "old": "\tvoid OnRep_Team();",
+          "new": "\tUFUNCTION()\n\tvoid OnRep_Team();"
+        }
+      ]
+    },
+    {
+      "id": "first_include_not_own_header",
+      "class": "unreal_header_tool",
+      "failedBuilds": 2,
+      "buildError": "UBT: Expected DemoGameState.h to be first header included.",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "FIRST_INCLUDE_NOT_OWN_HEADER"
+        ],
+        "path": "Source/Demo/Private/DemoGameState.cpp",
+        "line": 1
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoGameState.cpp",
+          "old": "#include \"Net/UnrealNetwork.h\"\n#include \"DemoGameState.h\"\n",
+          "new": "#include \"DemoGameState.h\"\n#include \"Net/UnrealNetwork.h\"\n"
+        }
+      ]
+    },
+    {
+      "id": "choose_player_start_const_override",
+      "class": "engine_override_signature",
+      "failedBuilds": 1,
+      "buildError": "C3668: 'ADemoGameMode::ChoosePlayerStart_Implementation': method with override specifier 'override' did not override any base class methods",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+        ],
+        "path": "Source/Demo/Public/DemoGameMode.h",
+        "line": 13
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoGameMode.h",
+          "old": "(AController* Player) const override;",
+          "new": "(AController* Player) override;"
+        },
+        {
+          "path": "Source/Demo/Private/DemoGameMode.cpp",
+          "old": "(AController* Player) const",
+          "new": "(AController* Player)"
+        }
+      ]
+    },
+    {
+      "id": "choose_player_start_const_without_override",
+      "class": "engine_override_signature",
+      "failedBuilds": 1,
+      "buildError": "C2662: 'AGameModeBase::ChoosePlayerStart_Implementation': cannot convert 'this' pointer from 'const ADemoGameMode' to 'AGameModeBase &'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+        ],
+        "path": "Source/Demo/Public/DemoGameMode.h",
+        "line": 13
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoGameMode.h",
+          "old": "AActor* ChoosePlayerStart_Implementation(AController* Player) const;",
+          "new": "virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;"
+        },
+        {
+          "path": "Source/Demo/Private/DemoGameMode.cpp",
+          "old": "(AController* Player) const",
+          "new": "(AController* Player)"
+        }
+      ]
+    },
+    {
+      "id": "take_damage_void_return",
+      "class": "engine_override_signature",
+      "failedBuilds": 1,
+      "buildError": "C2555: 'ADemoCharacter::TakeDamage': overriding virtual function return type differs from 'APawn::TakeDamage'",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+        ],
+        "path": "Source/Demo/Public/DemoCharacter.h",
+        "line": 19
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Public/DemoCharacter.h",
+          "old": "virtual void TakeDamage",
+          "new": "virtual float TakeDamage"
+        },
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "void ADemoCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n}",
+          "new": "float ADemoCharacter::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)\n{\n\treturn DamageAmount;\n}"
+        }
+      ]
+    },
+    {
+      "id": "set_timer_temporary_handle",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C2665: 'FTimerManager::SetTimer': no overloaded function could convert all the argument types",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "SET_TIMER_TEMPORARY_HANDLE"
+        ],
+        "path": "Source/Demo/Private/DemoGameMode.cpp",
+        "line": 6
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoGameMode.cpp",
+          "old": "SetTimer(FTimerHandle(),",
+          "new": "SetTimer(RespawnTimerHandle,"
+        }
+      ]
+    },
+    {
+      "id": "parameter_shadows_engine_member",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C4458: declaration of 'Instigator' hides class member",
+      "requiresEngine": true,
+      "expect": {
+        "codes": [
+          "PARAMETER_SHADOWS_ENGINE_MEMBER"
+        ],
+        "path": "Source/Demo/Private/DemoPlayerState.cpp",
+        "line": 3
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoPlayerState.cpp",
+          "old": "AController* Instigator)",
+          "new": "AController* DamageInstigator)"
+        },
+        {
+          "path": "Source/Demo/Public/DemoPlayerState.h",
+          "old": "AController* Instigator)",
+          "new": "AController* DamageInstigator)"
+        }
+      ]
+    },
+    {
+      "id": "doreplifetime_with_renamed_parameter",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C2065: 'OutLifetimeProps': undeclared identifier (DOREPLIFETIME expands to OutLifetimeProps)",
+      "requiresEngine": false,
+      "expect": {
+        "codes": [
+          "DOREPLIFETIME_PARAMETER_RENAMED"
+        ],
+        "path": "Source/Demo/Private/DemoGameState.cpp",
+        "line": 7
+      },
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoGameState.cpp",
+          "old": "TArray<FLifetimeProperty>& O) const",
+          "new": "TArray<FLifetimeProperty>& OutLifetimeProps) const"
+        },
+        {
+          "path": "Source/Demo/Private/DemoGameState.cpp",
+          "old": "GetLifetimeReplicatedProps(O);",
+          "new": "GetLifetimeReplicatedProps(OutLifetimeProps);"
+        }
+      ]
+    },
+    {
+      "id": "project_struct_member_missing",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C2039: 'Health': is not a member of 'FCharacterStats'",
+      "requiresEngine": false,
+      "expect": null,
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "Stats.Health",
+          "new": "Stats.MaxHealth"
+        }
+      ]
+    },
+    {
+      "id": "ternary_tobjectptr_and_raw_pointer",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C2445: result type of conditional expression is ambiguous: 'TObjectPtr<UInputAction>' and 'UInputAction *'",
+      "requiresEngine": false,
+      "expect": null,
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "MoveAction ? MoveAction :",
+          "new": "MoveAction ? MoveAction.Get() :"
+        }
+      ]
+    },
+    {
+      "id": "undeclared_project_member",
+      "class": "cpp_semantics",
+      "failedBuilds": 1,
+      "buildError": "C2065: 'LookSensitivity': undeclared identifier",
+      "requiresEngine": false,
+      "expect": null,
+      "fix": [
+        {
+          "path": "Source/Demo/Private/DemoCharacter.cpp",
+          "old": "2.f * LookSensitivity",
+          "new": "2.f"
+        }
+      ]
+    }
+  ]
+}

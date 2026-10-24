@@ -768,3 +768,95 @@ test("structure validation flags survive an archived projection and its durable 
   }
   assert.equal(durable.toolName, "evidence_first_validate");
 });
+
+// 2026-10-20 run: a projection was 2,852 chars, 559 of them the first lines of
+// the body, while the model later misquoted line 342 of the same read.
+function lineRead(callId, file, lines, extra = {}) {
+  const history = Chat.from([{ role: "user", content: "Audit" }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    type: "function", id: callId, name: "read_file_range", arguments: { path: `project://${file}` } } }] }));
+  const content = Array.from({ length: lines }, (_, i) => `${i + 1}\tvoid Line${i + 1}() { Work(${i + 1}); }`).join("\n");
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: callId, content: JSON.stringify({
+    ok: true, path: `project://${file}`, projectRelativePath: file, lineNumbers: true, startLine: 1, endLine: lines,
+    totalLines: lines, rangeComplete: true, moreLinesInFile: false, sha256: "a".repeat(64),
+    workspaceIdentity: "b".repeat(64), canonicalProject: "C:/Projects/Game/Game.uproject", content, ...extra }) }] }));
+  return history;
+}
+const projectedValue = history => JSON.parse(new WorkingContext(scope).project(history, () => true, {}, 512)
+  .history.getMessagesArray().at(-1 - history.getMessagesArray().slice().reverse()
+    .findIndex(message => message.getToolCallResults().length)).getToolCallResults()[0].content);
+
+test("a body projection keeps the facts and digests its readers use and drops envelope bookkeeping", () => {
+  const value = projectedValue(lineRead("r1", "Source/Game/Weapon.cpp", 200));
+  assert.equal(value.kind, "archived_tool_result_projection");
+  assert.deepEqual(value.sourceIdentity, { path: "project://Source/Game/Weapon.cpp" });
+  for (const key of ["sourceIdentityDigest", "sourceVersion", "sourceQueryKey"]) assert.match(value[key], /^[a-f0-9]{64}$/);
+  assert.deepEqual(Object.keys(value.archiveRef).sort(), ["evidenceId", "readHandle", "version"]);
+  for (const key of ["provider", "semanticQueryDigest", "sourceHash", "rangeUnit", "archivedRanges", "projectedRawRanges",
+    "projectedSanitizedRanges", "omittedRanges", "redacted"]) assert.equal(key in value, false, key);
+  assert.equal(Object.values(value).includes("unknown"), false);
+  assert.equal(value.sourceFacts.rangeComplete, true);
+  assert.equal(value.sourceFacts.totalLines, 200);
+  assert.equal(value.fullRawProvided, false);
+  assert.equal(value.currentFile, false);
+  assert.equal(value.grantsMutation, false);
+  assert.match(value.notice, /^PARTIAL BODY: chars 0-\d+ of \d+/);
+  assert.match(value.excerpt, /^1\tvoid Line1\(\)/);
+});
+
+test("lines cited later by path:line or by Line N after the file name stay in the projection", () => {
+  const history = lineRead("r2", "Source/Game/LatencyWeapon.cpp", 200);
+  history.append("assistant", "In LatencyWeapon.h the declaration is fine. Line 150 calls Work(150); "
+    + "see also LatencyWeapon.cpp:180-181 and GameMode.cpp:12.");
+  const value = projectedValue(history);
+  assert.match(value.notice, /^CITED LINES 149-151, 179-182: \d+ of \d+ chars shown; page the rest with evidence_first_read_context readHandle=h_/);
+  assert.match(value.excerpt, /^149\tvoid Line149/);
+  assert.match(value.excerpt, /\n…\n179\tvoid Line179/);
+  assert.match(value.excerpt, /181\tvoid Line181\(\) \{ Work\(181\); \}/);
+  assert.doesNotMatch(value.excerpt, /(^|\n)12\t/);
+  assert.equal(value.projectedBodyRanges.length, 2);
+  const shown = value.projectedBodyRanges.reduce((total, [start, end]) => total + end - start, 0);
+  assert.equal(value.bodyOmittedChars, value.bodyTotalChars - shown);
+  assert.deepEqual(value.omittedBodyRanges[0], [0, value.projectedBodyRanges[0][0]]);
+  assert.equal(value.bodyComplete, false);
+});
+
+// The read ledger is part of the working window: a later turn still knows
+// which version of a file was delivered and what was checked against it, and
+// a readHandle shown under the parent lineage still names its record.
+test("the read ledger and parent-lineage read handles survive a window restore", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "read-ledger-window-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sha = "3c".repeat(32), filePath = "project://Source/Game/LedgerCharacter.cpp";
+  const content = Array.from({ length: 80 }, (_, i) => `// line ${i + 1} ${"z".repeat(50)}`).join("\n");
+  const history = Chat.from([{ role: "user", content: "Audit." }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    type: "function", id: "c1", name: "read_file", arguments: { path: filePath } } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "c1",
+    content: JSON.stringify({ ok: true, path: filePath, sha256: sha, startLine: 1, endLine: 80, totalLines: 80, content }) }] }));
+  const first = new WorkingContext(scope, { root, durable: true, lineage: "turn-1" });
+  first.captureReturned(history, () => true);
+  const request = exchangeIndex(history).matches.get("2:0");
+  const locator = first.archiveRefFor(request, history.getMessagesArray()[2].getToolCallResults()[0]);
+  assert.match(locator.readHandle, /^h_[a-f0-9]{24}$/);
+  first.readLedger.record({ path: filePath, key: "source/game/ledgercharacter.cpp", sourceVersion: sha, lines: [1, 80],
+    bytes: null, complete: true, totalLines: 80, size: null, chars: content.length }, { round: 3, archiveRef: locator });
+  assert.equal(first.readLedger.recordCheck("Source/Game/LedgerCharacter.cpp:10", "behavior", 4), true);
+  const projected = first.project(history, () => true, {}, 512).history;
+  assert.equal(first.commit(history, projected, { exact: true, remainingTokens: 5000 }, hash(serialize(history)), "model"), true);
+
+  const next = new WorkingContext(scope, { root, durable: true, lineage: "turn-2", parentLineage: "turn-1" });
+  const resumed = Chat.from(history); resumed.append("user", "continue");
+  assert.equal(next.restore(resumed).reason, "restored_remeasure_required");
+  const entry = next.readLedger.latestFor(filePath);
+  assert.equal(entry.sourceVersion, sha);
+  assert.equal(entry.complete, true);
+  assert.equal(entry.firstTurn, "earlier");
+  assert.deepEqual(entry.checks.map(item => item.check), ["behavior"]);
+  assert.deepEqual(entry.archiveRef, { evidenceId: locator.evidenceId, version: locator.version });
+  // The handle the restored projection shows was minted under the parent lineage.
+  assert.notEqual(next.archive.readHandleFor(next.archive.load(locator.evidenceId).record), locator.readHandle);
+  const read = next.archive.readByHandle(locator.readHandle, 0, 4096, "body", { startLine: 5, endLine: 6 });
+  assert.equal(read.ok, true, JSON.stringify(read));
+  assert.match(read.content, /^\/\/ line 5 /);
+});

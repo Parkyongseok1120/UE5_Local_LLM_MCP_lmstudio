@@ -24,7 +24,8 @@ def test_shipped_contract_file_is_valid_and_versioned():
     data = contracts.load_contracts()
     assert contracts.contract_revision(data) == f"unreal_contracts@{SHIPPED['revision']}"
     assert contracts.engine_version_validated(data, "5.8.2")
-    assert not contracts.engine_version_validated(data, "5.7.4")
+    assert contracts.engine_version_validated(data, "5.7.4")
+    assert not contracts.engine_version_validated(data, "5.6.1")
     facts = [c for c in data["contracts"] if c["kind"] == "engine_fact"]
     assert facts and all(c["evidenceRefs"] for c in facts)
 
@@ -63,7 +64,9 @@ def test_ambiguous_netmode_call_does_not_hide_known_bad_lifecycle():
 @pytest.mark.parametrize("mutate, message", [
     (lambda d: d["contracts"].append(copy.deepcopy(d["contracts"][0])), "duplicate contract id"),
     (lambda d: d["contracts"][0].update(evidenceRefs=[]), "needs engine source evidence"),
-    (lambda d: d["contracts"][0]["applicability"].update(engineVersions=["5.7"]), "unvalidated version"),
+    (lambda d: d["contracts"][0]["applicability"].update(engineVersions=["5.6"]), "unvalidated version"),
+    (lambda d: d["contracts"][0]["evidenceRefs"][0].update(lines={"5.6": 3}), "evidence lines"),
+    (lambda d: d["contracts"][0]["evidenceRefs"][0].update(line=3), "line or lines"),
     (lambda d: d["lifecycle"]["parents"].update(UObject="AActor"), "cycle"),
     (lambda d: d["contracts"][0]["evidenceRefs"][0].update(path="../outside.h"), "engine-root relative"),
     (lambda d: d["contracts"][0].update(kind="guess"), "unknown kind"),
@@ -140,7 +143,8 @@ def test_cli_json_keeps_finding_metadata_and_analysis_coverage(tmp_path):
     revision = contracts.contract_revision(contracts.load_contracts())
     assert payload["analysis"]["contractRevision"] == revision
     assert payload["analysis"]["analysisCoverage"]["contracts"] == "available"
-    assert payload["analysis"]["analysisCoverage"]["engineSource"] == "not_used"
+    # An observed engine root lets the engine-backed rules read its headers.
+    assert payload["analysis"]["analysisCoverage"]["engineSource"] == "bounded_installed_header_lookup"
     identity = payload["analysis"]["engineIdentity"]
     assert identity["status"] == "observed" and identity["source"] == "build_version_file"
     assert identity["version"] == f"{validated[0]}.{validated[1]}.0"
@@ -167,3 +171,31 @@ def test_node_adapter_preserves_metadata_and_analysis(tmp_path):
     assert payload["analysis"]["contractRevision"] == revision
     finding = next(f for f in payload["findings"] if f["code"] == "INVALID_UNREAL_LIFECYCLE_OVERRIDE")
     assert finding["metadata"]["contractRevision"] == revision
+
+
+def test_evidence_lines_name_each_validated_version():
+    from engine_contracts import evidence_line
+    data = contracts.load_contracts()
+    assert set(data["validatedEngineVersions"]) == {"5.7", "5.8"}
+    fact = contracts.contract_by_id(data, "ue.controller.player-tick-input")
+    tick = next(ref for ref in fact["evidenceRefs"] if ref["symbol"] == "APlayerController::TickActor")
+    assert evidence_line(tick, "5.7") == 5526 and evidence_line(tick, "5.8") == 5647
+    assert evidence_line(tick) == 5647
+    assert evidence_line({"path": "Engine/X.h", "symbol": "X", "line": 9}) == 9
+
+
+def test_carry_over_matches_the_cited_window_or_only_the_unchanged_cited_line(tmp_path):
+    import verify_engine_contracts as carry
+    source = ["// a", "// b", "int32 AActor::F()", "{", "    return 1;", "}", "// c"]
+    shifted = ["// new", "// a", "// b", "int32 AActor::F()", "{", "    return 1;", "}", "// c"]
+    assert carry.locate(source, shifted, 5) == 6
+    commented = ["// changed comment", "virtual bool ShouldCreateSubsystem(UObject* Outer) const;", "// other"]
+    original = ["// comment", "virtual bool ShouldCreateSubsystem(UObject* Outer) const;", "// tail"]
+    assert carry.locate(original, commented, 2) is None
+    assert carry.cited_line(original, commented, 2) == 2
+    assert carry.cited_line(original, ["// none"], 2) is None
+    # Form feeds inside engine sources must not shift the newline numbering.
+    path = tmp_path / "F.cpp"
+    path.write_bytes(b"a\x0cb\nc\r\nd")
+    assert carry._lines(path) == ["a\x0cb", "c", "d"]
+

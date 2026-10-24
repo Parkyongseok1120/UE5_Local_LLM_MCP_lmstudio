@@ -1,6 +1,6 @@
 /** Saved settings and runtime fallback share these values. Never migrate an
  * explicit Off/0/Documents selection merely because an effective policy differs. */
-export const GUIDANCE_DEFAULTS = Object.freeze({ mode: "off", delivery: "documents", maxTokens: 2048 } as const);
+export const GUIDANCE_DEFAULTS = Object.freeze({ mode: "off", delivery: "documents", maxTokens: 6144 } as const);
 export const CONTEXT_DEFAULTS = Object.freeze({ mode: "hybrid", target: 18000, trigger: 22000, scaling: "auto",
   projectionChars: 512, summaryTokens: 1024, summarySeconds: 30, semanticHandoff: false } as const);
 /** Single source for every numeric setting: the schema default shown in the
@@ -30,6 +30,7 @@ export const NUMERIC_FIELDS = Object.freeze({
   pastReasoningTokens: field(0, 0, 16384),
   maxResearchRounds: field(60, 0, 1000),
   toolStagnationRounds: field(3, 2, 20),
+  noNewEvidenceRounds: field(3, 1, 20),
   generationRepeatCount: field(3, 2, 10),
   auditResearchSeconds: field(100, 1, 3600),
   auditResearchRounds: field(12, 1, 100),

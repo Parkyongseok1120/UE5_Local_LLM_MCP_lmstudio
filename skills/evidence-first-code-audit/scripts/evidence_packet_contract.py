@@ -94,7 +94,16 @@ VALIDATION_POLICY = (
     "non-codegen claimType; never change severity or invent design intent just to pass validation. "
     "During structural repair preserve evidence and stageStatus; changing unknown to present needs new supporting evidence. "
     "If validation is unavailable or an argument is cut off, report returned "
-    "facts and unresolved scope as partial; do not present unvalidated causal claims as confirmed."
+    "facts and unresolved scope as partial. A passing validation never makes a claim confirmed: confirmation "
+    "comes only from the cited source, framework, build, test or runtime evidence, so do not report a pass as "
+    "'validation passed' or as a fact check."
+)
+
+# Plain-language reading of a result, returned with every validation so the
+# boolean ok is never the only field a model quotes.
+VALIDATION_REPORT_NOTE = (
+    "Packet structure and record consistency only. No claim was checked against source, framework or docs; "
+    "do not describe this result as 'validation passed', verified or confirmed."
 )
 
 

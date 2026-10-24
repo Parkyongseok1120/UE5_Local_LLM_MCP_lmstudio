@@ -15,6 +15,8 @@ const { retainInterruptedCalls } = require("./interrupted-calls.js");
 const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
+const { sourceOutline } = require("./source-outline.js");
+const { ReadLedger } = require("./read-ledger.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -123,6 +125,100 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
   return pinned;
 }
 
+// A body projection keeps every fact the model reads (more pages, totals,
+// coverage at read time, range/proof facts) and the digests that key coverage.
+// Bookkeeping it never needs stays in the archive record: digests the kept
+// sourceQueryKey/sourceVersion supersede, the project scope inside
+// sourceIdentity (sourceIdentityDigest keys it), envelope range arrays a body
+// view leaves empty, and "unknown" placeholders (2026-10-20 run: 2,852 chars
+// per projection, 559 of them code).
+const BODY_PROJECTION_DROPPED = ["provider", "semanticQueryDigest", "sourceHash", "rangeUnit", "archivedRanges",
+  "projectedRawRanges", "projectedSanitizedRanges", "omittedRanges"];
+
+function compactBodyProjection(projection) {
+  for (const key of BODY_PROJECTION_DROPPED) delete projection[key];
+  for (const [key, value] of Object.entries(projection)) if (value === "unknown") delete projection[key];
+  if (projection.redacted === false) delete projection.redacted;
+  if (projection.sourceIdentity && typeof projection.sourceIdentity === "object" && projection.sourceIdentity.path)
+    projection.sourceIdentity = { path: projection.sourceIdentity.path };
+  const { evidenceId, version, readHandle } = projection.archiveRef;
+  projection.archiveRef = { evidenceId, version, readHandle };
+}
+
+const fileKey = value => String(value || "").replace(/\\/g, "/").split("/").pop().toLowerCase();
+
+// Line citations in assistant text and tool arguments: path:line[-line] by file
+// name, and "Line N[-M]" by the stem of the nearest file named before it in the
+// same text, so a header/source pair both match (the 2026-10-20 notes cited
+// lines that way). A wrong attribution only finds no such line in that file.
+const CITATION = /([\w./\\-]+\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|cs|ini|md|json|ts|js|py))(?::(\d+)(?:\s*-\s*(\d+))?)?\b|\b[Ll]ines? (\d+)(?:\s*-\s*(\d+))?/g;
+const fileStem = value => fileKey(value).replace(/\.[^.]+$/, "");
+function citedLineRanges(messages) {
+  const cited = new Map();
+  const add = (key, start, end) => {
+    if (!key || !Number.isInteger(start) || end < start || end - start > 400) return;
+    cited.set(key, [...(cited.get(key) || []), [start, end]]);
+  };
+  for (const message of messages) {
+    if (message.getRole() !== "assistant") continue;
+    const texts = [message.getText(), ...message.getToolCallRequests().map(request => JSON.stringify(request.arguments || {}))];
+    for (const text of texts) {
+      let file = "";
+      for (const match of text.matchAll(CITATION)) {
+        if (match[1]) {
+          file = match[1];
+          if (match[2]) add(fileKey(file), Number(match[2]), Number(match[3] || match[2]));
+        } else if (file) add(`stem:${fileStem(file)}`, Number(match[4]), Number(match[5] || match[4]));
+      }
+    }
+  }
+  return cited;
+}
+
+// A shortened name (GameMode.cpp) matches the file it ends (…CombatGameMode.cpp).
+const namesMatch = (cited, own) => cited === own || (cited.length >= 5 && own.endsWith(cited));
+
+// The cited lines (±1) of a line-numbered body, within maxChars, as body offsets.
+function citedExcerpt(body, parsed, citations, maxChars) {
+  const own = fileKey(parsed.projectRelativePath || parsed.path), ownStem = fileStem(own);
+  const ranges = [...citations].filter(([key]) => key.startsWith("stem:")
+    ? namesMatch(key.slice(5), ownStem) : namesMatch(key, own)).flatMap(([, value]) => value);
+  if (!ranges.length || parsed.lineNumbers !== true) return null;
+  const lines = [];
+  let offset = 0;
+  for (const text of body.split("\n")) {
+    const number = /^(\d+)\t/.exec(text);
+    lines.push({ start: offset, end: offset + text.length, number: number ? Number(number[1]) : null });
+    offset += text.length + 1;
+  }
+  const wanted = lines.filter(line => line.number !== null
+    && ranges.some(([start, end]) => line.number >= start - 1 && line.number <= end + 1));
+  if (!wanted.length) return null;
+  const segments = [];
+  let shown = 0;
+  for (const line of wanted) {
+    const last = segments.at(-1);
+    const length = line.end - line.start + (last && last[1] === line.start - 1 ? 1 : 4);
+    if (shown + length > maxChars) break;
+    if (last && last[1] === line.start - 1) last[1] = line.end; else segments.push([line.start, line.end]);
+    shown += line.end - line.start;
+  }
+  if (!segments.length) return null;
+  const numberAt = offset => lines.find(line => line.start === offset)?.number;
+  const numberEnding = offset => lines.find(line => line.end === offset)?.number;
+  return { ranges: segments, shown: segments.reduce((total, [start, end]) => total + end - start, 0),
+    excerpt: segments.map(([start, end]) => body.slice(start, end)).join("\n…\n"),
+    lines: segments.map(([start, end]) => `${numberAt(start)}-${numberEnding(end)}`).join(", ") };
+}
+
+function complementRanges(ranges, length) {
+  const omitted = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) { if (start > cursor) omitted.push([cursor, start]); cursor = end; }
+  if (cursor < length) omitted.push([cursor, length]);
+  return omitted;
+}
+
 function serializedResultContent(content) {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
@@ -190,9 +286,13 @@ class WorkingContext {
     this.exposure = new Map();
     this.note = null;
     this.referenceObservations = [];
+    this.readLedger = new ReadLedger();
     this.lineage = options.lineage || null;
     this.parentLineage = options.parentLineage || null;
     this.archive.setAccess(this.lineage || scope.lineage);
+    // A readHandle shown in a restored projection was minted under the parent
+    // lineage; it names the same record once that record's membership is granted.
+    this.archive.handleLineages = [this.parentLineage].filter(Boolean);
     this.archive.protectedWindows = new Set([this.windowFile(this.lineage), this.windowFile(this.parentLineage)]);
     this.windowDigest = undefined;
     this.lastSummaryInput = "";
@@ -388,7 +488,8 @@ class WorkingContext {
         // Duplicate callbacks/replays cannot reopen a completed consumer.
         if (this.consumedRawResults.has(rawExposureKey(request, result, envelope))) continue;
         const value = decodeToolResultRecord(envelope).value;
-        if (!value || value.kind === "archived_tool_result_projection") continue;
+        // An UNCHANGED fact points at an already archived record of that version.
+        if (!value || ["archived_tool_result_projection", "redundant_source_read"].includes(value.kind)) continue;
         if (["historical_evidence_range", "historical_evidence_index"].includes(value.kind)) {
           // Rehydration is a new returned page even when its source ID was
           // consumed before. Pin that exact page until its first consumer;
@@ -401,6 +502,29 @@ class WorkingContext {
       }
     }
     return captured;
+  }
+
+  /** The archive record a returned result was captured as, with its handle. */
+  archiveRefFor(request, result) {
+    const ref = this.rawRefs.get(rawExposureKey(request, result, serializedResultContent(result.content)));
+    return ref ? this.archiveLocator({ evidenceId: ref[0], version: ref[1] }) : null;
+  }
+
+  /** A still-readable archive record as {evidenceId, version, readHandle}, plus
+   * its declaration outline when it holds a project source body. */
+  archiveLocator(ref, withOutline = false) {
+    if (!ref?.evidenceId || !ref?.version) return null;
+    const loaded = this.archive.load(ref.evidenceId);
+    if (!loaded.ok || loaded.record.archivedBodyHash !== ref.version) return null;
+    const locator = { evidenceId: ref.evidenceId, version: ref.version, readHandle: this.archive.readHandleFor(loaded.record) };
+    if (withOutline) {
+      const value = decodeToolResultRecord(loaded.record.body).value;
+      const body = value && evidenceBodyView(value);
+      const outline = body && sourceOutline(body.body, { path: value.path, startLine: value.startLine,
+        offsetBytes: value.offsetBytes, lineNumbers: value.lineNumbers === true });
+      if (outline) locator.outline = outline.entries.slice(0, 16);
+    }
+    return locator;
   }
 
   summaryRefs() {
@@ -463,6 +587,7 @@ class WorkingContext {
     let changed = false, archiveFailed = false, preservedFirstConsumer = false;
     const messages = history.getMessagesArray();
     const pinned = pinnedWorkingSet(messages, index, metadata);
+    const citations = citedLineRanges(messages);
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
       const message = messages[messageIndex];
       const results = message.getToolCallResults();
@@ -474,7 +599,8 @@ class WorkingContext {
         const originalEnvelope = serializedResultContent(result.content);
         const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-          || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(parsed.kind)) return result;
+          || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index",
+            "redundant_source_read"].includes(parsed.kind)) return result;
         // The caller's known observation classification alone is not execution proof.
         if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
         // A projection has fixed identity/range metadata. Avoid archiving and
@@ -496,6 +622,12 @@ class WorkingContext {
         const semanticBody = JSON.stringify(redact(parsed));
         const boundedBody = bodyView?.body || semanticBody;
         const bodyFirst = Boolean(bodyView);
+        // A dropped project source body keeps its declaration spans, so one
+        // span can be re-read with read_file_range instead of the whole file.
+        let outline = bodyFirst && boundedBody.length > maxChars
+          ? sourceOutline(boundedBody, { path: parsed.path ?? identity.path, startLine: parsed.startLine,
+            offsetBytes: parsed.offsetBytes, lineNumbers: parsed.lineNumbers === true }) : null;
+        if (outline && JSON.stringify(outline).length > originalEnvelope.length / 4) outline = null;
         let projectedEnd = Math.min(maxChars, semanticBody.length);
         const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
         const projection = { kind: "archived_tool_result_projection", originalCallId: result.toolCallId,
@@ -542,7 +674,22 @@ class WorkingContext {
           bodyOmittedChars: bodyFirst ? boundedBody.length : undefined,
           bodyComplete: false,
           fullRawProvided: false, currentFile: false, grantsMutation: false,
+          ...(outline ? { sourceOutline: outline } : {}),
           excerpt: "" };
+        if (bodyFirst) {
+          compactBodyProjection(projection);
+          // Lines the model cited later are the ones it will quote again.
+          const cited = citedExcerpt(boundedBody, parsed, citations, Math.max(maxChars * 2, 1024));
+          if (cited) {
+            Object.assign(projection, { projectedBodyRanges: cited.ranges,
+              omittedBodyRanges: complementRanges(cited.ranges, boundedBody.length),
+              bodyOmittedChars: boundedBody.length - cited.shown, bodyComplete: false, excerpt: cited.excerpt,
+              projectionCoverage: "partial",
+              notice: `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
+            const citedContent = JSON.stringify(projection);
+            if (citedContent.length < originalEnvelope.length) { changed = true; return { ...result, content: citedContent }; }
+          }
+        }
         const fixedCost = JSON.stringify(projection).length;
         projectedEnd = Math.min(bodyFirst ? maxChars : projectedEnd,
           Math.max(0, originalEnvelope.length - fixedCost - 1));
@@ -552,7 +699,6 @@ class WorkingContext {
           projection.omittedRanges = [[Math.min(projectedEnd, record.body.length), record.body.length]];
           projection.excerpt = semanticBody.slice(0, projectedEnd);
         } else {
-          projection.omittedRanges = [[0, record.body.length]];
           projection.projectedBodyRanges = [[0, Math.min(projectedEnd, boundedBody.length)]];
           projection.omittedBodyRanges = [[Math.min(projectedEnd, boundedBody.length), boundedBody.length]];
           projection.bodyOmittedChars = Math.max(0, boundedBody.length - projectedEnd);
@@ -564,7 +710,8 @@ class WorkingContext {
           const shown = Math.min(projectedEnd, total);
           projection.projectionCoverage = shown < total ? "partial" : "complete";
           if (shown < total) {
-            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`;
+            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
+              + (outline ? "; sourceOutline lists declaration line spans to re-read with a line-range source read" : "");
           } else delete projection.notice;
         };
         announcePartialBody();
@@ -600,7 +747,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: "Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. Keep maxChars fixed across pages and use nextOffset; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.",
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -608,6 +755,9 @@ class WorkingContext {
           readHandle: { type: "string" }, view: { type: "string", enum: ["body", "envelope"] },
           continuation: { type: "string", description: "Copy catalog nextContinuation exactly; unavailable after execution restart." },
           startOffset: { type: "integer", minimum: 0, description: "UTF-16 offset in the selected representation; use read nextOffset." },
+          startLine: { type: "integer", minimum: 1, description: "First source-file line of a view=body read; use read nextStartLine to continue." },
+          endLine: { type: "integer", minimum: 1, description: "Last source-file line (inclusive) with startLine; omitted reads to the body end." },
+          symbol: { type: "string", description: "A declaration name from the record's sourceOutline (e.g. AMyActor::Fire); reads that span of a view=body source record." },
           maxChars: { type: "integer", minimum: 1, maximum: ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
             description: "Whole serialized JSON response budget, including metadata and escaping. Default 4096. Keep fixed while paging; do not subtract already-read content." } },
         anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
@@ -622,10 +772,30 @@ class WorkingContext {
             || args.continuation && args.catalogVersion === 1) return { ok: false, errorCode: "pagination_conflict" };
           return args.catalogVersion === 2 || args.continuation ? this.archive.catalogPage(args) : this.archive.catalog(args);
         }
-        if (args.readHandle) return this.archive.readByHandle(args.readHandle,
-          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body");
-        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "envelope");
+        if (args.endLine !== undefined && args.startLine === undefined) return { ok: false, errorCode: "start_line_required" };
+        if ((args.startLine !== undefined || args.symbol !== undefined) && args.startOffset !== undefined
+          || args.symbol !== undefined && args.startLine !== undefined) return { ok: false, errorCode: "pagination_conflict" };
+        const lines = args.symbol !== undefined ? { symbol: String(args.symbol) }
+          : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
+        const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
+          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body", lines, args.path)
+          : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars,
+            args.view ?? (lines ? "body" : "envelope"), lines);
+        return this.explainArchiveError(result);
       } });
+  }
+
+  /** A version_mismatch names an archive record digest, never a source edit.
+   * Say whether the file's latest read still has the record's source hash. */
+  explainArchiveError(result) {
+    if (result?.errorCode !== "version_mismatch" || !result.path || !result.sourceVersion) return result;
+    const latest = this.readLedger.latestFor(result.path);
+    if (!latest) return result;
+    const unchanged = latest.sourceVersion === String(result.sourceVersion).toLowerCase();
+    return { ...result, sourceUnchanged: unchanged, latestReadSha256: latest.sourceVersion,
+      message: `${result.message} ${unchanged
+        ? `The latest read of ${result.path} returned the same sha ${latest.sourceVersion.slice(0, 8)}: the file is unchanged.`
+        : `The latest read of ${result.path} returned sha ${latest.sourceVersion.slice(0, 8)}, a different version than this record.`}` };
   }
 
   refsValid(refs = [...this.refs], allowExpired = false) { return refs.every(([id, version]) => {
@@ -772,7 +942,7 @@ class WorkingContext {
           ? canonical.map(entry => hash(entry).slice(0, 16)) : null,
         replacement, refs: [...candidateRefs], membership: this.archive.exportMembership(), rawBindings, consumedBindings,
         pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note, referenceObservations,
-        createdAt: this.archive.now(),
+        readLedger: this.readLedger.toJSON(), createdAt: this.archive.now(),
         lastSummaryInput: this.lastSummaryInput, summaryAttempts: this.summaryAttempts.slice(-SUMMARY_POLICY.retainedEvents), modelFingerprint, measurement,
         measurementSubject: measurement ? "live_candidate_before_persistence_sanitization" : "terminal_unmeasured",
         remeasureRequired: true };
@@ -879,6 +1049,7 @@ class WorkingContext {
       this.archivedEvidenceKnown = undefined;
       this.manifest = manifest; this.generation = body.generation; this.refs = refs; this.note = body.note;
       this.referenceObservations = Array.isArray(body.referenceObservations) ? body.referenceObservations : [];
+      this.readLedger.load(body.readLedger);
       this.rawRefs = rawRefs; this.returnedRefs = returnedRefs;
       this.pendingHistoricalResults = pendingHistoricalResults; this.consumedRawResults = consumedRawResults;
       this.restoredResultKeys = inputResultKeys(restored);

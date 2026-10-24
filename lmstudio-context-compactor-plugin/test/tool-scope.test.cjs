@@ -155,3 +155,23 @@ test("unity_references, unity_snapshot and unity_symbols are read only per actio
     for (const action of write) assert.equal(isObservationOnlyToolCall(profile, { name, arguments: { action } }), false, `${name}.${action}`);
   }
 });
+
+// 2026-10-20 audit: a find-and-report request carried 26 write/git schemas
+// (27.7k chars) into every round. Only an unambiguous review narrows the surface.
+test("only a review request that names no change, build or run selects the read profile", () => {
+  const { readOnlyReviewRequest } = require("../dist/tool-capability-registry");
+  const cases = [
+    ["캐릭터 쪽과 네트워크 RPC 계약 쪽 SSOT, SOLID, 계약, 책임, 수명주기, 또는 UE API 매크로가 잘못된 것들을 찾아서 정리해줘.", true],
+    ["코드 수정하지 말고 발사 경로를 검토해줘", true],
+    ["Review the replication code, do not edit anything.", true],
+    ["Explain how respawn works", true],
+    ["이 버그 찾아서 고쳐줘", false],
+    ["Fix the replication bug", false],
+    ["빌드해서 확인해줘", false],
+    ["리팩터링 방향을 분석해줘", false],
+    ["현재 프로젝트에서 잘못된 점은?", false],
+    ["계속", false],
+    ["", false],
+  ];
+  for (const [text, expected] of cases) assert.equal(readOnlyReviewRequest(text), expected, text);
+});

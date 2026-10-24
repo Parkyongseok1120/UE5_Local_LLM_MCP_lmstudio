@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@4",
+  "contractRevision": "unreal_contracts@6",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
@@ -757,6 +757,245 @@
             "(?:곧바로|바로|직접)\\s*AActor::TakeDamage",
             "goes (?:straight|directly) to AActor::TakeDamage",
             "ACharacter[^.\\n]{0,40}(?:기본|내장|built-in)[^.\\n]{0,30}(?:Health|체력|OnDeath|사망\\s*처리)[^.\\n]{0,20}(?:있|수행|호출|has|calls)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "player_controller_tick_drives_input",
+      "origin": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp:5377-5526 (TickActor -> PlayerTick), PlayerController.cpp:2309-2326 (TickPlayerInput), Controller.cpp:58",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.controller.player-tick-input",
+        "policy.claims.engine-path-change"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "이 PlayerController의 Tick 본문은 Shipping에서 Super::Tick만 호출한다. Shipping 빌드에서 bCanEverTick을 꺼도 되는가? 엔진 기본 동작과 함께 설명하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewPlayerController.cpp",
+          "content": "AReviewPlayerController::AReviewPlayerController()\n{\n\tPrimaryActorTick.bCanEverTick = true;\n}\n\nvoid AReviewPlayerController::Tick(float DeltaTime)\n{\n\tSuper::Tick(DeltaTime);\n#if !UE_BUILD_SHIPPING\n\tif (bSmokeEnabled) TickSmoke();\n#endif\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "player_controller_tick_drives_input",
+          "points": 3.0,
+          "diagnosis": [
+            "TickActor",
+            "PlayerTick",
+            "(TickPlayerInput|입력|input)",
+            "(AController|기본값|default)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "player_controller_tick_drives_input_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:Shipping|쉬핑)[^.\\n]{0,80}bCanEverTick\\s*=\\s*false",
+            "불필요한\\s*틱|틱\\s*오버헤드|\\bunnecessary\\s+tick",
+            "bCanEverTick[^.\\n]{0,40}(?:꺼도\\s*(?:된다|됩니다|무방)|끄는\\s*것이\\s*(?:좋|맞))"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "armor_stat_is_consumed_at_spawn_and_damage",
+      "origin": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:93",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.usage-path"
+      ],
+      "category": [
+        "claims",
+        "harness_regression"
+      ],
+      "prompt": "장갑을 얻는 아이템이 없다. FCharacterStats.MaxArmor는 휴면 필드인가? 실제 사용 흐름으로 판단하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewPlayerState.cpp",
+          "content": "void AReviewPlayerState::InitializeForSpawn(const FCharacterStats& Stats)\n{\n\tCurrentArmor = FMath::Max(0.f, Stats.MaxArmor);\n}\n\nvoid AReviewPlayerState::ApplyDamage(float Amount)\n{\n\tconst float ArmorAbsorb = FMath::Min(CurrentArmor, Amount * 0.5f);\n\tCurrentArmor -= ArmorAbsorb;\n\tCurrentHealth -= Amount - ArmorAbsorb;\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "armor_stat_is_consumed_at_spawn_and_damage",
+          "points": 3.0,
+          "diagnosis": [
+            "InitializeForSpawn",
+            "CurrentArmor",
+            "(ApplyDamage|피해)",
+            "(흡수|absorb|차감)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "armor_stat_is_consumed_at_spawn_and_damage_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "MaxArmor[^.\\n]{0,60}(?:휴면|dormant|미사용|사용되지\\s*않)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "weak_ptr_cache_does_not_keep_asset_loaded",
+      "origin": "Engine/Source/Runtime/CoreUObject/Public/UObject/WeakObjectPtr.h:43",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.uobject.weak-ptr-no-retention",
+        "ue.softptr.load-synchronous-when-unloaded"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "발사 사운드를 BeginPlay에서 LoadSynchronous로 미리 로드해 TWeakObjectPtr로 캐시하면, 이후 매 발사에서 동기 로드 없이 쓸 수 있다고 보장되는가?",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewCharacter.cpp",
+          "content": "UPROPERTY(EditDefaultsOnly) TSoftObjectPtr<USoundBase> FireSound;\nTWeakObjectPtr<USoundBase> CachedFireSound;\n\nvoid AReviewCharacter::BeginPlay()\n{\n\tSuper::BeginPlay();\n\tCachedFireSound = FireSound.LoadSynchronous();\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "weak_ptr_cache_does_not_keep_asset_loaded",
+          "points": 3.0,
+          "diagnosis": [
+            "TWeakObjectPtr",
+            "(GC|가비지|garbage)",
+            "(UPROPERTY|TObjectPtr|강한\\s*참조|strong)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "weak_ptr_cache_does_not_keep_asset_loaded_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "TWeakObjectPtr[^.\\n]{0,60}(?:유지된다|유지됩니다|보장된다|보장됩니다|keeps\\s+it)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "debug_draw_is_compiled_out_in_shipping",
+      "origin": "Engine/Source/Runtime/Engine/Public/EngineDefines.h:15",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.debugdraw.compiled-out-in-shipping-test"
+      ],
+      "category": [
+        "engine_semantics",
+        "harness_regression"
+      ],
+      "prompt": "Multicast 핸들러의 DrawDebugLine 호출을 #if !UE_BUILD_SHIPPING으로 감싸야 하는가? Development와 Shipping 비용을 구분하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/ReviewCharacter.cpp",
+          "content": "void AReviewCharacter::MulticastShot_Implementation(FVector_NetQuantize Start, FVector_NetQuantize End)\n{\n\tDrawDebugLine(GetWorld(), Start, End, FColor::Yellow, false, 0.08f);\n}\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "debug_draw_is_compiled_out_in_shipping",
+          "points": 3.0,
+          "diagnosis": [
+            "UE_ENABLE_DEBUG_DRAWING",
+            "Shipping",
+            "Development"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "debug_draw_is_compiled_out_in_shipping_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:반드시|꼭|must)[^.\\n]{0,40}#if\\s*!\\s*UE_BUILD_SHIPPING"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "blueprint_exposed_stat_is_unused_candidate",
+      "origin": "Source/Latency_MultiCombat/Public/Data/CombatTypes.h:67",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.usage-path"
+      ],
+      "category": [
+        "claims",
+        "harness_regression"
+      ],
+      "prompt": "HeadshotMultiplier는 C++에서 선언 외 사용처가 없다. 삭제해야 하는 데드 코드인가?",
+      "files": [
+        {
+          "path": "Source/Combat/Public/ReviewTypes.h",
+          "content": "USTRUCT(BlueprintType)\nstruct FReviewWeaponStats\n{\n\tGENERATED_BODY()\n\tUPROPERTY(EditAnywhere, BlueprintReadWrite, Category = \"Weapon|Special\")\n\tfloat HeadshotMultiplier = 2.0f;\n};\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "blueprint_exposed_stat_is_unused_candidate",
+          "points": 3.0,
+          "diagnosis": [
+            "BlueprintReadWrite",
+            "(Blueprint|에셋|asset)",
+            "(후보|candidate|확인)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "blueprint_exposed_stat_is_unused_candidate_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:삭제해야|제거해야|must\\s+be\\s+removed|delete\\s+it)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "checked_file_count_is_returned_bodies",
+      "origin": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:1",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "policy.claims.absence"
+      ],
+      "category": [
+        "claims"
+      ],
+      "prompt": "search_files 결과는 filesScanned: 21이었고 본문을 반환받은 프로젝트 파일은 15개다. 보고서에 몇 개 파일을 확인했다고 써야 하는가?",
+      "files": [
+        {
+          "path": "Notes/ReviewRun.txt",
+          "content": "search_files: filesScanned=21\nread bodies: 15 project files\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "checked_file_count_is_returned_bodies",
+          "points": 3.0,
+          "diagnosis": [
+            "15",
+            "(filesScanned|스캔)",
+            "(본문|bodies|읽)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "checked_file_count_is_returned_bodies_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "21\\s*개\\s*(?:의\\s*)?(?:소스\\s*)?파일(?:을|를)?\\s*(?:모두\\s*)?(?:확인했|검토했)"
           ]
         }
       ]

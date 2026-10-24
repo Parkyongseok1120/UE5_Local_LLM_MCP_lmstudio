@@ -247,6 +247,9 @@ def test_observed_type_metadata_is_dropped_whole_when_it_does_not_fit(source, mo
 
 def test_related_contracts_are_ids_and_summaries_marked_unvalidated_for_other_engines(source):
     runtime, root, project, _ = source
+    # Contracts are validated on 5.7 and 5.8; a 5.6 engine is another engine.
+    (root / "Engine/Build/Build.version").write_text('{"MajorVersion":5,"MinorVersion":6,"PatchVersion":1}')
+    project.write_text('{"EngineAssociation":"5.6"}')
     classes = root / "Engine/Source/Runtime/Engine/Classes/GameFramework"
     classes.mkdir(parents=True)
     (classes / "Actor.h").write_text("class ENGINE_API AActor : public UObject\n{\npublic:\n virtual void Destroyed();\n};\n")
@@ -256,7 +259,7 @@ def test_related_contracts_are_ids_and_summaries_marked_unvalidated_for_other_en
     assert result["ok"] and result["matches"][0]["declaredIn"] == "AActor"
     related = result["relatedContracts"]
     assert related["revision"].startswith("unreal_contracts@")
-    assert related["engineVersionValidated"] is False  # fixture engine is 5.7; contracts are validated on 5.8
+    assert related["engineVersionValidated"] is False
     assert [item["id"] for item in related["items"]] == ["ue.actor.lifecycle"]
     assert related["items"][0]["summary"].endswith(".") and "statement" not in related["items"][0]
     assert "relatedContracts" not in query(source)

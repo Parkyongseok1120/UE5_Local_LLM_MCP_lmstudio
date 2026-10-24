@@ -303,6 +303,7 @@
           ],
           "applicability": {
             "engineVersions": [
+              "5.7",
               "5.8"
             ]
           }
@@ -320,6 +321,7 @@
           ],
           "applicability": {
             "engineVersions": [
+              "5.7",
               "5.8"
             ]
           }
@@ -340,7 +342,9 @@
           "id": "verification",
           "topics": [
             "core",
+            "design",
             "debugging",
+            "lifecycle",
             "multiplayer"
           ],
           "priority": 25,
@@ -431,7 +435,9 @@
           "id": "verification",
           "topics": [
             "core",
+            "design",
             "debugging",
+            "lifecycle",
             "multiplayer"
           ],
           "priority": 25,
@@ -520,6 +526,7 @@
           ],
           "applicability": {
             "engineVersions": [
+              "5.7",
               "5.8"
             ]
           }

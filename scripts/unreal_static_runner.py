@@ -81,9 +81,9 @@ def validate_unreal_readiness(
     scope_paths: list[Path] | None = None,
     engine_identity: dict | None = None,
 ) -> list[Finding]:
+    identity = engine_identity if engine_identity is not None else resolve_static_engine_identity(root)
     findings = _collect_unreal_readiness(root, module_graph_path, lightweight=lightweight,
         skip_include_path_checks=skip_include_path_checks, scope_paths=scope_paths)
-    identity = engine_identity if engine_identity is not None else resolve_static_engine_identity(root)
     if not lightweight:
         findings.extend(validate_engine_aware(root, identity, scope_paths=scope_paths,
                                               skip_include_path_checks=skip_include_path_checks))
@@ -414,7 +414,7 @@ def validate_unreal_readiness_report(
         analysisCoverage={
             "analysisKind": "lexical",
             "contracts": "available" if contracts else "unavailable",
-            "engineSource": "not_used",
+            "engineSource": "bounded_installed_header_lookup" if identity.get("status") == "observed" and identity.get("engineRoot") else "not_used",
             "scope": "scoped" if scope_paths is not None else "project",
             "limitations": ["regex/lexical analysis: macros, templates and conditional compilation are not expanded",
                             "absence of a finding is not proof of correctness"],

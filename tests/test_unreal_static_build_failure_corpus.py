@@ -1,6 +1,6 @@
 """Regression corpus: real Unreal build failures the static validator should catch before UBT.
 
-``tests/fixtures/ue_build_failures/corpus.json`` lists 39 minimal reproductions of the 51 failed
+``tests/fixtures/ue_build_failures/cases.json`` lists 39 minimal reproductions of the 51 failed
 ``build_unreal_project`` results recorded in local LM Studio sessions (UE 5.7.4). Every case is a small
 hand-written snippet; ``engine_stub`` holds the few engine declarations the engine-backed rules read,
 at their real UE 5.7 header paths. A case is caught when ``validate_unreal_readiness`` reports one of
@@ -50,7 +50,7 @@ from engine_identity import describe_unreal_engine_identity  # noqa: E402
 from unreal_static_runner import validate_unreal_readiness  # noqa: E402
 
 CORPUS = ROOT / "tests" / "fixtures" / "ue_build_failures"
-MANIFEST = json.loads((CORPUS / "corpus.json").read_text(encoding="utf-8"))
+MANIFEST = json.loads((CORPUS / "cases.json").read_text(encoding="utf-8"))
 CASES = MANIFEST["cases"]
 TARGETED = [case for case in CASES if case["expect"]]
 ENGINE_STUB = CORPUS / MANIFEST["engineStub"]

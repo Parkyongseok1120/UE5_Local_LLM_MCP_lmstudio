@@ -86,7 +86,7 @@ export class DeliveryController {
     this.observe(captured, timedOut);
     this.observation = { ...this.observation, delivery, objectiveSatisfied };
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
-      || ["research_recovery_complete", "research_recovery_exhausted"].includes(trigger || ""));
+      || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence"].includes(trigger || ""));
     const partial = needsPartial ? evidenceBackedPartialReport(history, captured.messages,
       delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null;
     const outcome = classifyExecutionOutcome({ ...this.observation, partialReportDelivered: needsPartial });
@@ -104,10 +104,10 @@ export class DeliveryController {
 const STRUCTURE_ONLY_SCOPE = "packet_structure_and_record_consistency";
 // Wording that reads as completed verification. Explicitly negated forms
 // ("facts_not_verified", "미검증") are not matches.
-const VERIFIED_WORDING = /검증\s*완료|검증(?:을|이)?\s*(?:마쳤|끝났|통과했)|사실\s*확인\s*완료|\((?:fully\s+)?verified\)|\bverified\b/iu;
+const VERIFIED_WORDING = /검증\s*완료|검증(?:을|이)?\s*(?:마쳤|끝났|통과했)|검증(?:을|이|에)?\s*통과|사실\s*확인\s*완료|\((?:fully\s+)?verified\)|\bverified\b|\bvalidation\s+(?:passed|succeeded)\b|\bpassed\s+(?:the\s+)?validation\b/iu;
 // Remove only a locally qualified/negated phrase, never another claim in the
 // same answer. A disclaimer about B must not hide a verification claim about A.
-const QUALIFIED_VERIFICATION = /\bnot\s+(?:(?:yet|fully)\s+)?verified\b|\bverified\s*[:=-]?\s*false\b|(?:사실\s*확인|검증)\s*완료(?:가|는)?\s*(?:아니\S*|아닙\S*|아님)|검증(?:을|이)?\s*(?:마치지|끝나지|통과하지)\s*(?:않\S*|못\S*)|(?:형식|구조)\s*(?:(?:검사|검증)\s*)?만\s*(?:검증\s*)?(?:완료|통과(?:했\S*)?)/giu;
+const QUALIFIED_VERIFICATION = /\bnot\s+(?:(?:yet|fully)\s+)?verified\b|\bverified\s*[:=-]?\s*false\b|\bvalidation\s+(?:has\s+)?not\s+(?:yet\s+)?(?:passed|succeeded)\b|(?:사실\s*확인|검증)\s*완료(?:가|는)?\s*(?:아니\S*|아닙\S*|아님)|검증(?:을|이)?\s*(?:마치지|끝나지|통과하지)\s*(?:않\S*|못\S*)|(?:형식|구조)\s*(?:(?:검사|검증)\s*)?만\s*(?:검증\s*)?(?:완료|통과(?:했\S*)?)/giu;
 
 /** One deterministic footer when the only validation in this turn checked
  * packet structure, yet the answer reads as verified. The answer text itself
@@ -132,7 +132,7 @@ export function verificationScopeNotice(history: Chat, finalText: string): strin
   }
   if (!structureOnly || factual) return null;
   return "[검증 범위] 이번 답변의 근거 패킷 검사(evidence_first_validate)는 형식과 기록 일관성만 확인했습니다. "
-    + "사실 검증이 아니므로, 위의 '검증 완료' 표현은 소스·실행 근거로 다시 확인해야 합니다.";
+    + "사실 검증이 아니므로, 위의 '검증 완료·통과' 표현은 소스·실행 근거로 다시 확인해야 합니다.";
 }
 
 // Wording that states absence or a confirmed defect. Locally negated forms

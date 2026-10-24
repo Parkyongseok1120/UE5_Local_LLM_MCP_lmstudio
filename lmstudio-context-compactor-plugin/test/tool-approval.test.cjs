@@ -145,32 +145,59 @@ test('round shutdown closes interrupted generation and unresolved read execution
   assert.equal(reading.statuses[0].state.status,'canceled');assert.match(reading.statuses[0].state.text,/완료 결과를 확인하지 못했습니다/);
 });
 
-// An identical read whose successful result is still verbatim in this input is
-// sent with that result's repeatReceipt: the server answers "no new
-// information" only while the file is unchanged, otherwise the fresh text.
+// An identical read sends the receipt of its earlier successful result, also
+// when that result was since projected or archived: the server answers "no
+// new information" only while the file is unchanged, otherwise the fresh
+// text. The broker's byteBudget rewrite does not change which range is read.
 test('an identical read already present in the input carries its repeatReceipt to the server', async () => {
-  const {presentRepeatReceipts, repeatRequestKey} = require('../dist/evidence-manager');
+  const {presentRepeatReceipts, repeatReceiptCandidates, repeatRequestKey} = require('../dist/evidence-manager');
   const {ChatMessage} = require('@lmstudio/sdk');
-  const args = {path:'project://Source/A.cpp', project:'C:/Game', startLine:1, endLine:40};
+  const args = {path:'project://Source/A.cpp', project:'C:/Game', startLine:1, endLine:40, byteBudget:16384};
   const history = Chat.from([{role:'user', content:'Read A'}]);
   history.append(ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:{type:'function', id:'r1', name:'read_file_range', arguments:args}}]}));
   history.append(ChatMessage.from({role:'tool', content:[{type:'toolCallResult', toolCallId:'r1',
-    content:JSON.stringify({ok:true, path:args.path, content:'1\tint A;', startLine:1, endLine:1, repeatReceipt:'rr_live'})}]}));
-  history.append(ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:{type:'function', id:'r2', name:'read_file_range', arguments:{path:'project://Source/B.cpp', startLine:1, endLine:9}}}]}));
+    content:JSON.stringify({ok:true, path:args.path, content:'1	int A;', startLine:1, endLine:1, repeatReceipt:'rr_live'})}]}));
+  const bArgs = {path:'project://Source/B.cpp', startLine:1, endLine:9};
+  history.append(ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:{type:'function', id:'r2', name:'read_file_range', arguments:bArgs}}]}));
   history.append(ChatMessage.from({role:'tool', content:[{type:'toolCallResult', toolCallId:'r2',
-    content:JSON.stringify({kind:'archived_tool_result_projection', bodyComplete:false, repeatReceipt:'rr_projected'})}]}));
+    content:JSON.stringify({kind:'archived_tool_result_projection', bodyComplete:false, archiveRef:{evidenceId:'ev_b', version:'v'}})}]}));
   const present = presentRepeatReceipts(history);
   assert.equal(present.get(repeatRequestKey('read_file_range', args)), 'rr_live');
-  assert.equal(present.get(repeatRequestKey('read_file_range', {...args, byteBudget:8192})), undefined);
-  assert.equal(present.size, 1, 'a projection is not present verbatim');
+  assert.equal(present.get(repeatRequestKey('read_file_range', {...args, byteBudget:8192})), 'rr_live', 'byteBudget rewrites match');
+  assert.equal(present.size, 1, 'a projection without a remembered receipt has none');
+  const archived = new Map([['ev_b', {key: repeatRequestKey('read_file_range', bArgs), receipt:'rr_projected', arguments:bArgs}]]);
+  const candidates = repeatReceiptCandidates(history, archived);
+  assert.equal(candidates.get(repeatRequestKey('read_file_range', bArgs)).receipt, 'rr_projected', 'projected results keep their receipt');
 
-  const hit = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: present});
-  hit.request.arguments = {...args};
+  const hit = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: candidates});
+  hit.request.arguments = {...args, byteBudget:8192};
   await hit.invoke();
   assert.equal(hit.outcome.type, 'allow');
   assert.equal(hit.outcome.args.repeatReceipt, 'rr_live');
-  const miss = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: present});
+  const reserved = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: candidates,
+    batchReservation: new BatchReservation(100000)});
+  reserved.tool.parametersJsonSchema.properties.byteBudget = {type:'integer', minimum:1024, maximum:65536, $comment:'direct-json-text-utf8'};
+  reserved.request.arguments = {...args, byteBudget:32768};
+  await reserved.invoke();
+  assert.equal(reserved.outcome.args.repeatReceipt, 'rr_live');
+  assert.equal(reserved.outcome.args.byteBudget, 16384, 'the earlier executed byteBudget is reused so the server key matches');
+  const miss = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: candidates});
   miss.request.arguments = {...args, endLine:80};
   await miss.invoke();
   assert.equal(miss.outcome.args.repeatReceipt, undefined);
+});
+
+// The same unchanged request returned this many bytes before: reserve about
+// that instead of half the batch, so a parallel peer is not starved.
+test('a read whose earlier result size is known reserves about that size', async () => {
+  const known = fixture('read_file', 'mcp/unreal-agent', {}, {batchReservation: new BatchReservation(40000),
+    knownResultBytes: (name, args) => name === 'read_file' && args.path === 'Source/A.cpp' ? 3000 : undefined});
+  known.tool.parametersJsonSchema.properties.byteBudget = {type:'integer', minimum:1024, maximum:65536, $comment:'direct-json-text-utf8'};
+  await known.invoke();
+  assert.equal(known.outcome.type, 'allow');
+  assert.equal(known.outcome.args.byteBudget, Math.ceil(3000 * 1.25) + 512);
+  const unknown = fixture('read_file', 'mcp/unreal-agent', {}, {batchReservation: new BatchReservation(40000)});
+  unknown.tool.parametersJsonSchema.properties.byteBudget = {type:'integer', minimum:1024, maximum:65536, $comment:'direct-json-text-utf8'};
+  await unknown.invoke();
+  assert.ok(unknown.outcome.args.byteBudget > Math.ceil(3000 * 1.25) + 512, JSON.stringify(unknown.outcome.args));
 });

@@ -587,3 +587,39 @@ test('seeded engine identity requires the execution project, a verified identity
   restored.batch=1; restored.observations=[{id:'w',fingerprint:'f',batch:1,runtime:false,engine:'unreal',historical:true,items:[]}];
   assert.equal(version(pair('x','unreal_symbol_lookup',lookup()),restored),undefined);
 });
+
+// The 2026-10-24 audit read Actor.cpp through engine:// four times; every result
+// carried a strict Build.version identity (5.7.4), yet the contract sections
+// stayed "version unverified" because only engine_local lookups counted.
+const engineRead = (identity = {}, value = {}) => ({ ok: true, path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp",
+  resolvedRootType: "installed_engine", absolutePath: "C:/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp",
+  activeProject: unreal.projectIdentity, evidenceSource: "installed_engine_source", readOnly: true,
+  engineIdentity: { status: "observed", version: "5.7.4", source: "build_version_file", sha256: "f".repeat(64), hashScope: "file",
+    engineAssociation: "5.7", engineRootSource: "registered.launcher-manifest", ...identity },
+  startLine: 3387, endLine: 3388, lineNumbers: true, content: "3387\tfloat AActor::TakeDamage(float DamageAmount)\n3388\t{", ...value });
+
+test("an engine:// read's strict Build.version identity establishes the installed engine version", () => {
+  const f = fixture();
+  f.ingest("read_symbol", engineRead(), { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", symbol: "AActor::TakeDamage" });
+  const applicability = f.snapshot().applicability;
+  assert.equal(applicability.engineVersion, "5.7.4");
+  assert.equal(applicability.engineVersionSource, "installed_engine_source");
+});
+
+test("engine reads without a strict identity, a failed read, or a project read add no engine version", () => {
+  for (const [identity, value] of [[{ source: "folder_name_inferred" }, {}], [{ status: "unknown" }, {}], [{ sha256: "short" }, {}],
+    [{}, { ok: false, errorCode: "NOT_FOUND" }], [{}, { evidenceSource: undefined }],
+    [{}, { absolutePath: "C:/Elsewhere/Actor.cpp" }]]) {
+    const f = fixture();
+    f.ingest("read_file_range", engineRead(identity, value));
+    assert.equal(f.snapshot().applicability.engineVersion, undefined, JSON.stringify([identity, value]));
+  }
+});
+
+test("a search_files result over an engine directory also carries the identity", () => {
+  const f = fixture();
+  f.ingest("search_files", { ok: true, path: "engine://Engine/Source/Runtime/Engine", absolutePath: "C:/UE_5.7/Engine/Source/Runtime/Engine",
+    activeProject: unreal.projectIdentity, evidenceSource: "installed_engine_source", results: [],
+    engineIdentity: engineRead().engineIdentity }, { query: "AActor::Die", path: "engine://Engine/Source/Runtime/Engine" });
+  assert.equal(f.snapshot().applicability.engineVersion, "5.7.4");
+});

@@ -795,7 +795,7 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
                 type_prefix = re.sub(r"\b(?:public|protected|private)\s*:", " ", declaration_prefix).strip()
                 # A bounded field declaration, not an initializer reference,
                 # nested member, friend, function call or arbitrary macro.
-                field_type = r"(?:(?:static|mutable|const|volatile|constexpr)\s+)*[A-Za-z_]\w*(?:::\w+)*(?:\s*<[^;{}()=]+>)?(?:\s*[*&])*"
+                field_type = r"(?:(?:static|mutable|const|volatile|constexpr|[A-Z][A-Z0-9_]*_API)\s+)*[A-Za-z_]\w*(?:::\w+)*(?:\s*<[^;{}()=]+>)?(?:\s*[*&])*"
                 field_tail = r"\s*(?:\[[^\]{};]*\]\s*)*(?::\s*\d+\s*|=\s*(?:\{[^{};]*\}|[^;{}]*)\s*|\{[^{};]*\}\s*)?;"
                 non_field = re.search(r"\b(?:using|typedef|class|struct|enum|union|friend|return)\b", type_prefix)
                 if not non_field and re.fullmatch(field_type, type_prefix) and re.match(field_tail, tail):
@@ -839,7 +839,7 @@ def _bounded_declaration(text: str, symbol: str, owner: str) -> dict[str, Any] |
             **({"declarationEndLine": end_line, "signatureComplete": len(excerpt) <= 1800} if terminator is not None
                else {"signatureComplete": False}),
             "annotationVerification": "bounded_lexical_context; absence_and_expansion_unverified",
-            "observedOwner": owner or symbol,
+            "observedOwner": owner or symbol, "sameOwnerDeclarationCount": len(positions),
             "requestedOwner": owner or symbol, "declarationKind": kinds[pos],
             "lexicalAccess": access if owner else "not_applicable",
             "parentCandidates": bases, "inheritanceVerification": "parent_declarations_not_searched",
@@ -955,6 +955,10 @@ def _public_header_index(root: Path, identity: str, host_platform: str | None, g
 
 def _type_candidates(index: dict[str, list[Path]], type_name: str) -> list[Path]:
     exact = {p for name in _header_names(type_name) for p in index.get(Path(name).stem.lower(), [])}
+    # Navigation hints only: every candidate must still contain the requested
+    # type definition. These public value types share InputCoreTypes.h.
+    if type_name in {"FKey", "EKeys"}:
+        exact.update(index.get("inputcoretypes", []))
     if exact:
         return sorted(exact, key=str)
     stem = _unqualified(type_name)

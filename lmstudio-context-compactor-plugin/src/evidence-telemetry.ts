@@ -21,9 +21,11 @@ export function canonicalTelemetryValue(value: unknown, semantic = false): unkno
 }
 
 /** A read's identity for repeat detection: name and arguments, without the
- * fields the harness itself sets or that do not change what is read. */
+ * fields the harness itself sets or that do not change what is read. The
+ * budget broker rewrites byteBudget per batch; it bounds the response, not
+ * which source range is read. */
 export function repeatRequestKey(name: string, args: Record<string, unknown> = {}): string {
-  const { repeatReceipt: _receipt, ...same } = args || {};
+  const { repeatReceipt: _receipt, byteBudget: _budget, ...same } = args || {};
   return telemetryFingerprint({ name, arguments: same });
 }
 

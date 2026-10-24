@@ -102,7 +102,8 @@ function bundleMutationUsage(bundle) {
   let changedLines = 0;
   for (const patch of bundle?.patches || []) {
     for (const edit of patch.edits || [patch]) {
-      bytes += Buffer.byteLength(edit.oldText, "utf8");
+      // A line-range patch carries no oldText; its proven range is checked after the read.
+      bytes += Buffer.byteLength(edit.oldText ?? "", "utf8");
       bytes += Buffer.byteLength(edit.newText, "utf8");
       changedLines += textLineCount(edit.newText);
     }

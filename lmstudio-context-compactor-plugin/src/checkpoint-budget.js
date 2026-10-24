@@ -31,7 +31,7 @@ function mandatoryContinuity(memory) {
         ...(file.changeEvidence ? { changeEvidence: changeMetadata(file.changeEvidence) } : {}) })),
       recentToolOutcomes: [], gitObservations: [], historicalEvidence: [], recentBuildOrTestState: [],
     },
-    archiveDiscovery: "Use evidence_first_read_context with action=catalog to find prior observations by path; then read exact evidenceId and version. Catalog entries are historical, not current source observations. Conversation text removed by compaction is archived under path conversation://user and conversation://assistant.",
+    archiveDiscovery: "Use evidence_first_read_context with action=catalog to find prior observations by path; then read exact evidenceId and version. Catalog entries are historical, not current source observations. Conversation text that compaction removed from earlier rounds of this same execution (or earlier turns of this conversation) is archived under path conversation://user and conversation://assistant; it is this run's own earlier text, not a previous session.",
   };
 }
 

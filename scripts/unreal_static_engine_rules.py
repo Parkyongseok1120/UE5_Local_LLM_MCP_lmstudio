@@ -36,7 +36,7 @@ from unreal_static_model import (
 from unreal_static_registry import _append_validator_internal_error
 from unreal_static_scan import (
     build_source_include_index,
-    iter_class_method_blocks,
+    iter_function_blocks,
     iter_source_files,
     line_number,
     read_text,
@@ -216,11 +216,14 @@ def validate_engine_member_access(path: Path, text: str, root: Path, project: Pr
                                      ["the receiver type is inferred from a local declaration or a class member"])))
 
     other_texts = [value for key, value in project.texts.items() if key != path]
-    for class_name, method, start, body in iter_class_method_blocks(masked):
+    for signature, start, body in iter_function_blocks(masked):
         body_start = masked.find(body, start)
         if body_start < 0:
             continue
-        chain = project.engine_chain(class_name)
+        qualified = re.search(r"([A-Za-z_]\w*)::(~?[A-Za-z_]\w*)\s*\(", signature)
+        class_name, method = qualified.groups() if qualified else ("", "")
+        chain = project.engine_chain(class_name) if class_name else None
+        parameters = _declared_receivers(signature, len(signature))
         fields: dict[str, dict[str, str]] = {}
         class_members = project.project_members(chain) if chain else {}
         for name, members in class_members.items():
@@ -229,7 +232,8 @@ def validate_engine_member_access(path: Path, text: str, root: Path, project: Pr
                     fields[name] = _receiver(member.value_type)
         for access in re.finditer(r"\b([A-Za-z_]\w*)\s*(->|\.)\s*([A-Za-z_]\w*)", body):
             variable, operator, member = access.groups()
-            receiver = _declared_receivers(body, access.start()).get(variable) or fields.get(variable) or {}
+            receiver = (_declared_receivers(body, access.start()).get(variable) or parameters.get(variable)
+                        or fields.get(variable) or {})
             owner = receiver.get(operator)
             if not owner or member in _GENERATED_MEMBERS:
                 continue
@@ -240,7 +244,6 @@ def validate_engine_member_access(path: Path, text: str, root: Path, project: Pr
                 report(body_start + access.start(3), owner, member, lookup, f"{variable}{operator}{member}")
         if not chain:
             continue
-        signature = masked[start:body_start]
         for assignment in re.finditer(r"(?:^|[;{}])\s*([A-Za-z_]\w*)\s*(?:=(?!=)|\+=|-=|\|=)", body, re.M):
             name = assignment.group(1)
             if name in _CPP_KEYWORDS or name.isupper() or name in class_members:

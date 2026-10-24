@@ -17,7 +17,7 @@ test('explicit API and macro tasks include an engine pack before optional common
     const cs=autoGuidanceCandidates('debugging',undefined,{engine,source:'config'},emptyReferenceSnapshot());
     assert.ok(cs[0].ids.includes(engine === 'unreal' ? 'unreal/api' : 'unity/wiring'),cs[0].ids.join(','));
     assert.match(cs[0].instruction,engine === 'unreal' ? /UFUNCTION/ : /SerializeField/);
-    assert.ok(cs.length<=4); cs.forEach(c=>assert.ok(c.ids.length<=6));
+    assert.ok(cs.length<=7); cs.forEach(c=>assert.ok(c.ids.length<=6));
     assert.deepEqual(cs.at(-1).ids,['core/proof']);
   }
   assert.equal(intent('UFUNCTION이 뭔지 설명해').primary,'core');
@@ -157,7 +157,7 @@ test("auto mode annotates same-major unvalidated engines and omits other majors 
   const first = (version, mode = "lifecycle") => autoGuidanceCandidates(mode, undefined, scope, snapshot(version))[0];
   const annotated = first("5.3.0");
   assert.ok(annotated.ids.includes("unreal/lifetime"));
-  assert.match(annotated.instruction, /\[unvalidated for unreal 5\.3\.0; validated on 5\.8\]/);
+  assert.match(annotated.instruction, /\[unvalidated for unreal 5\.3\.0; validated on 5\.7, 5\.8\]/);
   assert.ok(annotated.omissionReasons.includes("contract_sections_engine_version_unvalidated_annotated"));
   for (const version of ["4.27.2", undefined]) {
     const omitted = first(version);
@@ -221,4 +221,35 @@ test("reserved engine contract sections get a data-free candidate before falling
   assert.ok(dataFree < candidates.findIndex(c => !c.ids.includes("unreal-networking/engine-defaults")));
   assert.deepEqual(candidates.at(-1).ids, ["core/proof"]);
   assert.ok(candidates.length <= 5);
+});
+
+// The 2026-10-24 audit ran with only four sections under the 2,048-token
+// default: the claim policies (unreal/verification) never reached the model,
+// and the contract facts were blocked by an unverified engine version.
+const AUDIT_REQUEST = '캐릭터 쪽과 네트워크 RPC 계약 쪽과 SSOT, SOLID, 계약, 책임, 수명관리, 또는 UE API 매크로가 잘못된 것들을 찾아서 보고해줘.';
+
+test('an audit request reserves the engine claim policies and, once the version is known, the contract facts', () => {
+  const selected = intent(AUDIT_REQUEST);
+  assert.deepEqual([selected.primary, selected.secondary], ['multiplayer', 'design']);
+  const unknown = autoGuidanceCandidates(selected.primary, selected.secondary, scope, emptyReferenceSnapshot());
+  assert.ok(unknown[0].ids.includes('unreal/verification'), unknown[0].ids.join(','));
+  assert.ok(unknown[0].ids.includes('unreal/responsibility'), 'the design supplement keeps its own section');
+  const known = emptyReferenceSnapshot();
+  Object.assign(known.applicability, { engineVersion: '5.7.4', engineVersionSource: 'installed_engine_source' });
+  const cs = autoGuidanceCandidates(selected.primary, selected.secondary, scope, known);
+  assert.ok(cs[0].ids.includes('unreal-networking/engine-defaults') && cs[0].ids.includes('unreal/verification'), cs[0].ids.join(','));
+  assert.match(cs[0].instruction, /ue\.net\.client-rpc-callspace/);
+  // 5.7 is a validated contract version, so the facts arrive without an unvalidated label.
+  assert.doesNotMatch(cs[0].instruction, /unvalidated for unreal 5\.7\.4/);
+  // Under a tight allowance the contract facts and claim policies outlast the
+  // engine pack and supplement before selection falls back to the top pack.
+  const reduced = cs.find(c => !c.ids.includes('unreal-networking/authority'));
+  assert.deepEqual(reduced.ids, ['core/proof', 'multiplayer/authority', 'unreal-networking/engine-defaults', 'unreal/verification']);
+  assert.ok(cs.some(c => c.ids.join(',') === 'core/proof,multiplayer/authority,unreal/verification'));
+  assert.ok(cs.length <= 7);
+});
+
+test('the default guidance allowance fits the audit selection', () => {
+  const { GUIDANCE_DEFAULTS } = require('../dist/config-defaults');
+  assert.ok(GUIDANCE_DEFAULTS.maxTokens >= 6144);
 });

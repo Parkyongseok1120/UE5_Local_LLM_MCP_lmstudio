@@ -33,7 +33,7 @@
 
 활성 참고의 공통 기준에는 적용 버전의 API 선언, 소유자·종료·늦은 결과의 수명, 실제 수정 반환과 변경 내용의 대조가 포함됩니다. 참고를 명확히 제외한 요청은 Auto에서도 생략합니다. 코드 블록·인용·경로는 주제 선택 근거로 사용하지 않습니다.
 
-`Design reference token allowance`는 기본 **2048**이며, 참고 자료로 증가한 실제 입력 토큰의 상한입니다. 0이면 제공하지 않습니다. 기존 출력 예약과 작업 창·도구 결과의 공유 예산도 함께 지킵니다. 문서를 위한 추가 압축·출력 한도 축소·정적 검사 의무·도구 실행 차단은 없습니다. 예산이 부족하면 엔진/주제 문서부터 생략하고 core도 맞지 않으면 원래 입력을 사용합니다.
+`Design reference token allowance`는 기본 **6144**이며, 참고 자료로 증가한 실제 입력 토큰의 상한입니다. 감사 요청의 기본 묶음(공통 근거 규칙·주제·엔진 계약·판정 정책)이 약 5k 토큰이라 2048에서는 판정 정책이 빠졌습니다. 0이면 제공하지 않습니다. 기존 출력 예약과 작업 창·도구 결과의 공유 예산도 함께 지킵니다. 문서를 위한 추가 압축·출력 한도 축소·정적 검사 의무·도구 실행 차단은 없습니다. 예산이 부족하면 엔진/주제 문서부터 생략하고 core도 맞지 않으면 원래 입력을 사용합니다.
 
 자료는 각 입력에 한 번 합성하고 대화 이력·영속 메모리에 저장하지 않습니다. Observe only와 강제 최종 보고에서는 생략합니다. `Show debug info`의 `design_guidance_input`에 선택/생략 문서와 실제 증가 토큰이 기록됩니다.
 
@@ -63,6 +63,8 @@ Unreal Agent의 성공한 `write_file`/`replace_in_file`/`apply_edit_bundle`은 
 ## 재조회 가능한 working context (실험적)
 
 새 설치의 `Working context` 기본값은 `Hybrid`입니다. `Legacy`는 기존 동작을 유지하는 명시적 호환 선택이고, `Deterministic archive/window`는 semantic handoff 없이 archive/window만 사용합니다. Hybrid와 Deterministic는 완료된 read-only 도구 결과를 현재 대화·fork·workspace·repository 범위의 로컬 archive에 먼저 보관하고 hash를 다시 검증한 뒤, 큰 결과만 bounded projection으로 바꿉니다. 직접 JSON, MCP text block, `structuredContent`처럼 SDK가 반환할 수 있는 envelope은 공통 decoder로 의미 payload를 얻되, archive에는 원래 provider envelope을 보관합니다. 아직 완료된 모델 입력에 제공하지 않은 정상 관찰은 크기만으로 미리 축소하지 않습니다. 최초 입력은 원문으로 측정하고, 전체 입력 예산이 맞지 않을 때 기존 bounded projection과 압축 경로를 적용해 다시 측정합니다. projection은 원래 call ID, tool 이름, status/error, source identity/hash/version, 실제 반환 범위, 모델에 제공한 발췌 범위, 생략 범위와 `evidenceId`/version을 유지합니다. 본문 발췌·생략 범위는 입력 노출 기록에도 남기며, 전체 raw를 제공했다고 표시하지 않습니다. `evidence_first_read_context`는 정확한 ID와 version, 제한된 문자 범위만 받고 과거 반환 자료를 다시 읽습니다. 응답 전체는 metadata를 포함해 byte budget 안에 맞추며 archive의 `archiveHasMore`/`archiveReachedEnd`와 원래 Git 결과의 `sourcePageHasMore`/`sourceResultComplete`를 별도로 표시합니다. archive EOF는 Git source 목록 완료를 뜻하지 않습니다. 파일 경로를 받지 않으며 현재 파일의 수정 권한이나 fresh-read receipt를 만들지 않습니다.
+
+읽기 원장(read ledger)은 파일별로 `경로 + sourceVersion(sha)`마다 이미 모델에 전달한 줄·바이트 범위, 전달 라운드, 그 버전 기준으로 기록된 감사 확인(검증된 claim의 `claimType`)을 working window와 함께 저장합니다. projection·압축 뒤에도 "전달됨", "이번 입력에 보임", "검증됨"을 따로 알려 줍니다. 이미 전달한 같은 sha 범위를 다시 읽으면 본문 대신 `UNCHANGED` 사실과 archive 위치(`evidenceId`/`version`/`readHandle`, 선언 개요)를 넣습니다. 이미 전달한 범위보다 좁은 읽기는 본문을 그대로 주고, sha가 다르면 항상 전체 본문을 줍니다. 사용자에게 보이는 대화 기록에는 원래 본문이 남습니다. `version_mismatch`는 그 version이 어느 record·파일의 것인지와 원본 sha 변경 여부를 함께 알려 주고, 존재하지 않는 `readHandle`에는 그 경로의 유효한 handle을 돌려줍니다. 새 경로·버전·범위 없이 같은 버전만 다시 읽는 라운드가 `No-new-evidence rounds`(기본 3)만큼 이어지면 `report_now` 사실을 넣고, 두 번째에는 도구 없이 최종 보고를 받습니다(`Repeated tool rounds`가 Off면 하지 않음).
 
 Unreal 소스 읽기의 공개 스키마에 `maxBytes`가 있으면, 값이 생략된 요청은 기본 4 KiB 이하의 창으로 공유 배치 예산을 예약합니다. 명시한 큰 창은 공개 한계와 남은 예산 안에서 허용합니다. 예약은 반환 envelope을 위한 추정치이며 실제 반환량도 반영합니다. 과도한 반환 뒤에는 같은 배치의 다음 호출을 막고, 다음 모델 입력은 기존 정확한 토큰 측정으로 확인합니다. 승인된 모든 읽기의 실행이나 전체 파일 수집을 보장하는 설정은 아닙니다.
 

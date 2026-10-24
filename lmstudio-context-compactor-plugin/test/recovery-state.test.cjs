@@ -130,6 +130,17 @@ for (const answer of ["A: 검증 완료.\nB: 미검증.", "B is not verified; A 
     assert.ok(verificationScopeNotice(turnWithValidation(structureOnly), answer));
   });
 
+// The 2026-10-24 audit called a structure-only pass "validation passed".
+for (const answer of ["Good, the validation passed.", "The packet passed validation.", "P1 (검증 통과)", "근거 패킷이 검증을 통과함"])
+  test(`passed-validation wording after a structure-only check gets the scope footer: ${answer}`, () => {
+    assert.match(verificationScopeNotice(turnWithValidation(structureOnly), answer), /형식과 기록 일관성만 확인/u);
+  });
+
+for (const answer of ["Validation has not passed yet.", "검증을 통과하지 못했습니다.", "형식 검증만 통과했습니다."])
+  test(`negated or structure-qualified passed wording needs no notice: ${answer}`, () => {
+    assert.equal(verificationScopeNotice(turnWithValidation(structureOnly), answer), null);
+  });
+
 for (const answer of ["검증 완료가 아닙니다.", "사실 확인 완료는 아님.", "The claim is not yet verified.",
   "형식 검증만 완료했습니다.", "검증을 마치지 않았습니다."])
   test(`locally negated or structure-qualified wording needs no notice: ${answer}`, () => {
@@ -194,4 +205,32 @@ test("a Unity search page cut short or stopped early is named too; a complete Un
   const complete = exchange("u3", "search_files", { path: "Assets", query: "isDead", content: true },
     { ...unityPartial, total: 1, truncated: false, nextCursor: null, incomplete: false }, auditTurn());
   assert.equal(partialSearchScopeNotice(complete, "존재하지 않는다."), null);
+});
+
+// When reads only re-deliver versions the ledger holds, the model is told to
+// report from the delivered evidence; restoring an archive page of delivered
+// lines is not counted as new coverage.
+test("report_now names the non-progress counts and asks for the report, not more re-reads", () => {
+  const { reportNowFact } = require("../dist/resume-facts");
+  const fact = reportNowFact(3, { redundantRereads: 4, archiveRepages: 2 });
+  assert.match(fact, /^Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
+  assert.match(fact, /4 same-sha re-read\(s\), 2 archive re-page\(s\)/);
+  assert.match(fact, /Write the final report from that evidence now/);
+  assert.match(fact, /Read only a range that was never delivered/);
+});
+
+test("an archive re-page of delivered lines is not novel to the stagnation detector", () => {
+  const { observeRecoveryProgress } = require("../dist/evidence-manager");
+  const page = { ok: true, kind: "historical_evidence_range", evidenceId: `ev_${"a".repeat(64)}`, version: "b".repeat(64),
+    returnedRange: [0, 400], nextOffset: 400, archiveHasMore: true, rangeUnit: "utf16_code_units", representation: "sanitized_body",
+    bodyField: "content", content: "x".repeat(400) };
+  const messages = exchange("p1", "evidence_first_read_context", { readHandle: "h_" + "c".repeat(24) }, page).getMessagesArray();
+  const fresh = observeRecoveryProgress(messages, new Set(), new Map());
+  assert.equal(fresh.newArchiveUnits, 1);
+  const repaged = observeRecoveryProgress(messages, new Set(), new Map(), undefined, [], () => true);
+  assert.equal(repaged.newArchiveUnits, 0);
+  assert.equal(repaged.archiveRepageCount, 1);
+  const detector = new ToolRoundStagnationDetector();
+  for (let i = 0; i < 3; i++) detector.observe(messages, repaged);
+  assert.equal(detector.observe(messages, repaged).cycleDetected, true, "re-pages repeat without novelty");
 });

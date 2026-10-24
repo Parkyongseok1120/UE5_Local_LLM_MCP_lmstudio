@@ -13,8 +13,9 @@ test('stdio client receives a scoped locator and reaches a late symbol without f
   const project = path.join(root, 'Game.uproject');
   fs.writeFileSync(project, JSON.stringify({ FileVersion: 3, EngineAssociation: '5.8' }));
   fs.mkdirSync(path.join(root, 'Source'));
+  // Larger than the 24 KB whole-source read, so it is located first.
   fs.writeFileSync(path.join(root, 'Source', 'Combat.cpp'),
-    [...Array.from({ length: 350 }, (_, i) => `// unrelated line ${i + 1}`), 'float DamageCooldown() { return 0.75f; }'].join('\n'));
+    [...Array.from({ length: 350 }, (_, i) => `// unrelated line ${i + 1} ${'-'.repeat(60)}`), 'float DamageCooldown() { return 0.75f; }'].join('\n'));
   const client = new Client({ name: 'locate-first-regression', version: '1' });
   try {
     await client.connect(new StdioClientTransport({ command: process.execPath,

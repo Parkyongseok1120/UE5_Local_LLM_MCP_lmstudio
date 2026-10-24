@@ -94,7 +94,7 @@ _RUN_READ_LIMIT_BYTES = 24 * 1_048_576
 _RUN_FILE_LIMIT = 96
 _RUN_SECONDS = 20.0
 _CHAIN_MAX_TYPES = 32
-_TYPE_CACHE: OrderedDict[tuple[str, str], "EngineType"] = OrderedDict()
+_TYPE_CACHE: OrderedDict[tuple[str, str, str], "EngineType"] = OrderedDict()
 _TYPE_CACHE_LIMIT = 512
 _SPECIFIERS = re.compile(r"\b(?:virtual|static|inline|FORCEINLINE|FORCENOINLINE|explicit|constexpr|UE_NODISCARD|"
                          r"mutable|extern|[A-Z0-9_]+_API)\b")
@@ -162,9 +162,9 @@ def normalize_parameter_type(param: str) -> str:
     named = re.match(r"^(.*?[\w>*&\s])\s*\b([A-Za-z_]\w*)\s*(\[[^\]]*\])?$", value)
     if named and re.search(r"[\w>*&]", named.group(1)) and named.group(1).strip() not in {"", "const", "unsigned", "signed"}:
         value = named.group(1)
-    const = bool(re.search(r"\bconst\b", value))
-    core = re.sub(r"\bconst\b", "", value)
-    core = re.sub(r"\s+", "", core)
+    core = re.sub(r"\s+", "", re.sub(r"\bconst\b", "", value))
+    # Top-level const on a by-value parameter is not part of the signature.
+    const = bool(re.search(r"\bconst\b", value)) and bool(re.search(r"[*&]", core))
     return ("const " if const else "") + core
 
 
@@ -384,7 +384,7 @@ class EngineHeaders:
 
     def type_info(self, type_name: str, hints: list[Path] | tuple[Path, ...] = ()) -> EngineType | None | str:
         """The engine definition of ``type_name``; None when not located; "limit" when budget ran out."""
-        key = (self.digest, type_name)
+        key = (str(self.root), self.digest, type_name)
         if key in _TYPE_CACHE:
             _TYPE_CACHE.move_to_end(key)
             return _TYPE_CACHE[key]

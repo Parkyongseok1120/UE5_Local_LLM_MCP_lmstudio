@@ -188,6 +188,21 @@ def test_portable_validator_accepts_proposed_codegen_with_requirement_evidence()
     }
     result = validator.validate_packet(packet)
     assert result["ok"] is True
+    # Valid, but the plan names no framework declaration it relies on.
+    assert any("cites no framework_source" in warning for warning in result["warnings"])
+    claim["evidence"].append({"kind": "framework_source", "location": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125",
+                              "observation": "AActor::BeginPlay is a virtual the adapter overrides."})
+    cited = validator.validate_packet(packet)
+    assert cited["ok"] is True
+    assert not any("cites no framework_source" in warning for warning in cited["warnings"])
+
+
+def test_validation_result_reads_as_structure_only_and_flags_framework_dependent_p1() -> None:
+    validator = _load_validator()
+    result = validator.validate_packet({"mode": "audit", "claims": [_valid_claim()]})
+    assert result["ok"] is True
+    assert "validation passed" in result["reportAs"] and "No claim was checked" in result["reportAs"]
+    assert any("cites no framework_source or official_docs" in warning for warning in result["warnings"])
 
 
 def test_portable_validator_rejects_out_of_order_behavior_path() -> None:

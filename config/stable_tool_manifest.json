@@ -107,7 +107,7 @@
       ]
     },
     "byteBudgetDefaults": {
-      "mcp/unreal-agent": 8192
+      "mcp/unreal-agent": 24576
     },
     "toolDefaults": {
       "git_changed_files": 4096

@@ -46,8 +46,22 @@ test("two default native reads share one batch at 38,912 context with 14K input"
   const second = reserveReadResult(batch, "2", tool, {});
   assert.equal(first.allowed, true);
   assert.equal(second.allowed, true);
-  assert.equal(first.arguments.byteBudget, 8192);
-  assert.equal(second.arguments.byteBudget, 8192);
+  // The adaptive default takes half of what remains, never below 8 KiB.
+  assert.ok(first.arguments.byteBudget >= 8192 && first.arguments.byteBudget < 24576);
+  assert.ok(second.arguments.byteBudget >= 8192);
+});
+
+// 2026-10-20 run: 8 KiB defaults split 420-line files into four reads at an
+// 84,224 context that had room for whole small files.
+test("a wide context gives omitted reads the full default and an explicit budget is unchanged", () => {
+  const broker = new BudgetBroker({ ...DEFAULTS, workingInputTargetTokens: 40000, workingInputTriggerTokens: 56000 });
+  const batch = broker.beginBatch(measured(84224, 18000), true);
+  const tool = { name: "read_file_range", pluginIdentifier: "mcp/unreal-agent", parametersJsonSchema: { properties: {
+    byteBudget: { type: "integer", minimum: 2048, maximum: 65536, $comment: "direct-json-text-utf8" } } } };
+  const reads = [1, 2, 3].map(id => reserveReadResult(batch, String(id), tool, {}));
+  assert.deepEqual(reads.map(read => [read.allowed, read.arguments.byteBudget]), [[true, 24576], [true, 24576], [true, 24576]]);
+  const explicit = reserveReadResult(batch, "4", tool, { byteBudget: 4096 });
+  assert.equal(explicit.arguments.byteBudget, 4096);
 });
 
 test("returned bytes are converted to estimated tokens and still detect overrun", () => {
