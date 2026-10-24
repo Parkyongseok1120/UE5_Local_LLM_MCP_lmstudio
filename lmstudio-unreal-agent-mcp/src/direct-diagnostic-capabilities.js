@@ -8,6 +8,7 @@ const { resolveBuildPlan, resolveProjectSelection } = require("./unreal-detect.j
 const { runStaticValidation } = require("./direct-static-validation.js");
 const { runUnrealBuildFromPlan, killProcessTree } = require("./build-executor.js");
 const { runAutomationTests } = require("./automation-executor.js");
+const { automationTestSuggestion, runBuildStaticPrecheck } = require("./direct-build-precheck.js");
 const {
   VERBOSE_STREAM_CHARS,
   boundLongRunningPayload,
@@ -27,6 +28,7 @@ const {
 
 function createDiagnosticCapabilities(context) {
   const {
+    buildChanges,
     configPath,
     env,
     getActive,
@@ -40,7 +42,23 @@ function createDiagnosticCapabilities(context) {
   const resolveBuild = options.resolveBuildPlan || resolveBuildPlan;
   const spawnCommand = options.spawnCommand || cp.spawn;
   const terminateProcessTree = options.killProcessTree || killProcessTree;
+  const staticValidation = options.runStaticValidation || runStaticValidation;
+  const runBuild = options.runUnrealBuildFromPlan || runUnrealBuildFromPlan;
   const logFile = (suffix) => path.join(workspaceRoot, ".agent", "logs", `${nowStamp()}-${suffix}.log`);
+
+  // Static validation has no process log; complete findings go to a log so
+  // trimmed entries stay readable through read_unreal_logs.
+  async function persistFindings(payload, projectRoot, findings) {
+    const logPath = logFile(`${path.basename(projectRoot)}-static-validation`);
+    try {
+      await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.promises.writeFile(logPath, findings.map((item) => JSON.stringify(item)).join("\n"), "utf8");
+      payload.fullLogPath = logPath;
+    } catch (error) {
+      payload.logPersistenceError = String(error?.message || error);
+    }
+    return payload;
+  }
 
   async function resolvePlan(args) {
     const requestedProject = String(args.project || "").trim();
@@ -90,7 +108,7 @@ function createDiagnosticCapabilities(context) {
         retryMode: "different_arguments",
       });
     }
-    const result = await runStaticValidation(projectRoot, {
+    const result = await staticValidation(projectRoot, {
       env,
       signal: requestContext.signal,
       shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -101,6 +119,8 @@ function createDiagnosticCapabilities(context) {
     const allFindings = Array.isArray(result.findings) ? result.findings : [];
     const payload = boundLongRunningPayload(success({
       advisory: true,
+      // This call never blocks; build_unreal_project's own precheck skips UBT
+      // on definite errors in changed files unless force.
       blocksBuild: false,
       validationOk: result.ok === true,
       cancelled: result.cancelled === true,
@@ -117,19 +137,40 @@ function createDiagnosticCapabilities(context) {
       skipped: result.skipped === true,
       reason: result.reason || result.note || "",
     }));
-    if (payload.responseTrimmed?.findings) {
-      // Static validation has no process log; persist the complete findings
-      // so trimmed entries stay readable through read_unreal_logs.
-      const logPath = logFile(`${path.basename(projectRoot)}-static-validation`);
-      try {
-        await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
-        await fs.promises.writeFile(logPath, allFindings.map((item) => JSON.stringify(item)).join("\n"), "utf8");
-        payload.fullLogPath = logPath;
-      } catch (error) {
-        payload.logPersistenceError = String(error?.message || error);
-      }
+    return payload.responseTrimmed?.findings ? persistFindings(payload, projectRoot, allFindings) : payload;
+  }
+
+  // Seconds of static checks on the changed Source files before minutes of
+  // UBT. Definite errors skip the build unless force; anything else is advisory.
+  async function precheckBuild(args, build, requestContext) {
+    const projectRoot = path.dirname(path.resolve(build.projectPath));
+    const pending = buildChanges.pending(build.projectPath);
+    if (!envFlag(env, "BUILD_STATIC_PRECHECK", true)) {
+      return { pending, projectRoot, definite: [], findings: [],
+        staticPrecheck: { status: "disabled", reason: "BUILD_STATIC_PRECHECK=0" } };
     }
-    return payload;
+    const precheck = await runBuildStaticPrecheck({ projectRoot, pending, runValidation: staticValidation,
+      validationOptions: { env, signal: requestContext.signal, shutdownTimeoutMs: options.shutdownTimeoutMs,
+        terminate: terminateProcessTree } });
+    const forced = precheck.definite.length > 0 && args.force === true;
+    return { pending, projectRoot, ...precheck,
+      ...(forced ? { staticPrecheck: { ...precheck.staticPrecheck, forced: true } } : {}) };
+  }
+
+  async function skippedBuild(precheck, build) {
+    const { findings: shown, ...summary } = precheck.staticPrecheck;
+    const payload = boundLongRunningPayload({
+      ok: false,
+      errorCode: "BUILD_SKIPPED_STATIC_ERRORS",
+      buildSkipped: "static_errors",
+      message: `UBT not run: ${precheck.definite.length} definite static error(s) in changed Source files. Fix them, or pass force=true to build anyway.`,
+      staticPrecheck: summary,
+      findings: shown,
+      project: { projectPath: build.projectPath, target: build.target },
+      executionMode: runtimeOwner,
+      retry: { allowed: true, mode: "after_state_change" },
+    });
+    return payload.responseTrimmed?.findings ? persistFindings(payload, precheck.projectRoot, precheck.findings) : payload;
   }
 
   async function buildProject(args, requestContext = {}) {
@@ -142,8 +183,10 @@ function createDiagnosticCapabilities(context) {
         retryMode: "different_arguments",
       });
     }
+    const precheck = await precheckBuild(args, plan.build, requestContext);
+    if (precheck.definite.length && args.force !== true) return skippedBuild(precheck, plan.build);
     const logPath = logFile(`${plan.build.projectName}-build`);
-    const result = await runUnrealBuildFromPlan({
+    const result = await runBuild({
       workspaceRoot,
       build: plan.build,
       allowEngineFallback: args.allowEngineFallback === true,
@@ -155,7 +198,7 @@ function createDiagnosticCapabilities(context) {
       terminate: terminateProcessTree,
     });
     const command = [result.executable || plan.build.buildTool || "UnrealBuildTool", ...(result.args || [])].join(" ");
-    const payload = boundLongRunningPayload(buildDirectResponse({
+    const response = buildDirectResponse({
       result,
       build: plan.build,
       planResult: plan,
@@ -164,9 +207,16 @@ function createDiagnosticCapabilities(context) {
       logPath,
       verbose: args.verboseOutput === true,
       executionMode: runtimeOwner,
-    }));
+    });
+    // A failed build keeps a few static findings within the failure budget.
+    const { findings: staticFindings = [], ...precheckSummary } = precheck.staticPrecheck;
+    const payload = boundLongRunningPayload({ ...response, staticPrecheck: { ...precheckSummary,
+      findings: response.ok ? staticFindings : staticFindings.slice(0, 2) } });
     payload.executionMode = runtimeOwner;
-    return payload.ok ? success(payload) : { ...payload, ok: false, retry: { allowed: false, mode: "none" } };
+    if (!payload.ok) return { ...payload, ok: false, retry: { allowed: false, mode: "none" } };
+    buildChanges.settle(plan.build.projectPath, precheck.pending.sequence);
+    const related = automationTestSuggestion(precheck.projectRoot, precheck.pending.paths, String(args.project || "").trim());
+    return success(related ? { ...payload, ...related } : payload);
   }
 
   async function runAutomation(args, requestContext = {}) {

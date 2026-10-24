@@ -10,6 +10,7 @@ const {
   textLineCount,
 } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
+const { isLineRangePatch } = require("./safe-write");
 
 const MAX_BUNDLE_OPERATIONS = HARD_MUTATION_LIMITS.maxBundleOperations;
 const BUNDLE_FIELDS = new Set(["patches"]);
@@ -21,6 +22,9 @@ const PATCH_FIELDS = new Set([
   "expectedHash",
   "fileVersionReceipt",
   "edits",
+  "startLine",
+  "endLine",
+  "expectedRangeSha256",
 ]);
 
 function assertFields(item, allowed, label) {
@@ -49,7 +53,7 @@ function assertOptionalString(item, field, label) {
 }
 
 function assertPatchTypes(patch) {
-  if (patch.edits !== undefined) {
+  if (patch.edits !== undefined || isLineRangePatch(patch)) {
     const error = replaceFileArgumentError(patch);
     if (error) throw new Error(`patch: ${error}`);
     return;
@@ -97,7 +101,7 @@ function validateBundleLimits(bundle, values = {}) {
     );
   }
   for (const patch of patches) {
-    for (const { oldText, newText } of patch.edits || [patch]) {
+    for (const { oldText = "", newText } of patch.edits || [patch]) {
       if (oldText.length > mutationLimits.maxPatchOldTextChars
         || newText.length > mutationLimits.maxPatchNewTextChars
         || oldText.length + newText.length > mutationLimits.maxPatchChars

@@ -252,6 +252,8 @@ test("Git subprocess limits are configurable and clamped", t => {
 
 // 16,384 since edits[], search contextLines/include and read_symbol view: each
 // removes whole rounds or file reads, costing about 100 schema tokens per round.
+// 17,024 since the line-range patch form and build staticPrecheck: the first
+// replaces stale-oldText OCCURRENCE_MISMATCH rounds, the second failed builds.
 test("published catalog stays inside the per-round schema budget", () => {
-  assert.ok(JSON.stringify(toolDefinitions()).length <= 16_384);
+  assert.ok(JSON.stringify(toolDefinitions()).length <= 17_024);
 });

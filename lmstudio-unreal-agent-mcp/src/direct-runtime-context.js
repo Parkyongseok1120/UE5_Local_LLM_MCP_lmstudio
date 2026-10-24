@@ -18,6 +18,7 @@ const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
 const { resolveAgentStateRoot } = require("./runtime-state-root.js");
 const { normalizeRuntimeOwner } = require("./direct-transaction-store.js");
 const { FileSnapshotRegistry } = require("./file-snapshot-registry.js");
+const { BuildChangeLedger } = require("./direct-build-change-ledger.js");
 
 function createDirectRuntimeContext(options = {}) {
   const env = options.env || process.env;
@@ -34,6 +35,7 @@ function createDirectRuntimeContext(options = {}) {
     ttlMs: clamp(env.DIRECT_FILE_SNAPSHOT_TTL_MS, 30 * 60 * 1000, 1000, 24 * 60 * 60 * 1000),
     hostPlatform: options.hostPlatform || process.platform,
   });
+  const buildChanges = options.buildChanges || new BuildChangeLedger();
   const limits = {
     ...resolveMutationLimits(env),
     maxReadBytes: clamp(env.MAX_READ_BYTES, 64 * 1024, 4096, 2 * 1024 * 1024),
@@ -204,6 +206,7 @@ function createDirectRuntimeContext(options = {}) {
   }
 
   return {
+    buildChanges,
     configPath,
     dedupe,
     directResult,

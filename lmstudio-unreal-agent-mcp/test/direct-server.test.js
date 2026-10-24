@@ -305,7 +305,8 @@ test("mutation schemas expose focused per-round edit bounds", () => {
   // Several regions of one file are one call; the result's receipt chains on.
   assert.match(replace.description, /edits\[\]/u);
   assert.match(replace.description, /no read-back needed/u);
-  assert.equal(replace.inputSchema.oneOf.length, 2);
+  assert.equal(replace.inputSchema.oneOf.length, 3);
+  assert.deepStrictEqual(replace.inputSchema.oneOf[2], { required: ["startLine", "endLine", "expectedRangeSha256", "newText"] });
   assert.match(replace.description, /Requires ALLOW_WRITE=1/u);
 
   const patches = bundle.inputSchema.properties.patches;
@@ -539,7 +540,10 @@ test("static validation is advisory and build execution is independently permiss
   const staticTool = runtime.tools.find((tool) => tool.name === "static_validate_project");
   const buildTool = runtime.tools.find((tool) => tool.name === "build_unreal_project");
   assert.match(staticTool.description, /advisory/i);
-  assert.match(buildTool.description, /Immediately resolve and run UBT\/UHT/i);
+  assert.match(buildTool.description, /resolve and run UBT\/UHT/i);
+  assert.match(buildTool.description, /staticPrecheck/);
+  assert.match(staticTool.description, /build skips on definite errors unless force/);
+  assert.strictEqual(buildTool.inputSchema.properties.force.type, "boolean");
   for (const field of ["taskAuthorization", "planId", "validationProof", "requiredGate"] ) {
     assert.strictEqual(buildTool.inputSchema.properties[field], undefined);
   }

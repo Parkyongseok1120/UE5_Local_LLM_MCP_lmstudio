@@ -11,7 +11,7 @@ const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 const { isSourceLikeExt } = require("./write-guards.js");
-
+const { lineRangeSha256 } = require("./line-range-hash.js");
 const { lexicalDeclarationWindow, lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
 
@@ -240,7 +240,7 @@ function createReadCapabilities(context) {
       content: (numbered ? numberLines(lines.slice(start - 1, end), start) : lines.slice(start - 1, end)).join("\n"),
       ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
-      endLine: end,
+      endLine: end, rangeSha256: lineRangeSha256(lines, start, end),
       totalLines: lines.length,
       sha256: read.hash,
       // truncated: the requested range was not returned whole. A file that
@@ -322,7 +322,7 @@ function createReadCapabilities(context) {
       content: (numbered ? numberLines(allLines.slice(start - 1, returnedEnd), start) : allLines.slice(start - 1, returnedEnd)).join("\n"),
       ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
-      endLine: returnedEnd,
+      endLine: returnedEnd, rangeSha256: lineRangeSha256(allLines, start, returnedEnd),
       requestedEndLine: end,
       nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
       hasMore: returnedEnd < end,

@@ -10,6 +10,7 @@ const {
   LINE_NUMBER_PATCH_MESSAGE,
   isLineNumberPrefixedPatch,
 } = require("../../shared-tool-core/line-numbering.js");
+const { lineRangeSha256 } = require("./line-range-hash");
 
 function assertMutationActive(signal) {
   if (signal?.aborted) {
@@ -150,12 +151,74 @@ function calculateReplacements({ priorContent, edits, normalizeLineEndings = tru
   return { ok: true, updated, occurrences: edits.length, regions, priorContent: content, preHash: sha256Buffer(raw) };
 }
 
+// Lines startLine..endLine replaced as a whole when they still hash to
+// expectedRangeSha256 (see line-range-hash.js). Other lines keep their own
+// terminators; new internal breaks use the file's CRLF/LF style. Empty
+// newText deletes the lines. A mismatch returns the current range text.
+function calculateLineRangeReplacement({
+  priorContent,
+  startLine,
+  endLine,
+  expectedRangeSha256,
+  newText,
+  maxRangeTextChars = Infinity,
+}) {
+  const raw = Buffer.isBuffer(priorContent) ? priorContent : Buffer.from(String(priorContent ?? ""), "utf8");
+  const content = raw.toString("utf8");
+  const parts = content.split(/(\r?\n)/);
+  const lines = parts.filter((_, index) => index % 2 === 0);
+  const breaks = parts.filter((_, index) => index % 2 === 1);
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 1 || endLine < startLine
+    || endLine > lines.length) {
+    return { ok: false, errorCode: "RANGE_OUT_OF_BOUNDS", totalLines: lines.length,
+      error: `lines ${startLine}-${endLine} are outside the file's ${lines.length} lines` };
+  }
+  const before = lines.slice(startLine - 1, endLine).join("\n");
+  const rangeSha256 = lineRangeSha256(lines, startLine, endLine);
+  const currentRange = { startLine, endLine, rangeSha256, totalLines: lines.length,
+    text: before.slice(0, maxRangeTextChars), ...(before.length > maxRangeTextChars ? { textTruncated: true } : {}) };
+  if (rangeSha256 !== String(expectedRangeSha256 || "").toLowerCase()) {
+    return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange,
+      error: `lines ${startLine}-${endLine} no longer hash to expectedRangeSha256; currentRange holds their text now` };
+  }
+  if (before.length > maxRangeTextChars) {
+    return { ok: false, errorCode: "PATCH_TOO_LARGE", currentRange,
+      error: `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}` };
+  }
+  const eol = breaks.includes("\r\n") ? "\r\n" : "\n";
+  const replacement = String(newText).replace(/\r\n/g, "\n");
+  const head = parts.slice(0, (startLine - 1) * 2).join("");
+  const tail = parts.slice(endLine * 2 - 1).join("");
+  let updated;
+  if (replacement) updated = head + replacement.split("\n").join(eol) + tail;
+  // Deleting the last lines drops the break before them instead of after.
+  else updated = tail ? head + tail.slice(breaks[endLine - 1].length) : head.slice(0, head.length - (breaks[startLine - 2]?.length || 0));
+  return { ok: true, updated, occurrences: 1, priorContent: content, preHash: sha256Buffer(raw),
+    regions: [{ beforeStartLine: startLine, afterStartLine: startLine, before, after: replacement }] };
+}
+
+function isLineRangePatch(patch) {
+  return Boolean(patch) && ["startLine", "endLine", "expectedRangeSha256"].some((field) => patch[field] !== undefined);
+}
+
+// One of the three patch forms: edits[], a line range, or one oldText.
+function calculatePatch(priorContent, patch, { maxRangeTextChars } = {}) {
+  if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits });
+  if (isLineRangePatch(patch)) {
+    return calculateLineRangeReplacement({ priorContent, startLine: patch.startLine, endLine: patch.endLine,
+      expectedRangeSha256: patch.expectedRangeSha256, newText: patch.newText, maxRangeTextChars });
+  }
+  return calculateReplacement({ priorContent, oldText: patch.oldText, newText: patch.newText,
+    expectedOccurrences: patch.expectedOccurrences });
+}
+
 async function replaceWithCAS({
   targetPath,
   priorContent,
   oldText,
   newText,
   edits,
+  range,
   expectedOccurrences,
   readHash,
   normalizeLineEndings = true,
@@ -185,7 +248,9 @@ async function replaceWithCAS({
     }
   }
 
-  const replacement = edits
+  const replacement = range
+    ? calculateLineRangeReplacement({ ...range, priorContent: raw, newText })
+    : edits
     ? calculateReplacements({ priorContent: raw, edits, normalizeLineEndings })
     : calculateReplacement({
       priorContent: raw,
@@ -217,6 +282,9 @@ module.exports = {
   assertPreCommitHash,
   calculateReplacement,
   calculateReplacements,
+  calculateLineRangeReplacement,
+  calculatePatch,
+  isLineRangePatch,
   replaceWithCAS,
   createExclusive,
 };

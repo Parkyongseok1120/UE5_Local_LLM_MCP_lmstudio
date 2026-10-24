@@ -123,11 +123,18 @@ function focusedPatchArguments() {
 function multiPatchArguments() {
   const single = focusedPatchArguments();
   return { ...single, edits: { type: "array", minItems: 1, maxItems: 8,
-    items: schema({ oldText: single.oldText, newText: single.newText }, ["oldText", "newText"]) } };
+    items: schema({ oldText: single.oldText, newText: single.newText }, ["oldText", "newText"]) },
+  // Bounds and hex shape are checked at call time; the schema stays small.
+  startLine: { type: "integer" }, endLine: { type: "integer" }, expectedRangeSha256: { type: "string" } };
 }
 
+// oldText, edits[], or whole lines proven by a read's rangeSha256.
 function patchForms() {
-  return [{ required: ["oldText", "newText", "expectedOccurrences"] }, { required: ["edits"] }];
+  return [
+    { required: ["oldText", "newText", "expectedOccurrences"] },
+    { required: ["edits"] },
+    { required: ["startLine", "endLine", "expectedRangeSha256", "newText"] },
+  ];
 }
 
 function toolDefinitions() {
@@ -212,7 +219,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file_range",
-      description: "Read lines startLine..endLine; nextStartLine only if truncated. Hash/receipt prove version, not coverage.",
+      description: "Read lines startLine..endLine; nextStartLine only if truncated. Hash/receipt prove version, not coverage; rangeSha256 proves the lines.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -262,7 +269,7 @@ function toolDefinitions() {
     },
     {
       name: "replace_in_file",
-      description: `Atomic exact replacement or edits[]; ≤${L.maxPatchChars} chars/${L.maxPatchLines} new lines per region, ≤${L.maxBundleChangedLines} total lines. Requires ALLOW_WRITE=1 and version proof. Chain result receipt; no read-back needed.`,
+      description: `Atomic exact replacement, edits[], or startLine..endLine proven by a read's rangeSha256 (mismatch returns currentRange; empty newText deletes); ≤${L.maxPatchChars} chars/${L.maxPatchLines} new lines per region, ≤${L.maxBundleChangedLines} total lines. Requires ALLOW_WRITE=1 and version proof. Chain result receipt; no read-back needed.`,
       inputSchema: {
         ...schema({
           ...multiPatchArguments(),
@@ -274,7 +281,7 @@ function toolDefinitions() {
     },
     {
       name: "apply_edit_bundle",
-      description: `Atomic patches for ≤${L.maxBundleOperations} existing files, unique paths, ≤${L.maxBundleChangedLines} total lines. Per-file edits[] allowed. Requires ALLOW_WRITE=1; same bounds/proof as replace_in_file.`,
+      description: `Atomic patches for ≤${L.maxBundleOperations} existing files, unique paths, ≤${L.maxBundleChangedLines} total lines. Per-file edits[] or line range allowed. Requires ALLOW_WRITE=1; same bounds/proof as replace_in_file.`,
       inputSchema: schema({
         project: projectArgument(),
         patches: {
@@ -336,7 +343,7 @@ function toolDefinitions() {
     },
     {
       name: "static_validate_project",
-      description: "Advisory static compile-readiness checks; never authorize or block a build.",
+      description: "Advisory static compile-readiness checks; build skips on definite errors unless force.",
       inputSchema: schema({
         projectRoot: { type: "string" },
         project: projectArgument(),
@@ -346,11 +353,12 @@ function toolDefinitions() {
     },
     {
       name: "build_unreal_project",
-      description: "Immediately resolve and run UBT/UHT (omit target for the default; Editor = editor target). Returns summary, diagnostics, fullLogPath. Requires ALLOW_UNREAL_BUILD=1.",
+      description: "Resolve and run UBT/UHT (omit target for the default; Editor = editor target) after a staticPrecheck of Source changed since the last good build; definite errors skip UBT unless force. Returns summary, diagnostics, fullLogPath. Requires ALLOW_UNREAL_BUILD=1.",
       inputSchema: schema({
         hint: { type: "string" }, project: { type: "string" }, engineRoot: { type: "string" },
         target: { type: "string" }, platform: { type: "string" }, configuration: { type: "string" },
         timeoutMs: { type: "number" }, verboseOutput: { type: "boolean" }, allowEngineFallback: { type: "boolean" },
+        force: { type: "boolean" },
       }),
     },
     {
