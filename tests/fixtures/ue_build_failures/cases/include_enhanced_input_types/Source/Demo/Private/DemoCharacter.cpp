@@ -1,0 +1,10 @@
+#include "DemoCharacter.h"
+
+ADemoCharacter::ADemoCharacter()
+{
+}
+
+void ADemoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+}

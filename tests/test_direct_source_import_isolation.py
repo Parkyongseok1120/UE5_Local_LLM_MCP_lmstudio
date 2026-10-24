@@ -299,6 +299,9 @@ def test_direct_composition_owners_stay_bounded() -> None:
         "unreal_static_safety.py": 410,
         "unreal_static_registry.py": 330,
         "unreal_static_runner.py": 500,
+        "unreal_static_engine.py": 560,
+        "unreal_static_engine_rules.py": 500,
+        "unreal_static_visibility.py": 220,
     }
     counts = {
         name: len((SCRIPTS / name).read_text(encoding="utf-8").splitlines())

@@ -234,7 +234,38 @@ def validate_replicated_uproperty_without_doreplifetime(
             )
     return findings
 
+LIFETIME_PROPS_DEFINITION_RE = re.compile(
+    r"\bGetLifetimeReplicatedProps\s*\(\s*TArray\s*<\s*FLifetimeProperty\s*>\s*&\s*([A-Za-z_]\w*)\s*\)\s*const\s*(?:override\s*)?\{")
+
+
+def validate_doreplifetime_parameter_name(path: Path, text: str, root: Path) -> list[Finding]:
+    """DOREPLIFETIME* expands to ``OutLifetimeProps``; a renamed parameter leaves it undeclared (C2065)."""
+    if path.suffix.lower() not in CPP_SOURCE_SUFFIXES:
+        return []
+    findings: list[Finding] = []
+    masked = mask_comments_and_strings(text)
+    for match in LIFETIME_PROPS_DEFINITION_RE.finditer(masked):
+        if match.group(1) == "OutLifetimeProps":
+            continue
+        depth, end = 1, match.end()
+        while end < len(masked) and depth:
+            depth += (masked[end] == "{") - (masked[end] == "}")
+            end += 1
+        use = re.search(r"\bDOREPLIFETIME\w*\s*\(", masked[match.end():end])
+        if not use:
+            continue
+        findings.append(Finding(
+            "error", str(path.relative_to(root)).replace("\\", "/"), line_number(text, match.end() + use.start()),
+            "DOREPLIFETIME_PARAMETER_RENAMED",
+            f"DOREPLIFETIME expands to the name OutLifetimeProps, but this GetLifetimeReplicatedProps parameter is "
+            f"'{match.group(1)}'. Name the parameter OutLifetimeProps.",
+            metadata={"ruleId": "DOREPLIFETIME_PARAMETER_RENAMED", "analysisKind": "lexical", "confidence": "high"}))
+    return findings
+
+
 __all__ = [
+    'LIFETIME_PROPS_DEFINITION_RE',
+    'validate_doreplifetime_parameter_name',
     'collect_rpc_declarations',
     'validate_rpc_implementations',
     'validate_replication_setup',
