@@ -46,7 +46,7 @@
 재측정 명령:
 
 ```powershell
-python scripts/evaluate_ue_build_corpus.py --engine-root 'C:\Program Files\Epic Games\UE_5.7'
+python scripts/evaluate_ue_build_corpus.py --engine-root '<설치된 Unreal Engine 루트>'
 python scripts/analyze_lmstudio_run.py 1792829847868 --message-index 3 --compare 1792815622255 --compare-message-index 3
 ```
 

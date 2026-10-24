@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
-#include "Data/CharacterStats.h"
+#include "Types/CharacterStats.h"
 #include "DemoCharacter.generated.h"
 
 UCLASS()

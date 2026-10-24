@@ -358,7 +358,7 @@ test("independent processes never enter the archive storage critical section tog
     const marker = path.join(archive.directory, "test-critical-owner");
     const pause = new Int32Array(new SharedArrayBuffer(4));
     let completed = 0, refused = 0;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < (process.argv[4] === "blocked" ? 1 : 100); i++) {
       let entered = false;
       try {
         archive.withStorageLock(() => {
@@ -375,6 +375,7 @@ test("independent processes never enter the archive storage critical section tog
         });
       } catch (error) {
         if (entered) throw error;
+        if (process.argv[4] === "blocked" && error.message !== "archive_lock_unavailable") throw error;
         refused++;
       }
       Atomics.wait(pause, 0, 0, 1);
@@ -382,6 +383,16 @@ test("independent processes never enter the archive storage critical section tog
     process.stdout.write(JSON.stringify({ completed, refused }));
   `;
   const moduleFile = require.resolve("../src/evidence-archive.js");
+  // Prove contention while the parent holds the lock. Concurrent workers can
+  // all succeed through bounded retries, so refusal is not a scheduling invariant.
+  context.archive.withStorageLock(() => {
+    const blocked = spawnSync(process.execPath, ["-e", worker, moduleFile, f.root, JSON.stringify(scope), "blocked"],
+      { windowsHide: true, encoding: "utf8", timeout: 10000 });
+    assert.ifError(blocked.error);
+    assert.equal(blocked.status, 0, blocked.stderr);
+    assert.deepEqual(JSON.parse(blocked.stdout), { completed: 0, refused: 1 });
+    assert.equal(Number(fs.readFileSync(counter, "utf8")), 0);
+  });
   const run = () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["-e", worker, moduleFile, f.root, JSON.stringify(scope)],
       { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -400,7 +411,6 @@ test("independent processes never enter the archive storage critical section tog
   const outcomes = settled.map(outcome => outcome.value);
   const completed = outcomes.reduce((sum, outcome) => sum + outcome.completed, 0);
   assert.ok(completed > 0);
-  assert.ok(outcomes.some(outcome => outcome.refused > 0), "workers must actually contend");
   assert.equal(Number(fs.readFileSync(counter, "utf8")), completed);
   assert.equal(fs.existsSync(path.join(context.archive.directory, "test-critical-owner")), false);
 });

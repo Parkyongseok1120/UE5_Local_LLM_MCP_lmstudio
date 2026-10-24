@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -39,7 +43,9 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: lmstudio-unreal-agent-mcp/package-lock.json
+          cache-dependency-path: |
+            lmstudio-unreal-agent-mcp/package-lock.json
+            lmstudio-unity-mcp/package-lock.json
 
       - name: Install Python dev dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -106,7 +112,9 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: lmstudio-unreal-agent-mcp/package-lock.json
+          cache-dependency-path: |
+            lmstudio-unreal-agent-mcp/package-lock.json
+            lmstudio-unity-mcp/package-lock.json
 
       - name: Install Python dev dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -143,10 +151,9 @@ jobs:
       - name: Verify UTF-8 encoding
         run: python scripts/verify_encoding.py
 
-      - name: Windows full Direct and release pytest suites
-        run: >
-          python scripts/ci/run_ci_suite.py
-          portable_direct portable_release windows_direct windows_release
+      # Portable suites already run on Windows in portable-cross-platform.
+      - name: Windows-specific Direct and release pytest suites
+        run: python scripts/ci/run_ci_suite.py windows_direct windows_release
 
       - name: Direct deterministic repetition gate (three passes)
         run: python scripts/run_repetition_gate.py direct_repetition --repeat 3
@@ -243,7 +250,10 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: lmstudio-context-compactor-plugin/package-lock.json
+          cache-dependency-path: |
+            lmstudio-context-compactor-plugin/package-lock.json
+            lmstudio-unity-mcp/package-lock.json
+            lmstudio-unreal-agent-mcp/package-lock.json
 
       - name: Install Context Compactor dependencies
         run: npm ci --no-fund --no-audit

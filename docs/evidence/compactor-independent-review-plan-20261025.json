@@ -97,7 +97,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\compactor-independent-review-20261025\\independent-ledger-probes-root.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
           "observation": "Rejected packet is shown as verified; progress-exit-independent-root.log also reproduces unseen lines and stale-SHA binding."
         }
       ],
@@ -174,7 +174,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\compactor-independent-review-20261025\\progress-exit-independent-root.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/progress-exit-independent-root.log",
           "observation": "Distinct focused spans and distinct budget-failed reads both force finalization; exact duplicate control still terminates correctly."
         }
       ],
@@ -246,7 +246,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\compactor-independent-review-20261025\\independent-ledger-probes-root.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
           "observation": "full1-100 -> focused50-52 -> full supplies a handle that cannot read1-5 and reports available50-52."
         }
       ],
@@ -312,7 +312,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\compactor-independent-review-20261025\\independent-ledger-probes-root.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
           "observation": "Tool observes SHA A after A-B-A, while ledger latest remains SHA B."
         }
       ],
@@ -373,7 +373,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\compactor-independent-review-20261025\\independent-ledger-probes-root.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
           "observation": "Repeated50-52 after full1-100 stays narrower instead of exact duplicate; first focused read control passes."
         }
       ],
@@ -474,7 +474,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/compactor-independent-review-20261025/budget-echo-probe.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/budget-echo-probe.log",
           "observation": "Four assertions confirm assistant injection, missing private selection, current echo passthrough, and passthrough even when budget is manually supplied as a private part."
         }
       ],

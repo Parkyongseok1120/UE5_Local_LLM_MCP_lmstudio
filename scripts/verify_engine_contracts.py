@@ -10,8 +10,8 @@ target version can be listed as validated. It reads engine source only; with
 ``--write`` it records the found lines in the contract file.
 
 Usage:
-  python scripts/verify_engine_contracts.py --from 5.8 --from-root "C:/Program Files/Epic Games/UE_5.8" \
-      --to 5.7 --to-root "C:/Program Files/Epic Games/UE_5.7" [--write]
+  python scripts/verify_engine_contracts.py --from 5.8 --from-root "<installed-engine-5.8>" \
+      --to 5.7 --to-root "<installed-engine-5.7>" [--write]
 """
 from __future__ import annotations
 

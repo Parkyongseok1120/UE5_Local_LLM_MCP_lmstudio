@@ -70,6 +70,8 @@ def test_suite_manifest_preserves_pre_consolidation_unique_coverage() -> None:
     assert "tests/test_ci_suite_runner.py" in paths
     assert "tests/test_unity_install.py" in paths
     assert "tests/test_update_launcher.py" in paths
+    assert {"tests/test_analyze_lmstudio_run.py", "tests/test_unreal_build_corpus.py",
+            "tests/test_unreal_static_build_failure_corpus.py"} <= set(paths)
 
 
 def test_repetition_suite_preserves_the_pre_consolidation_three_pass_gate() -> None:
@@ -84,12 +86,17 @@ def test_repetition_suite_preserves_the_pre_consolidation_three_pass_gate() -> N
     assert "direct_repetition --repeat 3" in ci
 
 
-def test_windows_full_job_directly_runs_all_primary_suites() -> None:
+def test_windows_jobs_cover_primary_suites_without_repeating_portable_suites() -> None:
     ci = _read(".github/workflows/ci.yml")
+    portable = ci.split("  portable-cross-platform:", 1)[1].split("  windows-full:", 1)[0]
     windows = ci.split("  windows-full:", 1)[1].split("  node-mcp:", 1)[0]
 
     assert "python scripts/ci/run_ci_suite.py" in windows
-    assert all(name in windows for name in PRIMARY_SUITE_NAMES)
+    assert "windows-latest" in portable
+    portable_suites = {name for name in PRIMARY_SUITE_NAMES if name in portable}
+    windows_suites = {name for name in PRIMARY_SUITE_NAMES if name in windows}
+    assert portable_suites | windows_suites == set(PRIMARY_SUITE_NAMES)
+    assert portable_suites.isdisjoint(windows_suites)
 
 
 def test_direct_suites_do_not_import_quarantined_legacy_eval() -> None:

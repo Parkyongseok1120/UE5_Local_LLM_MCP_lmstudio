@@ -54,7 +54,7 @@ MANIFEST = json.loads((CORPUS / "cases.json").read_text(encoding="utf-8"))
 CASES = MANIFEST["cases"]
 TARGETED = [case for case in CASES if case["expect"]]
 ENGINE_STUB = CORPUS / MANIFEST["engineStub"]
-REAL_ENGINE = Path(os.environ.get("UE_CORPUS_ENGINE_ROOT", "C:/Program Files/Epic Games/UE_5.7"))
+REAL_ENGINE = Path(engine_path) if (engine_path := os.environ.get("UE_CORPUS_ENGINE_ROOT")) else None
 # Engine-backed rules; without an engine they must stay silent, not fail.
 ENGINE_CODES = frozenset({
     "ENGINE_INCLUDE_NOT_FOUND", "ENGINE_MEMBER_NOT_FOUND", "ENGINE_OVERRIDE_SIGNATURE_MISMATCH",
@@ -151,11 +151,12 @@ def test_catch_rate_does_not_regress():
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not (REAL_ENGINE / "Engine" / "Build" / "Build.version").is_file(),
+@pytest.mark.skipif(REAL_ENGINE is None or not (REAL_ENGINE / "Engine" / "Build" / "Build.version").is_file(),
                     reason="installed engine not available")
 @pytest.mark.parametrize("case", [c for c in TARGETED if c["requiresEngine"]],
                          ids=[c["id"] for c in TARGETED if c["requiresEngine"]])
 def test_engine_backed_cases_against_the_installed_engine(case, tmp_path):
+    assert REAL_ENGINE is not None
     identity = _identity(REAL_ENGINE)
     findings = _findings(CORPUS / "cases" / case["id"], identity)
     assert _matches(case, findings), [(f.code, f.path, f.line) for f in findings]
@@ -176,5 +177,5 @@ def _print_table(label: str, table: dict[str, dict[str, int]]) -> None:
 
 if __name__ == "__main__":
     _print_table(f"engine stub ({ENGINE_STUB.name})", measure(_identity(ENGINE_STUB)))
-    if (REAL_ENGINE / "Engine" / "Build" / "Build.version").is_file():
+    if REAL_ENGINE is not None and (REAL_ENGINE / "Engine" / "Build" / "Build.version").is_file():
         _print_table(f"installed engine ({REAL_ENGINE})", measure(_identity(REAL_ENGINE)))

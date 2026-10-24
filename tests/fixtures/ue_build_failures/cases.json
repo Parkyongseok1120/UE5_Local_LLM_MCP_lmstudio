@@ -544,14 +544,14 @@
         "codes": [
           "DUPLICATE_REFLECTED_TYPE_NAME"
         ],
-        "path": "Source/Demo/Public/Data/CombatTypes.h",
+        "path": "Source/Demo/Public/Types/CombatTypes.h",
         "line": 7
       },
       "fix": [
         {
-          "path": "Source/Demo/Public/Data/CombatTypes.h",
+          "path": "Source/Demo/Public/Types/CombatTypes.h",
           "old": "UENUM(BlueprintType)\nenum class ECombatState : uint8\n{\n\tIdle,\n\tFiring,\n\tDead\n};\n",
-          "new": "#include \"Data/ECombatState.h\"\n"
+          "new": "#include \"Types/ECombatState.h\"\n"
         }
       ]
     },

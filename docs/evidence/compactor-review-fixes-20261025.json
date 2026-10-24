@@ -88,7 +88,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/compactor-independent-review-20261025/implementation-plugin-final.log",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/implementation-plugin-final.log",
           "observation": "963 passed, zero failed; TypeScript build included."
         }
       ],
@@ -141,6 +141,6 @@
     "hostRestarted": true,
     "executionLoadedIdObserved": false,
     "postFixModelAuditRun": false,
-    "backup": "C:/Users/sster/.evidence-first/backups/compactor-review-fixes-20261025-031825"
+    "backup": "%USERPROFILE%/.evidence-first/backups/compactor-review-fixes-20261025-031825"
   }
 }

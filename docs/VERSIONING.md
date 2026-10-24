@@ -2,7 +2,7 @@
 
 제품 전체와 각 구성 요소는 별도 버전을 사용합니다. 같은 숫자로 억지로 맞출 필요는 없습니다.
 
-아래는 현재 소스의 버전입니다. 사용자 요청으로 감사 정확도 후속 후보인 대화 압축기 0.4.82 / revision 129와 근거 검토 서버 1.1.4를 로컬에 업데이트 설치했습니다. 배포 구성은 2.1.32이며 **공개 제품 릴리즈는 1.4.1**입니다. 설치본 source/dist/production 빌드 ID와 MCP 연결을 확인했습니다. 실모델 정확도·속도 비교와 새 GUI 실행의 loaded ID 확인은 미완료입니다. 검증과 설치 내역은 [후속 구현 기록](Harness_Audit_Accuracy_Implementation_20261020.md)에 있습니다.
+아래는 현재 소스의 버전입니다. 사용자 요청으로 감사 정확도 후속 후보인 대화 압축기 0.4.82 / revision 129와 근거 검토 서버 1.1.4를 로컬에 업데이트 설치했습니다. 배포 구성은 2.1.32이며 **공개 제품 릴리즈는 1.4.1**입니다. 설치본 source/dist/production 빌드 ID와 MCP 연결을 확인했습니다. 실모델 정확도·속도 비교와 새 GUI 실행의 loaded ID 확인은 미완료입니다. 검증과 설치 내역은 [후속 구현 기록](https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio/blob/Develop/docs/Harness_Audit_Accuracy_Implementation_20261020.md)에 있습니다.
 
 | 구성 | 현재 표시 | 기준 파일 |
 |---|---|---|
