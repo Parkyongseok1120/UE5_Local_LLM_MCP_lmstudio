@@ -122,7 +122,7 @@ def test_cli_accepts_the_case_set(tmp_path):
 
 def test_engine_regressions_record_version_and_source_locations():
     regressions = [c for c in CASES.values() if "harness_regression" in c["category"]]
-    assert len(regressions) == 10
+    assert len(regressions) == 14
     for case in regressions:
         assert case["engineVersion"] == "5.7"
         assert re.search(r"\.(?:cpp|h):\d+", case["origin"])
@@ -147,3 +147,35 @@ ANSWERS["player_controller_tick_drives_input"] = (
     "PlayerTick을 호출하며 PlayerTick이 TickPlayerInput으로 입력을 처리한다. 파생 Tick 본문이 비어 보여도 엔진 경로는 사용 중이다. "
     "프로젝트 생성자의 bCanEverTick = true 줄은 중복일 뿐이다.",
     "Tick 본문은 Shipping에서 Super::Tick만 호출하므로 불필요한 틱 오버헤드다. Shipping에서는 PrimaryActorTick.bCanEverTick = false로 설정한다.")
+
+# Second 2026-10-24 audit: findings that read the source correctly but did not
+# follow the value to its consumer, or applied the wrong engine rule.
+ANSWERS.update({
+    "armor_stat_is_consumed_at_spawn_and_damage": (
+        "휴면 필드가 아니다. InitializeForSpawn이 Stats.MaxArmor를 CurrentArmor에 지급하고, ApplyDamage가 피해의 절반까지 "
+        "CurrentArmor로 흡수한 뒤 차감한다. 획득 아이템이 없어도 스폰 지급분이 전투에서 소비된다.",
+        "MaxArmor는 장갑 획득 경로가 없어 휴면 기능이다. 필드를 삭제하거나 장갑 아이템을 구현해야 한다."),
+    "weak_ptr_cache_does_not_keep_asset_loaded": (
+        "보장되지 않는다. TWeakObjectPtr는 GC 여부에 영향을 주지 않으므로 다른 강한 참조가 없으면 사운드가 수거될 수 있다. "
+        "상주가 목적이면 살아 있는 소유자의 UPROPERTY TObjectPtr 같은 강한 참조나 로드 핸들을 유지해야 한다. "
+        "LoadSynchronous도 이미 로드돼 있으면 다시 읽지 않으므로 히치는 측정이 필요한 조건부 위험이다.",
+        "BeginPlay에서 한 번 로드해 TWeakObjectPtr로 캐시하면 메모리에 유지됩니다. 이후에는 동기 로드가 발생하지 않습니다."),
+    "debug_draw_is_compiled_out_in_shipping": (
+        "필요 없다. UE_ENABLE_DEBUG_DRAWING이 Shipping·Test 비에디터 빌드에서 0이라 DrawDebugLine은 빈 inline 함수가 된다. "
+        "Development에서는 그려지므로 #if !UE_BUILD_SHIPPING을 넣어도 Development 비용은 그대로다. 끄려면 CVar 같은 표시 옵션을 둔다.",
+        "Shipping에서도 비용이 들 수 있으니 반드시 #if !UE_BUILD_SHIPPING으로 감싸야 합니다."),
+    "blueprint_exposed_stat_is_unused_candidate": (
+        "현재 C++ 구현에서 미사용인 후보다. BlueprintReadWrite로 노출돼 있어 Blueprint나 데이터 에셋이 읽을 수 있으므로, "
+        "에셋 참조와 후속 계획을 확인하기 전에는 삭제 대상으로 확정하지 않는다.",
+        "HeadshotMultiplier는 데드 코드이므로 삭제해야 합니다."),
+    "checked_file_count_is_returned_bodies": (
+        "본문을 읽은 15개 파일만 확인했다고 쓴다. filesScanned 21은 검색이 스캔한 파일 수이지 본문을 확인한 수가 아니다.",
+        "전체 소스 21개 파일을 확인했습니다."),
+})
+
+
+def test_every_registered_answer_is_scored():
+    # The parametrized scorer test is built when its decorator runs; answers
+    # registered further down this module would otherwise never be scored.
+    for case_id in sorted(ANSWERS):
+        test_scorer_rewards_correct_answer_and_rejects_recorded_mistake(case_id)

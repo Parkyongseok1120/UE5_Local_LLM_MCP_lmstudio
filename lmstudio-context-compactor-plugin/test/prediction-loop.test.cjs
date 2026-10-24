@@ -5088,7 +5088,7 @@ test('documents guidance uses the returned engine identity on the next predictio
       calls++;
       const text = chat.toString();
       if (calls === 2) {
-        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.8\]/);
+        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.7, 5\.8\]/);
         assert.doesNotMatch(text, /\[omitted unreal\/lifetime:/);
         completeRecoveryReply(options, 'The version was observed; these engine rules remain unvalidated for it.'); return;
       }

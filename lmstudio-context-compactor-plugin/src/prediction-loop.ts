@@ -26,8 +26,10 @@ import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted } from "./resume-facts";
 import { packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines, validatePackets,
   type QuoteMismatch } from "./quote-anchoring";
-import { engineClaimFact, engineClaimNotice, packetEngineClaimGaps, returnedEngineEvidence,
-  type EngineClaimGap } from "./engine-claim-anchoring";
+import { confirmedProgressStatements, engineClaimFact, engineClaimNotice, gradedSections, packetEngineClaimGaps,
+  reportEngineClaimNotice, returnedEngineEvidence, textEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
+import { fileCoverageNotice } from "./quote-anchoring";
+import { unverifiedWriteApis, writeApiFact } from "./write-api-anchoring";
 import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
@@ -251,7 +253,7 @@ export function createPredictionLoopHandler(
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
     const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
-      | "engine_claim_check", string>();
+      | "engine_claim_check" | "write_api_check", string>();
     // Data blocks sent in this execution, by anchor. Earlier blocks are resent
     // unchanged so each model input extends the previous one; discarded with
     // the execution.
@@ -261,6 +263,7 @@ export function createPredictionLoopHandler(
     // P0/P1 claims in the latest packet that rest on an engine fact no
     // returned engine source backs.
     let packetEngineGaps: EngineClaimGap[] = [];
+    let progressEngineGaps: EngineClaimGap[] = [];
     // Admitted reference text for this execution only; discarded with it, so
     // the next user turn selects again.
     const guidanceRetention: GuidanceRetention = {};
@@ -1101,14 +1104,31 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if (quoteFact) runtimeFacts.set("quote_check", quoteFact);
           else runtimeFacts.delete("quote_check");
           packetEngineGaps = packetEngineClaimGaps(packets.at(-1), returnedEngineEvidence(returnedMessages), scope.engine);
-          const engineFact = engineClaimFact(packetEngineGaps);
-          if (engineFact) runtimeFacts.set("engine_claim_check", engineFact);
-          else runtimeFacts.delete("engine_claim_check");
-          if (config.showDebugInfo && packetEngineGaps.length) ctl.debug({ event: "engine_claim_check", executionId, roundIndex,
-            gaps: packetEngineGaps.map(({ claimPath, severity, factId }) => ({ claimPath, severity, factId })) });
           if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_check", executionId, roundIndex,
             packets: packets.length, mismatches: packetQuoteGaps.map(({ claimPath, location, kind, missingTokens }) =>
               ({ claimPath, location, kind, missingTokens })) });
+        }
+        if (!config.observeOnly) {
+          // Progress text shown this execution can state a finding as confirmed
+          // without any packet; it is held to the same engine facts.
+          const visibleMessages = visibleTranscript.snapshot().getMessagesArray();
+          progressEngineGaps = textEngineClaimGaps(confirmedProgressStatements(visibleMessages, ""),
+            returnedEngineEvidence([...visibleMessages, ...captured.messages]), scope.engine, "progress");
+          const engineGaps = [...packetEngineGaps, ...progressEngineGaps];
+          const engineFact = engineClaimFact(engineGaps);
+          if (engineFact) runtimeFacts.set("engine_claim_check", engineFact);
+          else runtimeFacts.delete("engine_claim_check");
+          if (config.showDebugInfo && engineGaps.length) ctl.debug({ event: "engine_claim_check", executionId, roundIndex,
+            gaps: engineGaps.map(({ claimPath, severity, factId }) => ({ claimPath, severity, factId })) });
+          // Engine names an edit adds are compared with returned source before a build reports only the first error.
+          if (scope.engine === "unreal") {
+            const unverified = unverifiedWriteApis([...visibleMessages, ...captured.messages]);
+            const writeFact = writeApiFact(unverified);
+            if (writeFact) runtimeFacts.set("write_api_check", writeFact);
+            else runtimeFacts.delete("write_api_check");
+            if (config.showDebugInfo && unverified.length) ctl.debug({ event: "write_api_check", executionId, roundIndex,
+              names: unverified.slice(0, 8).map(api => api.name) });
+          }
         }
         if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
           const stagnation = toolStagnation.observe(captured.messages, recoveryProgress);
@@ -1438,6 +1458,24 @@ event: decision.trigger === "research_recovery_exhausted"
       if (engineNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(engineNotice);
         if (config.showDebugInfo) ctl.debug({ event: "engine_claim_notice", executionId, gaps: packetEngineGaps.length });
+      }
+      const answer = visibleTranscript.lastAnswerText;
+      if (answer && !config.observeOnly) {
+        const visible = visibleTranscript.snapshot().getMessagesArray();
+        const evidence = returnedEngineEvidence(visible);
+        const reportGaps = textEngineClaimGaps(gradedSections(answer), evidence, scope.engine, "report")
+          .filter(gap => !packetEngineGaps.some(packetGap => packetGap.factId === gap.factId));
+        const reportNotice = reportEngineClaimNotice(reportGaps,
+          textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, scope.engine, "progress"));
+        if (reportNotice) {
+          visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(reportNotice);
+          if (config.showDebugInfo) ctl.debug({ event: "report_engine_claim_notice", executionId, gaps: reportGaps.length });
+        }
+        const coverageNotice = fileCoverageNotice(visible, answer);
+        if (coverageNotice) {
+          visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(coverageNotice);
+          if (config.showDebugInfo) ctl.debug({ event: "file_coverage_notice", executionId });
+        }
       }
     } catch (error) {
       executionFailure = error;

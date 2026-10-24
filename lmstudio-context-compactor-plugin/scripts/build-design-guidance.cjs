@@ -165,7 +165,8 @@ function engineClaimFacts(contractSets) {
       }
       facts.push({ id: contract.id, engine: data.engine, contractSet: `${data.engine}_contracts@${data.revision}`,
         engineVersions: contract.applicability.engineVersions, statement: contract.statement,
-        evidenceRefs: contract.evidenceRefs.map(ref => ({ path: ref.path, symbol: ref.symbol, ...(ref.line ? { line: ref.line } : {}) })),
+        evidenceRefs: contract.evidenceRefs.map(ref => ({ path: ref.path, symbol: ref.symbol,
+          ...(ref.lines ? { lines: ref.lines } : ref.line ? { line: ref.line } : {}) })),
         claimMarkers: contract.claimMarkers });
     }
   }
@@ -177,6 +178,14 @@ function engineClaimFacts(contractSets) {
 // Markdown carries a generated copy between contract-summary markers so the
 // same statement is never edited by hand in two places.
 const ENGINE_DISPLAY = { unreal: "UE", unity: "Unity" };
+// A reference checked on several versions cites the newest validated one's line.
+function citedLine(ref, versions) {
+  if (!ref.lines) return ref.line;
+  const newest = [...versions].filter(v => ref.lines[v]).sort((a, b) =>
+    b.split(".").map(Number).reduce((d, n, i) => d || n - Number(a.split(".")[i] || 0), 0))[0];
+  return ref.lines[newest];
+}
+
 function contractSummaryLines(label, versions, entries, engine = "unreal") {
   // Only engine facts depend on the validated engine version. A block made of
   // project policies carries no version label (it would claim a false scope).
@@ -186,7 +195,7 @@ function contractSummaryLines(label, versions, entries, engine = "unreal") {
   const lines = [header];
   for (const contract of entries) {
     const [first, ...rest] = contract.evidenceRefs;
-    const evidence = first ? ` 근거: ${first.path}:${first.line}${rest.length ? ` 외 ${rest.length}` : ""}` : "";
+    const evidence = first ? ` 근거: ${first.path}:${citedLine(first, versions)}${rest.length ? ` 외 ${rest.length}` : ""}` : "";
     const kind = contract.kind === "engine_fact" ? "엔진 사실" : "프로젝트 정책";
     lines.push(`- \x60${contract.id}\x60 (${kind}) ${contract.statement}${evidence}`);
   }

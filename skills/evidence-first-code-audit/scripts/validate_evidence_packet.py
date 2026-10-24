@@ -263,6 +263,18 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         for field in MODE_OBLIGATIONS["codegen"]:
             if not _nonempty_list(packet.get(field)):
                 errors.append(f"codegen packet needs non-empty {field}")
+        # A planned framework call is only checked by the build otherwise, one
+        # error at a time. Advisory: plans that use no framework API are common.
+        cited = any(
+            isinstance(item, dict) and item.get("kind") in {"framework_source", "official_docs"}
+            for claim in claims if isinstance(claim, dict)
+            for item in (claim.get("evidence") if isinstance(claim.get("evidence"), list) else [])
+        )
+        if not cited:
+            warnings.append(
+                "codegen packet cites no framework_source or official_docs: a planned framework API, header or "
+                "member without a declaration source is first checked by the build; cite the declarations it relies on"
+            )
 
     return {
         "ok": not errors,

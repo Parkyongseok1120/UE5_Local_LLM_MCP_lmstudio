@@ -20,7 +20,7 @@ test("guidance is opt-in, numeric allowance is bounded, and selection does not i
   assert.equal(designGuidanceMode("arbitrary-path"), "off");
   const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
   assert.equal(config.designGuidanceMode, "off");
-  assert.equal(config.designGuidanceMaxTokens, 2048);
+  assert.equal(config.designGuidanceMaxTokens, 6144);
   assert.deepEqual(selectDesignGuidance("off", scope("unreal")), []);
   for (const source of ["available_tools", "ambiguous"]) {
     assert.deepEqual(selectDesignGuidance("multiplayer", scope("unreal", source)).map(d => d.id), ["core", "multiplayer"]);
@@ -194,7 +194,7 @@ test("documents delivery omits unknown/other-major sections and annotates same-m
   const same = unreal("5.3.1");
   assert.ok(same.text.includes(lifetime.text));
   assert.ok(same.text.includes(timer.text));
-  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.8]"));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7, 5.8]"));
   assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7]"));
   for (const version of [undefined, "4.27.2"]) {
     const doc = unreal(version);

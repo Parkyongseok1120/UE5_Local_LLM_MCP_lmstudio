@@ -92,6 +92,70 @@ export function packetEngineClaimGaps(packet: unknown, evidence: ReturnedEngineE
   return gaps;
 }
 
+// A report written without a packet still grades findings in its headings, and
+// progress text shown before it can state a finding as confirmed. The same
+// facts apply to both; a heading that rejects its finding makes no claim.
+const SEVERITY = /\bP([0-3])\b/;
+const HEADING = /^\s{0,3}#{1,6}\s/;
+const REJECTED = /기각|철회|버그\s*아님|결함\s*아님|\bnot\s+a\s+(?:bug|defect)\b|\brejected\b|\bretract/iu;
+const CONFIRMED = /\b(?:confirmed|verified)\b|확정|확인했|확인된\s*(?:버그|결함)/iu;
+const FINDING = /\bbug\b|\bdefect\b|버그|결함/iu;
+export type TextFinding = { label: string; severity: string; text: string };
+
+/** Graded findings of an answer: each heading section whose heading names a severity. */
+export function gradedSections(answer: string): TextFinding[] {
+  const sections: Array<{ heading: string; lines: string[] }> = [];
+  for (const line of String(answer || "").split(/\r?\n/)) {
+    if (HEADING.test(line)) sections.push({ heading: line.trim(), lines: [line] });
+    else sections.at(-1)?.lines.push(line);
+  }
+  return sections.flatMap(({ heading, lines }) => {
+    const severity = SEVERITY.exec(heading);
+    return severity && !REJECTED.test(heading)
+      ? [{ label: heading.replace(/^#+\s*/, "").slice(0, 80), severity: `P${severity[1]}`, text: lines.join("\n") }] : [];
+  });
+}
+
+/** Visible lines before the final answer that state a finding as confirmed. */
+export function confirmedProgressStatements(visible: readonly ChatMessage[], finalText: string): TextFinding[] {
+  const found: TextFinding[] = [];
+  for (const message of visible) {
+    if (!message.isAssistantMessage()) continue;
+    const text = message.getText();
+    if (!text || (finalText && text.trim() === finalText.trim())) continue;
+    for (const line of text.split(/\r?\n/)) {
+      if (!CONFIRMED.test(line) || !(SEVERITY.test(line) || FINDING.test(line)) || REJECTED.test(line)) continue;
+      found.push({ label: line.trim().slice(0, 80), severity: SEVERITY.exec(line) ? `P${SEVERITY.exec(line)![1]}` : "unrated", text: line });
+    }
+  }
+  return found;
+}
+
+/** Engine-fact gaps in free-text findings, by the same markers and backing rules as packets. */
+export function textEngineClaimGaps(findings: readonly TextFinding[], evidence: ReturnedEngineEvidence, engine: string,
+  kind: "report" | "progress"): EngineClaimGap[] {
+  const gaps: EngineClaimGap[] = [];
+  for (const finding of findings) {
+    for (const { fact, markers } of catalogue) {
+      if (fact.engine !== engine || !markers.some(marker => marker.test(finding.text)) || backed(fact, {}, evidence)) continue;
+      gaps.push({ claimPath: `${kind} "${finding.label}"`, severity: finding.severity, factId: fact.id, contractSet: fact.contractSet,
+        engineVersions: fact.engineVersions, statement: fact.statement, evidence: fact.evidenceRefs.map(evidenceLabel) });
+    }
+  }
+  return gaps;
+}
+
+/** Footer for findings the delivered report grades, and for progress claims it dropped. */
+export function reportEngineClaimNotice(report: EngineClaimGap[], progress: EngineClaimGap[]): string | null {
+  const retracted = progress.filter(gap => !report.some(r => r.factId === gap.factId));
+  if (!report.length && !retracted.length) return null;
+  const firstSentence = (statement: string) => statement.split(/(?<=\.)\s/)[0];
+  const lines = report.slice(0, MAX_REPORTED).map(gap => `- ${gap.claimPath} (${gap.severity}) ↔ \`${gap.factId}\`: ${firstSentence(gap.statement)}`);
+  const dropped = retracted.slice(0, MAX_REPORTED).map(gap => `- 중간 진행 문장 ${gap.claimPath} ↔ \`${gap.factId}\`: 최종 보고에는 남지 않았습니다.`);
+  return ["", "", "[엔진 동작 근거 · 보고서] 아래 지적은 엔진 동작에 기대지만, 이번 실행은 해당 엔진 소스를 반환하지 않았습니다. "
+    + "엔진 계약 문장과 표현을 대조한 결과이며 사실 판정이 아닙니다.", ...lines, ...dropped].join("\n");
+}
+
 /** Runtime fact for the next input, or null when every gated claim is backed. */
 export function engineClaimFact(gaps: EngineClaimGap[]): string | null {
   if (!gaps.length) return null;

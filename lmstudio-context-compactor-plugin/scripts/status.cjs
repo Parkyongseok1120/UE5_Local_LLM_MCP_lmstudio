@@ -36,6 +36,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/prediction-ui.ts",
   "src/quote-anchoring.ts",
   "src/engine-claim-anchoring.ts",
+  "src/write-api-anchoring.ts",
   "src/raw-tool-intent.ts",
   "src/recovery-coordinator.ts",
   "src/reasoning-recovery.ts",

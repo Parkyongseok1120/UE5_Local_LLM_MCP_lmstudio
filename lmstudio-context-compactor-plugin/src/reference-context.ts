@@ -13,7 +13,7 @@ import { resultSemantics, retainedEffectFacts } from "./tool-result-semantics.js
 /** All additional reference work is bounded here, independently of source
  * archival. These limits never grant an execution or context-budget allowance. */
 export const REFERENCE_LIMITS = Object.freeze({ observations: 16, diagnosticGroups: 3, diagnostics: 12,
-  metadata: 8, sections: 6, candidates: 5, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
+  metadata: 8, sections: 6, candidates: 7, decodeChars: 262144, textChars: 700, seenCalls: 2048 });
 export type ReferenceSignal = "diagnostic_present" | "diagnostic_recurred" | "observed_source_changed"
   | "source_body_unavailable" | "compilation_pending" | "operation_outcome_unknown" | "api_contract_observed"
   | "network_contract_observed";
@@ -71,6 +71,18 @@ const text = (value: unknown, max: number = REFERENCE_LIMITS.textChars): string 
   ? sanitizeDerivedOperationalText(value).slice(0, max) : undefined;
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 const readFailureTool = (tool: string) => ["read_file", "read_file_range", "read_symbol"].includes(tool);
+const ENGINE_SOURCE_TOOLS = new Set(["read_file", "read_file_range", "read_symbol", "search_files"]);
+/** The engine root of an engine:// result: its absolute path minus the
+ * engine-relative path it was requested by. Anything else names no root. */
+function engineRootOfRead(value: Record<string, any>): string {
+  const relative = typeof value.path === "string" && value.path.startsWith("engine://") ? value.path.slice(9) : "";
+  const absolute = typeof value.absolutePath === "string" ? value.absolutePath : "";
+  if (!relative || !absolute || !pathIdentity(absolute)) return "";
+  const unified = absolute.replace(/\\/g, "/").replace(/\/+$/, ""), suffix = "/" + relative.replace(/^\/+|\/+$/g, "");
+  if (!unified.toLowerCase().endsWith(suffix.toLowerCase())) return "";
+  return absolute.slice(0, unified.length - suffix.length);
+}
+
 function pathIdentity(value: string) {
   const api = pathApiFor(value);
   if (!api.isAbsolute(value)) return "";
@@ -263,6 +275,22 @@ function normalize(value: Record<string, any>, origin: Origin, project: string, 
       errorCode: text(value.errorCode), operationId: text(value.operationId || args.operationId),
       originalOrigin: record(value.origin) || undefined,
       requestFingerprint: digest(JSON.stringify([tool, args])) });
+  }
+  // An engine:// read or search names the engine it came from with the same
+  // strict Build.version identity an engine_local lookup carries, so it
+  // establishes the installed engine version as well.
+  if (engine === "unreal" && ENGINE_SOURCE_TOOLS.has(tool) && value.ok !== false
+    && value.evidenceSource === "installed_engine_source") {
+    const observed = record(value.engineIdentity);
+    const root = engineRootOfRead(value);
+    if (root && observed?.status === "observed" && observed.source === "build_version_file" && observed.hashScope === "file"
+      && /^[a-f0-9]{64}$/.test(observed.sha256 || "") && /^\d+\.\d+(?:\.\d+)?$/.test(observed.version || "")) {
+      add("project", { sourceMode: "engine_source_read", evidenceSource: "installed_engine_source", engineIdentityStatus: "observed",
+        requestedEngineAssociation: text(observed.engineAssociation), observedEngineRoot: text(root),
+        observedEngineVersion: observed.version, coverage: { completeness: "unknown" } },
+        { engineVersion: observed.version, engineIdentity: JSON.stringify([pathIdentity(root), observed.version, observed.sha256]),
+          versionSource: "installed_engine_source", groupKey: JSON.stringify([pathIdentity(project), "unreal_engine_source"]) });
+    }
   }
   const fileTools = ENGINE_PROFILES[engine].fileTools;
   const symbolSource = engine === "unity" && tool === "unity_symbols" && args.action === "source";

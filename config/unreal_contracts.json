@@ -1,9 +1,10 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 5,
+  "revision": 6,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
+    "5.7",
     "5.8"
   ],
   "lifecycle": {
@@ -131,6 +132,7 @@
       "topic": "lifecycle",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -148,17 +150,26 @@
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
           "symbol": "UObject::PostInitProperties",
-          "line": 226
+          "lines": {
+            "5.7": 222,
+            "5.8": 226
+          }
         },
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
           "symbol": "UObject::PostLoad",
-          "line": 346
+          "lines": {
+            "5.7": 351,
+            "5.8": 346
+          }
         },
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h",
           "symbol": "UObject::BeginDestroy",
-          "line": 361
+          "lines": {
+            "5.7": 366,
+            "5.8": 361
+          }
         }
       ],
       "guidanceRefs": [
@@ -172,6 +183,7 @@
       "topic": "lifecycle",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -189,27 +201,42 @@
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
           "symbol": "AActor::BeginPlay",
-          "line": 2125
+          "lines": {
+            "5.7": 2128,
+            "5.8": 2125
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
           "symbol": "AActor::EndPlay",
-          "line": 2132
+          "lines": {
+            "5.7": 2135,
+            "5.8": 2132
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
           "symbol": "AActor::PostInitializeComponents",
-          "line": 3127
+          "lines": {
+            "5.7": 3126,
+            "5.8": 3127
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h",
           "symbol": "AActor::Destroyed",
-          "line": 3569
+          "lines": {
+            "5.7": 3568,
+            "5.8": 3569
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
           "symbol": "AActor::Destroyed -> RouteEndPlay(EEndPlayReason::Destroyed)",
-          "line": 3313
+          "lines": {
+            "5.7": 3286,
+            "5.8": 3313
+          }
         }
       ],
       "guidanceRefs": [
@@ -223,6 +250,7 @@
       "topic": "lifecycle",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -240,32 +268,50 @@
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::OnRegister",
-          "line": 830
+          "lines": {
+            "5.7": 816,
+            "5.8": 830
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::OnUnregister",
-          "line": 835
+          "lines": {
+            "5.7": 821,
+            "5.8": 835
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::InitializeComponent",
-          "line": 919
+          "lines": {
+            "5.7": 905,
+            "5.8": 919
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::BeginPlay",
-          "line": 936
+          "lines": {
+            "5.7": 922,
+            "5.8": 936
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::EndPlay",
-          "line": 949
+          "lines": {
+            "5.7": 935,
+            "5.8": 949
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h",
           "symbol": "UActorComponent::UninitializeComponent",
-          "line": 955
+          "lines": {
+            "5.7": 941,
+            "5.8": 955
+          }
         }
       ],
       "guidanceRefs": [
@@ -279,6 +325,7 @@
       "topic": "subsystem",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -300,32 +347,50 @@
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
           "symbol": "USubsystem::ShouldCreateSubsystem",
-          "line": 56
+          "lines": {
+            "5.7": 61,
+            "5.8": 56
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
           "symbol": "USubsystem::Initialize",
-          "line": 59
+          "lines": {
+            "5.7": 64,
+            "5.8": 59
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h",
           "symbol": "USubsystem::Deinitialize",
-          "line": 62
+          "lines": {
+            "5.7": 67,
+            "5.8": 62
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
           "symbol": "UWorldSubsystem::OnWorldBeginPlay",
-          "line": 43
+          "lines": {
+            "5.7": 45,
+            "5.8": 43
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
           "symbol": "UWorldSubsystem::OnWorldEndPlay",
-          "line": 46
+          "lines": {
+            "5.7": 48,
+            "5.8": 46
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/WorldSubsystem.h",
           "symbol": "UWorldSubsystem::DoesSupportWorldType",
-          "line": 66
+          "lines": {
+            "5.7": 61,
+            "5.8": 66
+          }
         }
       ],
       "guidanceRefs": [
@@ -339,6 +404,7 @@
       "topic": "subsystem",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -357,7 +423,10 @@
         {
           "path": "Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h",
           "symbol": "FSubsystemCollectionBase::InitializeDependency",
-          "line": 35
+          "lines": {
+            "5.7": 33,
+            "5.8": 35
+          }
         }
       ],
       "guidanceRefs": [
@@ -371,6 +440,7 @@
       "topic": "threading",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -388,12 +458,18 @@
         {
           "path": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp",
           "symbol": "FTimerManager::FindTimer check(IsInGameThread())",
-          "line": 596
+          "lines": {
+            "5.7": 542,
+            "5.8": 596
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/TimerManager.cpp",
           "symbol": "FTimerManager::InternalSetTimer check(IsInGameThread())",
-          "line": 660
+          "lines": {
+            "5.7": 604,
+            "5.8": 660
+          }
         }
       ],
       "guidanceRefs": [
@@ -407,6 +483,7 @@
       "topic": "lifecycle",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -425,17 +502,26 @@
         {
           "path": "Engine/Source/Runtime/Engine/Private/Controller.cpp",
           "symbol": "AController::AController",
-          "line": 62
+          "lines": {
+            "5.7": 58,
+            "5.8": 62
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
           "symbol": "APlayerController::TickActor",
-          "line": 5647
+          "lines": {
+            "5.7": 5526,
+            "5.8": 5647
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
           "symbol": "APlayerController::PlayerTick",
-          "line": 2326
+          "lines": {
+            "5.7": 2326,
+            "5.8": 2326
+          }
         }
       ],
       "guidanceRefs": [
@@ -519,6 +605,7 @@
       "topic": "networking",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -537,12 +624,18 @@
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h",
           "symbol": "ClientAdjustPosition (correction description)",
-          "line": 2394
+          "lines": {
+            "5.7": 2355,
+            "5.8": 2394
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h",
           "symbol": "UCharacterMovementComponent::ReplicateMoveToServer",
-          "line": 2405
+          "lines": {
+            "5.7": 2366,
+            "5.8": 2405
+          }
         }
       ],
       "guidanceRefs": [
@@ -556,6 +649,7 @@
       "topic": "networking",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -571,12 +665,18 @@
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h",
           "symbol": "UPrimitiveComponent::bOwnerNoSee",
-          "line": 497
+          "lines": {
+            "5.7": 448,
+            "5.8": 497
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h",
           "symbol": "UPrimitiveComponent::bOnlyOwnerSee",
-          "line": 501
+          "lines": {
+            "5.7": 452,
+            "5.8": 501
+          }
         }
       ],
       "guidanceRefs": [
@@ -590,6 +690,7 @@
       "topic": "networking",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -605,17 +706,26 @@
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
           "symbol": "ENetMode::NM_Standalone",
-          "line": 981
+          "lines": {
+            "5.7": 939,
+            "5.8": 981
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
           "symbol": "ENetMode::NM_ListenServer",
-          "line": 987
+          "lines": {
+            "5.7": 945,
+            "5.8": 987
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h",
           "symbol": "ENetMode::NM_Client",
-          "line": 993
+          "lines": {
+            "5.7": 951,
+            "5.8": 993
+          }
         }
       ],
       "guidanceRefs": [
@@ -629,6 +739,7 @@
       "topic": "networking",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -644,17 +755,26 @@
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
           "symbol": "ELifetimeCondition::COND_InitialOnly",
-          "line": 19
+          "lines": {
+            "5.7": 22,
+            "5.8": 19
+          }
         },
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
           "symbol": "ELifetimeCondition::COND_OwnerOnly",
-          "line": 20
+          "lines": {
+            "5.7": 23,
+            "5.8": 20
+          }
         },
         {
           "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h",
           "symbol": "ELifetimeCondition::COND_SkipOwner",
-          "line": 21
+          "lines": {
+            "5.7": 24,
+            "5.8": 21
+          }
         }
       ],
       "guidanceRefs": [
@@ -668,6 +788,7 @@
       "topic": "networking",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -685,17 +806,26 @@
         {
           "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
           "symbol": "AActor::GetFunctionCallspace",
-          "line": 5606
+          "lines": {
+            "5.7": 5609,
+            "5.8": 5606
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
           "symbol": "AActor::GetFunctionCallspace",
-          "line": 5627
+          "lines": {
+            "5.7": 5609,
+            "5.8": 5627
+          }
         },
         {
           "path": "Engine/Source/Runtime/Engine/Private/Actor.cpp",
           "symbol": "AActor::GetFunctionCallspace",
-          "line": 5664
+          "lines": {
+            "5.7": 5609,
+            "5.8": 5664
+          }
         }
       ],
       "guidanceRefs": [
@@ -828,12 +958,53 @@
       ]
     },
     {
+      "id": "policy.claims.usage-path",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Before calling a field unused, dead, dormant or safe to delete, follow one read of it to its consumer, for example a stat copied at spawn and consumed when damage is applied. A field exposed with BlueprintReadWrite, BlueprintReadOnly or EditAnywhere can be read by Blueprints and assets: without checking them, report it as unused in C++ only, not as dead code to remove.",
+      "preconditions": [
+        "A report says a field, stat or function is unused, dead, dormant or should be removed."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.performance-evidence",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "A performance finding without a measurement (a profile, timing or stat output) is a conditional risk: name the condition under which it costs time and do not rank it as the first defect to fix.",
+      "preconditions": [
+        "A report assigns severity or fix priority to a performance concern."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
       "id": "ue.damage.pawn-take-damage",
       "revision": 1,
       "kind": "engine_fact",
       "topic": "verification",
       "applicability": {
         "engineVersions": [
+          "5.7",
           "5.8"
         ],
         "types": [
@@ -850,10 +1021,132 @@
         {
           "path": "Engine/Source/Runtime/Engine/Private/Pawn.cpp",
           "symbol": "APawn::TakeDamage",
-          "line": 577
+          "lines": {
+            "5.7": 556,
+            "5.8": 577
+          }
         }
       ],
       "guidanceRefs": []
+    },
+    {
+      "id": "ue.uobject.weak-ptr-no-retention",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "5.7",
+          "5.8"
+        ],
+        "types": [
+          "UObject"
+        ]
+      },
+      "statement": "A TWeakObjectPtr does not keep its object alive: it has no effect on garbage collection and returns null once the object is collected. Caching a preloaded asset only in a weak pointer does not keep it resident; residency needs a strong reference the collector tracks (a UPROPERTY TObjectPtr on a living owner) or a held streamable handle.",
+      "preconditions": [
+        "A fix caches a loaded object or asset, or a report says a weak pointer keeps something loaded."
+      ],
+      "exceptions": [
+        "Another strong reference elsewhere may keep the object alive; the weak pointer itself never does."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/WeakObjectPtr.h",
+          "symbol": "FWeakObjectPtr",
+          "lines": {
+            "5.7": 43,
+            "5.8": 43
+          }
+        }
+      ],
+      "guidanceRefs": [],
+      "claimMarkers": [
+        "TWeakObjectPtr[^.\\n]{0,80}(?:cache|캐시|keep|유지|resident|상주|preload|미리)",
+        "(?:cache|캐시)[^.\\n]{0,60}TWeakObjectPtr"
+      ]
+    },
+    {
+      "id": "ue.softptr.load-synchronous-when-unloaded",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "5.7",
+          "5.8"
+        ],
+        "types": [
+          "FSoftObjectPtr"
+        ]
+      },
+      "statement": "TSoftObjectPtr::LoadSynchronous first returns the object if it is already in memory and loads synchronously only when it is not. A LoadSynchronous call on a hot path is a hitch risk while the asset is unloaded, not a disk read on every call; how often that happens is a measurement question.",
+      "preconditions": [
+        "A report says LoadSynchronous loads on every call, or ranks a LoadSynchronous call as a performance defect."
+      ],
+      "exceptions": [
+        "An asset that was unloaded by garbage collection is loaded again on the next call."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/CoreUObject/Public/UObject/SoftObjectPtr.h",
+          "symbol": "FSoftObjectPtr::LoadSynchronous",
+          "lines": {
+            "5.7": 85,
+            "5.8": 85
+          }
+        }
+      ],
+      "guidanceRefs": [],
+      "claimMarkers": [
+        "LoadSynchronous[^.\\n]{0,80}(?:every|each|매|hitch|히치|disk|디스크|stall)"
+      ]
+    },
+    {
+      "id": "ue.debugdraw.compiled-out-in-shipping-test",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "5.7",
+          "5.8"
+        ],
+        "types": [
+          "UWorld"
+        ]
+      },
+      "statement": "DrawDebugLine and the other DrawDebug helpers are compiled to empty inline functions when UE_ENABLE_DEBUG_DRAWING is 0, which by default means Shipping and Test builds without the editor; Development builds draw. Adding #if !UE_BUILD_SHIPPING around them changes nothing in Development and nothing in Shipping.",
+      "preconditions": [
+        "A report proposes a Shipping guard for DrawDebug calls, or calls them a Shipping cost."
+      ],
+      "exceptions": [
+        "A project can redefine UE_ENABLE_DEBUG_DRAWING; check its Target or build settings."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/EngineDefines.h",
+          "symbol": "UE_ENABLE_DEBUG_DRAWING",
+          "lines": {
+            "5.7": 15,
+            "5.8": 15
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Public/DrawDebugHelpers.h",
+          "symbol": "DrawDebugLine (empty inline)",
+          "lines": {
+            "5.7": 185,
+            "5.8": 185
+          }
+        }
+      ],
+      "guidanceRefs": [],
+      "claimMarkers": [
+        "DrawDebug\\w*[^.\\n]{0,80}(?:Shipping|UE_BUILD_SHIPPING|#if)",
+        "(?:Shipping|UE_BUILD_SHIPPING)[^.\\n]{0,60}DrawDebug",
+        "디버그\\s*(?:드로잉|라인|그리기)"
+      ]
     }
   ]
 }

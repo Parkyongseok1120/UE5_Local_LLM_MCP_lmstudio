@@ -110,3 +110,40 @@ test("a P1 proposal to disable PlayerController tick gets the PlayerTick input f
   assert.deepEqual(gaps.map(gap => gap.factId), ["ue.controller.player-tick-input"]);
   assert.match(engineClaimFact(gaps), /stops player input processing/);
 });
+
+// The second 2026-10-24 audit sent no packet. Its report graded a weak-pointer
+// cache fix and a Shipping guard for debug drawing, and a progress line had
+// "confirmed" a Client RPC broadcast that the report later dropped.
+const { confirmedProgressStatements, gradedSections, reportEngineClaimNotice, textEngineClaimGaps } = require("../dist/engine-claim-anchoring");
+const REPORT = [
+  "# Audit", "", "## ① 기각: `ClientConfirmHit` — 버그 아님", "Multicast라 모든 클라이언트에 히트마커가 뜬다고 의심했으나 Client RPC입니다.",
+  "## ② P2 — 매 샷 동기 로드 (성능)", "- **수정**: BeginPlay에서 미리 로드해 `TWeakObjectPtr<USoundBase>`로 캐시하고 MulticastShot에서는 캐시만 참조.",
+  "## ③ P3 — SSOT 헤더의 데드 스탯", "MaxArmor는 휴면 기능입니다.",
+  "## ④ P3 — Multicast 핫패스의 디버그 드로잉", "DrawDebugLine(...); DrawDebugPoint(...);"].join("\n");
+const PROGRESS = "I've confirmed the P2 bug where `ClientConfirmHit_Implementation` unconditionally sets `LastHitConfirmationTime` on all clients.";
+
+test("graded report sections exclude rejected findings and carry their severity", () => {
+  assert.deepEqual(gradedSections(REPORT).map(s => [s.severity, s.label.slice(0, 4)]), [["P2", "② P2"], ["P3", "③ P3"], ["P3", "④ P3"]]);
+});
+
+test("a packet-free report and a dropped progress claim are matched to engine facts", () => {
+  const evidence = returnedEngineEvidence(projectRead());
+  const report = textEngineClaimGaps(gradedSections(REPORT), evidence, "unreal", "report");
+  assert.deepEqual(report.map(g => g.factId), ["ue.uobject.weak-ptr-no-retention", "ue.debugdraw.compiled-out-in-shipping-test"]);
+  const visible = [ChatMessage.from({ role: "assistant", content: PROGRESS }), ChatMessage.from({ role: "assistant", content: REPORT })];
+  const progress = textEngineClaimGaps(confirmedProgressStatements(visible, REPORT), evidence, "unreal", "progress");
+  assert.deepEqual(progress.map(g => [g.severity, g.factId]), [["P2", "ue.net.client-rpc-callspace"]]);
+  const notice = reportEngineClaimNotice(report, progress);
+  assert.match(notice, /\[엔진 동작 근거 · 보고서\]/u);
+  assert.match(notice, /최종 보고에는 남지 않았습니다/u);
+  assert.match(notice, /사실 판정이 아닙니다/u);
+  // Once the report keeps the claim, it is listed as a report finding, not as dropped.
+  assert.doesNotMatch(reportEngineClaimNotice(progress, progress), /남지 않았습니다/u);
+  assert.equal(reportEngineClaimNotice([], []), null);
+});
+
+test("progress lines that do not confirm a finding, or reject one, are not claims", () => {
+  const visible = ["Now I'll re-read Character.h to verify the specifiers.", "The earlier P1 hypothesis is rejected: ClientConfirmHit goes to all clients only if it were NetMulticast."]
+    .map(text => ChatMessage.from({ role: "assistant", content: text }));
+  assert.deepEqual(confirmedProgressStatements(visible, ""), []);
+});

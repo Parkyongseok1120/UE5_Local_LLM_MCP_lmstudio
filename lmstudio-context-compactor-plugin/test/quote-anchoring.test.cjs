@@ -272,3 +272,19 @@ test("a partial byte read ending at a newline cannot overwrite the next known li
     hasMore: false, truncated: false, content: "void Begin() {}\n" }]);
   assert.deepEqual([...whole.lines], [[1, "void Begin() {}"], [2, ""]]);
 });
+
+// The 2026-10-24 audit said it checked "전체 소스(21개 파일)": 21 was a search's
+// filesScanned. Bodies were returned for 15 project files.
+test("a claimed file count above the returned bodies gets a coverage footer", () => {
+  const { fileCoverageNotice } = require("../dist/quote-anchoring");
+  const messages = returned();
+  exchange(messages, "s1", "search_files", { query: "FireRate" }, { ok: true, filesScanned: 21, results: [] });
+  exchange(messages, "e1", "read_file_range", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" }, {
+    ok: true, path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", lineNumbers: true, startLine: 1, endLine: 1, content: "1\tx" });
+  const notice = fileCoverageNotice(messages, "전체 소스(21개 파일)를 확인했습니다. P0/P1 결함은 없습니다.");
+  assert.match(notice, /21개 파일을 확인했다고 하지만/u);
+  assert.match(notice, /프로젝트 파일은 2개/u);
+  assert.match(fileCoverageNotice(messages, "I reviewed all 9 files."), /9개/u);
+  for (const answer of ["2개 파일을 확인했습니다.", "전체 소스를 확인했습니다.", "P3 3개 항목입니다."])
+    assert.equal(fileCoverageNotice(messages, answer), null, answer);
+});

@@ -254,6 +254,22 @@ export function quoteCheckFact(mismatches: QuoteMismatch[]): string | null {
   ].join("\n");
 }
 
+// A report that counts the files it checked can count a search's scanned files
+// ("filesScanned": 21) as read. Only returned bodies count as checked.
+const COVERAGE_CLAIM = /(?:전체|모든)[^.\n]{0,20}?(\d+)\s*개\s*(?:의\s*)?(?:소스\s*)?파일|(\d+)\s*개\s*(?:의\s*)?(?:소스\s*)?파일(?:을|를)?\s*(?:모두\s*|전부\s*)?(?:확인|검토|읽)|\b(?:all|every)\s+(\d+)\s+(?:source\s+)?files\b|\b(\d+)\s+(?:source\s+)?files\s+(?:were\s+)?(?:read|reviewed|checked)\b/iu;
+
+/** Footer when the answer claims more checked files than returned bodies. */
+export function fileCoverageNotice(messages: ChatMessage[], answer: string): string | null {
+  const match = COVERAGE_CLAIM.exec(answer || "");
+  const claimed = match ? Number(match.slice(1).find(Boolean)) : NaN;
+  if (!Number.isFinite(claimed)) return null;
+  const read = new Set(returnedSourceLines(messages).filter(file => !/^engine:\/\//i.test(file.path))
+    .map(file => normalizePath(file.path))).size;
+  if (claimed <= read) return null;
+  return ["", "", `[조사 범위] 답변은 ${claimed}개 파일을 확인했다고 하지만, 이번 실행에서 본문이 반환된 프로젝트 파일은 ${read}개입니다. `
+    + "검색 결과의 스캔 파일 수는 본문 확인이 아닙니다."].join("\n");
+}
+
 /** Footer for the delivered answer when the last packet's mismatches remain.
  * The answer text itself is never rewritten. */
 export function quoteAnchoringNotice(mismatches: QuoteMismatch[]): string | null {
