@@ -92,7 +92,7 @@ function createBundleCapability(context) {
         throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
       }
       patch.expectedHash = version.expectedHash;
-      const next = calculatePatch(read.content, patch, { maxRangeTextChars: limits.maxPatchOldTextChars });
+      const next = calculatePatch(read.content, patch, { maxRangeTextChars: limits.maxPatchOldTextChars, maxPatchChars: limits.maxPatchChars });
       if (!next.ok) {
         const error = validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
         // A stale line range answers with what is there now, as replace_in_file does.

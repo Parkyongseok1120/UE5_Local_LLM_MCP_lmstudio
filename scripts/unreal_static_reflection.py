@@ -45,9 +45,14 @@ RAW_UOBJECT_MEMBER_RE = re.compile(
 
 def validate_generated_h(path: Path, text: str, root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    includes = include_lines(text)
+    masked = mask_comments_and_strings(text)
+    masked = "".join(original if original in "\r\n" else char for original, char in zip(text, masked))
+    # Preserve include strings, but require the directive itself to be code.
+    code_lines = masked.splitlines()
+    includes = [(line, value) for line, value in include_lines(text)
+                if re.match(r"\s*#\s*include\b", code_lines[line - 1])]
     generated = [(line, value) for line, value in includes if value.endswith(".generated.h")]
-    if REFLECTION_RE.search(text) and not generated:
+    if REFLECTION_RE.search(masked) and not generated:
         findings.append(
             Finding(
                 "error",
@@ -79,7 +84,7 @@ def validate_generated_h(path: Path, text: str, root: Path) -> list[Finding]:
                     "generated.h must be the last include in the header.",
                 )
             )
-        uclass_idx = _uclass_line_index(text)
+        uclass_idx = _uclass_line_index(masked)
         for line_no, _ in generated:
             if line_no > uclass_idx:
                 findings.append(

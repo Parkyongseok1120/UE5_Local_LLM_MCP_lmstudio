@@ -67,6 +67,7 @@ def test_guidance_changes_and_write_build_outcomes() -> None:
     assert changes[1]["added"] == ["unreal/responsibility"]
     assert changes[1]["removed"] == ["design/lifetime"]
     assert changes[1]["omissionReasons"] == ["returned_project_target"]
+    assert [g["roundIndex"] for g in report["guidanceByRound"]] == [0, 1, 2]
 
     write_build = report["writeBuild"]
     assert write_build["replace_in_file"] == {"calls": 2, "outcomes": {"STALE_RECEIPT": 1, "ok": 1}}
@@ -77,6 +78,25 @@ def test_guidance_changes_and_write_build_outcomes() -> None:
 def test_rejects_non_assistant_message() -> None:
     with pytest.raises(ValueError):
         analyze_message(load_conversation(FIXTURE), 0)
+
+
+def test_failure_without_code_and_metadata_without_body_are_not_successes():
+    conversation = load_conversation(FIXTURE)
+    blocks = [b for step in conversation["messages"][1]["versions"][1]["steps"] for b in step.get("content", [])]
+    for block in blocks:
+        if block.get("type") != "toolCallResult":
+            continue
+        outer = json.loads(block["content"])
+        payload = json.loads(outer[0]["text"])
+        if block["toolCallRequestId"] == "r1":
+            payload.pop("content", None)
+        if payload.get("errorCode") == "BUILD_FAILED":
+            payload.pop("errorCode")
+        outer[0]["text"] = json.dumps(payload)
+        block["content"] = json.dumps(outer)
+    report = analyze_message(conversation, 1)
+    assert report["returnedLines"] == 40
+    assert report["writeBuild"]["build_unreal_project"]["outcomes"] == {"failed_without_code": 1}
 
 
 def test_cli_text_json_and_compare() -> None:

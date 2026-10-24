@@ -162,6 +162,7 @@ function calculateLineRangeReplacement({
   expectedRangeSha256,
   newText,
   maxRangeTextChars = Infinity,
+  maxPatchChars = Infinity,
 }) {
   const raw = Buffer.isBuffer(priorContent) ? priorContent : Buffer.from(String(priorContent ?? ""), "utf8");
   const content = raw.toString("utf8");
@@ -181,7 +182,7 @@ function calculateLineRangeReplacement({
     return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange,
       error: `lines ${startLine}-${endLine} no longer hash to expectedRangeSha256; currentRange holds their text now` };
   }
-  if (before.length > maxRangeTextChars) {
+  if (before.length > maxRangeTextChars || before.length + String(newText).length > maxPatchChars) {
     return { ok: false, errorCode: "PATCH_TOO_LARGE", currentRange,
       error: `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}` };
   }
@@ -202,11 +203,11 @@ function isLineRangePatch(patch) {
 }
 
 // One of the three patch forms: edits[], a line range, or one oldText.
-function calculatePatch(priorContent, patch, { maxRangeTextChars } = {}) {
+function calculatePatch(priorContent, patch, { maxRangeTextChars, maxPatchChars } = {}) {
   if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits });
   if (isLineRangePatch(patch)) {
     return calculateLineRangeReplacement({ priorContent, startLine: patch.startLine, endLine: patch.endLine,
-      expectedRangeSha256: patch.expectedRangeSha256, newText: patch.newText, maxRangeTextChars });
+      expectedRangeSha256: patch.expectedRangeSha256, newText: patch.newText, maxRangeTextChars, maxPatchChars });
   }
   return calculateReplacement({ priorContent, oldText: patch.oldText, newText: patch.newText,
     expectedOccurrences: patch.expectedOccurrences });

@@ -80,9 +80,9 @@ def validate_unreal_readiness(
     scope_paths: list[Path] | None = None,
     engine_identity: dict | None = None,
 ) -> list[Finding]:
-    findings = _collect_unreal_readiness(root, module_graph_path, lightweight=lightweight,
-        skip_include_path_checks=skip_include_path_checks, scope_paths=scope_paths)
     identity = engine_identity if engine_identity is not None else resolve_static_engine_identity(root)
+    findings = _collect_unreal_readiness(root, module_graph_path, lightweight=lightweight,
+        skip_include_path_checks=skip_include_path_checks, scope_paths=scope_paths, engine_identity=identity)
     return apply_engine_version_policy(findings, identity, load_contracts_or_none())
 
 
@@ -93,6 +93,7 @@ def _collect_unreal_readiness(
     lightweight: bool = False,
     skip_include_path_checks: bool = False,
     scope_paths: list[Path] | None = None,
+    engine_identity: dict | None = None,
 ) -> list[Finding]:
     if lightweight:
         return validate_unreal_readiness_lightweight(root)
@@ -215,6 +216,8 @@ def _collect_unreal_readiness(
                 scope_texts=texts,
             )
         )
+        from unreal_static_compile_rules import validate_compile_contracts
+        findings.extend(validate_compile_contracts(root, domain_context, engine_identity or {}))
         return findings
 
     include_owner_map = load_include_owner_map(module_graph_path) if module_graph_path else {}
@@ -262,6 +265,8 @@ def _collect_unreal_readiness(
     findings.extend(validate_interface_implementer_drift(root))
     findings.extend(validate_callback_function_pointer_drift(root))
     findings.extend(validate_multifile_callsite_drift(root))
+    from unreal_static_compile_rules import validate_compile_contracts
+    findings.extend(validate_compile_contracts(root, domain_context, engine_identity or {}))
     return findings
 
 def validate_unreal_readiness_lightweight(root: Path) -> list[Finding]:
@@ -410,7 +415,7 @@ def validate_unreal_readiness_report(
         analysisCoverage={
             "analysisKind": "lexical",
             "contracts": "available" if contracts else "unavailable",
-            "engineSource": "not_used",
+            "engineSource": "bounded_installed_header_lookup" if identity.get("status") == "observed" and identity.get("engineRoot") else "not_used",
             "scope": "scoped" if scope_paths is not None else "project",
             "limitations": ["regex/lexical analysis: macros, templates and conditional compilation are not expanded",
                             "absence of a finding is not proof of correctness"],

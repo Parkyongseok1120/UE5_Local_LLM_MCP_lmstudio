@@ -1,0 +1,736 @@
+{
+  "baselineRef": "f26c5f8",
+  "measuredAt": "2026-10-24",
+  "corpusSha256": "f3fdaaf73b075c825227640e372a2ce3609cb46bf01e857c0c0d7d842055713c",
+  "interpretation": "Weighted detection of targeted diagnostics in minimized broken/fixed cases. Not historical compilation, full-build success, or all-warning false-positive rate.",
+  "baseline": {
+    "schemaVersion": 1,
+    "metric": "targeted diagnostic present in broken and absent in fixed minimized source",
+    "engineVersion": "5.7.4",
+    "engineSource": "installed",
+    "cases": [
+      {
+        "id": "duplicate-reflected-enum",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "shadow-PlayerStateClass",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "inherited-ufunction",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "shadow-GameStateClass",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "missing-repnotify",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "replication-macro-include",
+        "occurrences": 5,
+        "targeted": true,
+        "brokenCodes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "const-override",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-Engine-InputMappingContext-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2665-FTimerManager--SetTimer",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2664-void-AController--Possess-APawn---",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C4458-Instigator",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2039-Load",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "member-UEnhancedInputComponent",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInputLocalPlayerSubsystem-h",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInput-EnhancedInputLocalPlayerSubsystem-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInput-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C4430-22",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "return-override",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2027-UCharacterMovementComponent",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-OutLifetimeProps",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2027-FDamageEvent",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-GameFramework-DamageEvents-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-DamageEvents-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2653-FCollisionObjectTypes",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "first-include",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2061-EInputValueType",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInput-Types-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2039-Health",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2445-TObjectPtr-UInputAction-",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "member-FKey",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "member-APlayerController",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-UEnhancedInputUser",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInputUser-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2653-EKeyEvent",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-KeysTypes-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-LookSensitivity",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-Engine-SoundBase-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-UInputMappingContext",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-bAutoDestroyWhenHealthLessThanOrEqualToZero",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      }
+    ],
+    "caseCount": 39,
+    "failedBuilds": 51,
+    "caughtCases": 1,
+    "caughtFailedBuilds": 5,
+    "fixedFalsePositives": 0,
+    "untargetedCases": [
+      "uncovered-C2665-FTimerManager--SetTimer",
+      "uncovered-C2664-void-AController--Possess-APawn---",
+      "uncovered-C4458-Instigator",
+      "uncovered-C2039-Load",
+      "uncovered-C4430-22",
+      "uncovered-C2027-UCharacterMovementComponent",
+      "uncovered-C2065-OutLifetimeProps",
+      "uncovered-C2027-FDamageEvent",
+      "uncovered-C2653-FCollisionObjectTypes",
+      "uncovered-C2061-EInputValueType",
+      "uncovered-C2039-Health",
+      "uncovered-C2445-TObjectPtr-UInputAction-",
+      "uncovered-C2065-UEnhancedInputUser",
+      "uncovered-C2653-EKeyEvent",
+      "uncovered-C2065-LookSensitivity",
+      "uncovered-C2065-UInputMappingContext",
+      "uncovered-C2065-bAutoDestroyWhenHealthLessThanOrEqualToZero"
+    ]
+  },
+  "candidate": {
+    "schemaVersion": 1,
+    "metric": "targeted diagnostic present in broken and absent in fixed minimized source",
+    "engineVersion": "5.7.4",
+    "engineSource": "installed",
+    "cases": [
+      {
+        "id": "duplicate-reflected-enum",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "REFLECTED_TYPE_NAME_DUPLICATE"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "shadow-PlayerStateClass",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "UPROPERTY_SHADOWS_PARENT"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "inherited-ufunction",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "INHERITED_UFUNCTION_REDECLARED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "shadow-GameStateClass",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "UPROPERTY_SHADOWS_PARENT"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "missing-repnotify",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "replication-macro-include",
+        "occurrences": 5,
+        "targeted": true,
+        "brokenCodes": [
+          "MISSING_CPP_SYMBOL_INCLUDE"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "const-override",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "include-Engine-InputMappingContext-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_PATH_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2665-FTimerManager--SetTimer",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2664-void-AController--Possess-APawn---",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C4458-Instigator",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2039-Load",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "member-UEnhancedInputComponent",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_MEMBER_NOT_OBSERVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "include-EnhancedInputLocalPlayerSubsystem-h",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_UNRESOLVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "include-EnhancedInput-EnhancedInputLocalPlayerSubsystem-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_UNRESOLVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "include-EnhancedInput-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_UNRESOLVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C4430-22",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "return-override",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2027-UCharacterMovementComponent",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-OutLifetimeProps",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2027-FDamageEvent",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-GameFramework-DamageEvents-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_PATH_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "include-DamageEvents-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_PATH_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2653-FCollisionObjectTypes",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "first-include",
+        "occurrences": 2,
+        "targeted": true,
+        "brokenCodes": [
+          "CPP_FIRST_INCLUDE_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2061-EInputValueType",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInput-Types-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_PATH_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2039-Health",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2445-TObjectPtr-UInputAction-",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "member-FKey",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_MEMBER_NOT_OBSERVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "member-APlayerController",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-UEnhancedInputUser",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-EnhancedInputUser-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_UNRESOLVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2653-EKeyEvent",
+        "occurrences": 2,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-KeysTypes-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_UNRESOLVED"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2065-LookSensitivity",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "include-Engine-SoundBase-h",
+        "occurrences": 1,
+        "targeted": true,
+        "brokenCodes": [
+          "ENGINE_INCLUDE_PATH_MISMATCH"
+        ],
+        "fixedCodes": [],
+        "caught": true
+      },
+      {
+        "id": "uncovered-C2065-UInputMappingContext",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      },
+      {
+        "id": "uncovered-C2065-bAutoDestroyWhenHealthLessThanOrEqualToZero",
+        "occurrences": 1,
+        "targeted": false,
+        "brokenCodes": [],
+        "fixedCodes": [],
+        "caught": false
+      }
+    ],
+    "caseCount": 39,
+    "failedBuilds": 51,
+    "caughtCases": 20,
+    "caughtFailedBuilds": 28,
+    "fixedFalsePositives": 0,
+    "untargetedCases": [
+      "uncovered-C2665-FTimerManager--SetTimer",
+      "uncovered-C2664-void-AController--Possess-APawn---",
+      "uncovered-C4458-Instigator",
+      "uncovered-C2039-Load",
+      "uncovered-C4430-22",
+      "uncovered-C2027-UCharacterMovementComponent",
+      "uncovered-C2065-OutLifetimeProps",
+      "uncovered-C2027-FDamageEvent",
+      "uncovered-C2653-FCollisionObjectTypes",
+      "uncovered-C2061-EInputValueType",
+      "uncovered-C2039-Health",
+      "uncovered-C2445-TObjectPtr-UInputAction-",
+      "uncovered-C2065-UEnhancedInputUser",
+      "uncovered-C2653-EKeyEvent",
+      "uncovered-C2065-LookSensitivity",
+      "uncovered-C2065-UInputMappingContext",
+      "uncovered-C2065-bAutoDestroyWhenHealthLessThanOrEqualToZero"
+    ]
+  }
+}

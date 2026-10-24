@@ -653,6 +653,10 @@ class EvidenceArchive {
     let limit = body.length, lineView = null;
     if (lines) {
       if (!selected) return { ok: false, errorCode: "line_range_requires_body_view", retryView: "body", evidenceId: id, version };
+      if (sourceFacts.offsetBytes > 0 && !(Number.isSafeInteger(sourceFacts.startLine) && sourceFacts.startLine > 0))
+        return { ok: false, errorCode: "source_line_origin_unknown", evidenceId: id, version,
+          currentFile: false, grantsMutation: false, retryMode: "character_offsets",
+          message: "This archived byte window has no verified source line origin. Read it by character offset or re-read the source by line range." };
       lineView = bodyLineRange(body, sourceFacts.startLine, lines.startLine, lines.endLine);
       if (!lineView.ok) return { ok: false, errorCode: "line_range_outside_body", availableLines: lineView.availableLines,
         evidenceId: id, version, currentFile: false, grantsMutation: false };

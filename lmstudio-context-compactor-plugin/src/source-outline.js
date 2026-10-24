@@ -79,8 +79,11 @@ function declarationEnd(lines, index) {
   return opened ? lines.length - 1 : index;
 }
 
-function sourceOutline(body, { path: sourcePath, startLine = 1 } = {}) {
+function sourceOutline(body, { path: sourcePath, startLine, offsetBytes, lineNumbers = false } = {}) {
   if (typeof body !== "string" || !body || !isProjectSourcePath(sourcePath)) return null;
+  if (offsetBytes > 0 && !(Number.isSafeInteger(startLine) && startLine > 0)) return null;
+  // The plugin is compiled/shipped independently of the MCP shared JS tree.
+  if (lineNumbers) body = body.replace(/^\d+\t/gmu, "");
   const first = Number.isSafeInteger(startLine) && startLine > 0 ? startLine : 1;
   const lines = codeLines(body), entries = [];
   let omitted = 0, chars = 0;

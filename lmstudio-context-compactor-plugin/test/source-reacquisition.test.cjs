@@ -150,12 +150,12 @@ test("the source outline lists reflected members and definitions with source-fil
   assert.ok(JSON.stringify(bounded.entries).length <= 1536 + 64);
 });
 
-function projectedRead(filePath, content, startLine = 1) {
+function projectedRead(filePath, content, startLine = 1, metadata = {}) {
   const history = Chat.from([{ role: "user", content: "Audit the source." }]);
   const request = { type: "function", id: "read-big", name: "read_file_range", arguments: { path: filePath, startLine } };
   history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
   history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id,
-    content: JSON.stringify({ ok: true, path: filePath, startLine, endLine: startLine + content.split("\n").length - 1, content }) }] }));
+    content: JSON.stringify({ ok: true, path: filePath, startLine, endLine: startLine + content.split("\n").length - 1, content, ...metadata }) }] }));
   const projected = new WorkingContext(scope).project(history, () => true, {}, 512);
   assert.equal(projected.changed, true);
   return JSON.parse(projected.history.getMessagesArray().at(-1).getToolCallResults()[0].content);
@@ -172,6 +172,24 @@ test("a body projection of project C++ keeps a short outline for a line-range re
   const engine = projectedRead("engine://Engine/Source/Runtime/Engine/Classes/MyActor.h", body);
   assert.equal(engine.sourceOutline, undefined);
   assert.doesNotMatch(engine.notice, /sourceOutline/);
+});
+
+test("real numbered source responses retain declaration names and original line spans", () => {
+  const body = [...HEADER, ...sourceLines(200, 15)].map((line, index) => `${index + 101}\t${line}`).join("\n");
+  const value = projectedRead("project://Source/Game/MyActor.h", body, 101, { lineNumbers: true });
+  assert.deepEqual(value.sourceOutline.entries.slice(0, 4),
+    ["104-114 class AMyActor", "108-110 UPROPERTY Health", "111-112 UFUNCTION ApplyDamage", "113 fn Tick"]);
+});
+
+test("byte windows without a source line origin cannot invent line numbers", () => {
+  const archive = new EvidenceArchive(scope);
+  const content = [...HEADER, ...sourceLines(200)].join("\n");
+  const record = archive.put(JSON.stringify({ ok: true, path: "project://Source/Game/MyActor.h", offsetBytes: 5000, content }),
+    { toolName: "read_file", callKey: "middle-byte-window" }).record;
+  const read = archive.readByHandle(archive.readHandleFor(record), 0, 4096, "body", { startLine: 1, endLine: 2 });
+  assert.equal(read.errorCode, "source_line_origin_unknown");
+  assert.equal(archive.readByHandle(archive.readHandleFor(record), 0, 4096, "body").ok, true);
+  assert.equal(sourceOutline(content, { path: "project://Source/Game/MyActor.h", offsetBytes: 5000 }), null);
 });
 
 test("archived conversation prose is labelled as this run's own earlier text, not a previous session", () => {

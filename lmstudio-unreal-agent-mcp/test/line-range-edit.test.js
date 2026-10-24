@@ -18,7 +18,7 @@ function payloadOf(result) {
   return result.structuredContent;
 }
 
-function fixture(t, files) {
+function fixture(t, files, env = {}) {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-line-range-"));
   const projectRoot = path.join(workspaceRoot, "RangeFixture");
   const projectFile = path.join(projectRoot, "RangeFixture.uproject");
@@ -29,7 +29,7 @@ function fixture(t, files) {
   const runtime = createDirectRuntime({
     workspaceRoot,
     configPath: path.join(workspaceRoot, "agent-mcp.json"),
-    env: { AGENT_STATE_ROOT: path.join(workspaceRoot, "state"), ALLOW_WRITE: "1" },
+    env: { AGENT_STATE_ROOT: path.join(workspaceRoot, "state"), ALLOW_WRITE: "1", ...env },
     getActiveProject: () => projectFile,
   });
   const read = (relative) => fs.readFileSync(path.join(projectRoot, relative), "utf8");
@@ -114,6 +114,19 @@ test("replace_in_file line range replaces exactly the proven lines and chains it
     expectedRangeSha256: sha("  More();"), newText: "", fileVersionReceipt: edited.fileVersionReceipt }));
   assert.equal(deleted.ok, true, JSON.stringify(deleted));
   assert.equal(f.read(A), "void A()\r\n{\r\n  New();\r\n}\r\n");
+});
+
+test("range patches enforce combined old/new limits in single and bundle writes", async (t) => {
+  const original = "a".repeat(80);
+  const f = fixture(t, { [A]: original }, { DIRECT_MAX_PATCH_CHARS: "100" });
+  const read = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 1, endLine: 1 }));
+  const patch = { path: `project://${A}`, startLine: 1, endLine: 1, expectedRangeSha256: read.rangeSha256,
+    expectedHash: read.sha256, newText: "b".repeat(80) };
+  const single = payloadOf(await f.runtime.callTool("replace_in_file", patch));
+  assert.equal(single.errorCode, "PATCH_TOO_LARGE");
+  const bundle = payloadOf(await f.runtime.callTool("apply_edit_bundle", { patches: [{ ...patch, path: A }] }));
+  assert.equal(bundle.errorCode, "PATCH_TOO_LARGE");
+  assert.equal(f.read(A), original);
 });
 
 test("a stale line range fails with the current range text and leaves the file unchanged", async (t) => {

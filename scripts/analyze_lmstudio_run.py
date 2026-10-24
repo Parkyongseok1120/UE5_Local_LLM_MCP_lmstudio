@@ -208,7 +208,8 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         if error_code:
             tool_errors[f"{name}:{error_code}"] += 1
         if name in write_build:
-            write_build[name][str(error_code) if error_code else "ok"] += 1
+            outcome = str(error_code) if error_code else "ok" if isinstance(payload, dict) and payload.get("ok") is True else "failed_without_code" if isinstance(payload, dict) and payload.get("ok") is False else "unknown_result"
+            write_build[name][outcome] += 1
         if name not in READ_TOOLS:
             continue
         if not isinstance(payload, dict) or error_code or payload.get("ok") is False:
@@ -216,7 +217,8 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
             continue
         path = str(payload.get("path") or (request.get("parameters") or {}).get("path") or "")
         span = _returned_line_span(payload)
-        if _source_kind(path) and span:
+        body = next((payload[key] for key in ("content", "text", "body", "code") if isinstance(payload.get(key), str)), None)
+        if _source_kind(path) and span and body is not None:
             file_spans.setdefault(path, []).append(span)
 
     files_by_kind = {kind: sorted(p for p in file_spans if _source_kind(p) == kind) for kind in SOURCE_SCHEMES}
@@ -275,6 +277,9 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         "rereadLines": returned_lines - unique_lines,
         "readFailures": dict(read_failures),
         "files": per_file,
+        "guidanceByRound": [{"roundIndex": e.get("roundIndex"), "selectedIds": list(e.get("selectedIds") or []),
+                             "reason": e.get("reason"), "omissionReasons": list(e.get("omissionReasons") or [])}
+                            for e in guidance_events],
         "guidanceChanges": guidance_changes,
         "writeBuild": {name: {"calls": sum(c.values()), "outcomes": dict(c)} for name, c in write_build.items()},
         "toolErrors": dict(tool_errors.most_common()),
@@ -358,6 +363,9 @@ def format_report(report: dict[str, Any]) -> str:
         delta = " ".join([*(f"+{x}" for x in g["added"]), *(f"-{x}" for x in g["removed"])]) or "(cleared)"
         omitted = f" omitted: {', '.join(g['omissionReasons'])}" if g["omissionReasons"] else ""
         out.append(f"    round {g['roundIndex']}: {delta} [{g['reason']}]{omitted}")
+    out.append("  guidance by round:")
+    for g in report["guidanceByRound"]:
+        out.append(f"    round {g['roundIndex']}: selected={g['selectedIds']} reason={g['reason']} omitted={g['omissionReasons']}")
     out.append("  write/build:")
     for name, entry in report["writeBuild"].items():
         outcomes = ", ".join(f"{k}={v}" for k, v in entry["outcomes"].items())

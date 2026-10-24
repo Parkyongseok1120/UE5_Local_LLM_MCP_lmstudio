@@ -40,6 +40,7 @@ class BuildChangeLedger {
       if (entry.paths.size > this.maxPaths) {
         entry.paths.delete(entry.paths.keys().next().value);
         entry.overflowed = true;
+        entry.overflowSequence = this.sequence;
       }
     }
     if (entry.paths.size) this.projects.set(key, entry);
@@ -63,7 +64,7 @@ class BuildChangeLedger {
     for (const [relative, recordedAt] of entry.paths) {
       if (recordedAt <= sequence) entry.paths.delete(relative);
     }
-    entry.overflowed = false;
+    entry.overflowed = entry.overflowSequence > sequence;
     if (!entry.paths.size) this.projects.delete(key);
   }
 }

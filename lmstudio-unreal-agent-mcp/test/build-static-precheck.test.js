@@ -230,4 +230,11 @@ test("change ledger keeps edits made during a build pending and ignores non-Sour
   const small = new BuildChangeLedger({ maxPaths: 2 });
   small.record(project, ["Source/L/1.cpp", "Source/L/2.cpp", "Source/L/3.cpp"]);
   assert.deepEqual(small.pending(project), { paths: ["Source/L/2.cpp", "Source/L/3.cpp"], sequence: 3, overflowed: true });
+  const cutoff = small.pending(project).sequence;
+  small.record(project, ["Source/L/4.cpp", "Source/L/5.cpp", "Source/L/6.cpp"]);
+  small.settle(project, cutoff);
+  assert.equal(small.pending(project).overflowed, true);
+  small.settle(project, small.pending(project).sequence);
+  assert.deepEqual(small.pending(project).paths, []);
+  assert.equal(small.pending(project).overflowed, false);
 });

@@ -1,0 +1,62 @@
+{
+  "mode": "architecture",
+  "existing": [
+    "Develop c89db44 owns the second-round guidance and claim checks.",
+    "The three completed task commits own the analyzer, archive read/outline, build ledger/precheck and range-edit changes.",
+    "Static validators own source scanning; engine_header_evidence owns bounded installed-engine lookup; existing write receipts and atomic writes own mutation safety."
+  ],
+  "proposed": [
+    "Integrate the three completed commits and correct reproduced integration issues.",
+    "Reconstruct a minimized corpus from 51 recorded failed builds; measure the unchanged validators before adding bounded, advisory compile-readiness rules.",
+    "Validate the integrated plugin, MCP, Python rules and packaging contracts, then commit without Unity worker binaries."
+  ],
+  "doNotDuplicate": [
+    "Reuse the archive/version contracts, line-number stripping, mutation locks and receipts, automation discovery, and bounded engine-header lookup.",
+    "Use existing static validator orchestration and finding format."
+  ],
+  "invariants": [
+    "An unknown engine declaration is not proof of absence; bounded semantic checks remain advisory.",
+    "Historical byte windows without a proven line origin must not acquire invented source line numbers.",
+    "Range edits preserve snapshot validation, byte/patch limits, and atomic commit behavior.",
+    "Corpus metrics identify their covered cases, repeated failures, baseline revision and unhandled failures.",
+    "Do not change local LM Studio settings, push commits, or include pre-existing Unity binaries."
+  ],
+  "impactedSurfaces": [
+    "Compactor archive/projection, identity and tests",
+    "Unreal MCP read/edit/build contracts and tests",
+    "Python static validator orchestration, engine evidence helpers, fixtures and package manifest",
+    "LM Studio run analyzer and synthetic tests"
+  ],
+  "validationPlan": [
+    "Reproduce reported integration defects before fixing and add focused regressions.",
+    "Run baseline and new rules on the same broken/fixed corpus pairs; test unresolved engine and inherited valid members.",
+    "Run TypeScript build and plugin tests, MCP tests with a process-local complete PATH, related Python tests and generated-contract/package checks.",
+    "Leave B4 settings experiments and three real-model audits for the installation/measurement stage; do not claim runtime speedups."
+  ],
+  "claims": [
+    {
+      "claim": "The existing validator runner already owns per-file and cross-file checks, and the bounded engine-header reader returns explicit incomplete-coverage information.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/unreal_static_runner.py:79",
+          "observation": "validate_unreal_readiness delegates to the common collector and version policy."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/engine_header_evidence.py:1096",
+          "observation": "Bounded lookups retain inheritance coverage and do not assert API absence."
+        }
+      ],
+      "counterEvidence": [],
+      "unknowns": [
+        "Actual model speed and compile success-rate gains require repeated post-installation runs."
+      ],
+      "behaviorPath": []
+    }
+  ]
+}

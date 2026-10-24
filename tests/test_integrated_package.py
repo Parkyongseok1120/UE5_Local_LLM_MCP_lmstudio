@@ -139,7 +139,7 @@ def test_staged_local_engine_lookup_imports_only_packaged_runtime(tmp_path: Path
         shutil.copy2(ROOT / relative, destination)
     result = subprocess.run([sys.executable, "-I", "-c",
         "import sys; sys.path.insert(0, sys.argv[1]); import direct_rag_engine_local; "
-        "import engine_header_evidence; import project_name_resolver; "
+        "import engine_header_evidence; import project_name_resolver; import unreal_static_compile_rules; "
         "assert direct_rag_engine_local.engine_local_symbol; print('staged local lookup imported')",
         str(tmp_path / "scripts")], cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr

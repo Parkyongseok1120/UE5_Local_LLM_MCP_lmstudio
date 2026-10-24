@@ -595,7 +595,8 @@ class WorkingContext {
         // A dropped project source body keeps its declaration spans, so one
         // span can be re-read with read_file_range instead of the whole file.
         let outline = bodyFirst && boundedBody.length > maxChars
-          ? sourceOutline(boundedBody, { path: parsed.path ?? identity.path, startLine: parsed.startLine }) : null;
+          ? sourceOutline(boundedBody, { path: parsed.path ?? identity.path, startLine: parsed.startLine,
+            offsetBytes: parsed.offsetBytes, lineNumbers: parsed.lineNumbers === true }) : null;
         if (outline && JSON.stringify(outline).length > originalEnvelope.length / 4) outline = null;
         let projectedEnd = Math.min(maxChars, semanticBody.length);
         const directSemanticBody = originalEnvelope.trim() === JSON.stringify(parsed);
