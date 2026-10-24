@@ -1,0 +1,50 @@
+{
+  "name": "synthetic analyzer fixture",
+  "messages": [
+    {"currentlySelected": 0, "versions": [{"type": "singleStep", "role": "user", "content": [{"type": "text", "text": "Audit the sample module."}]}]},
+    {
+      "currentlySelected": 1,
+      "versions": [
+        {"type": "multiStep", "role": "assistant", "steps": []},
+        {
+          "type": "multiStep",
+          "role": "assistant",
+          "steps": [
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_runtime_identity\",\"loadedBuildId\":\"build-test-1\"}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":0,\"selectedIds\":[\"core/proof\",\"design/lifetime\"],\"reason\":\"included\",\"omissionReasons\":[\"shared_selection_bound\"]}"},
+            {"type": "contentBlock", "style": {"type": "thinking", "ended": true}, "content": [{"type": "text", "text": "Read the header first."}]},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "r1", "name": "read_file", "parameters": {"path": "project://Source/Sample/Sample.h"}},
+              {"type": "toolCallResult", "toolCallRequestId": "r1", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"path\\\":\\\"project://Source/Sample/Sample.h\\\",\\\"startLine\\\":1,\\\"endLine\\\":40,\\\"totalLines\\\":40}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":0,\"finishReason\":\"toolCalls\",\"predictionStats\":{\"promptTokensCount\":1000,\"predictedTokensCount\":100},\"predictionUsage\":{\"reasoningTokensCount\":50},\"modelPrefillMs\":2000,\"modelGenerationElapsedMs\":3000,\"executionCost\":{\"executionElapsedMs\":5500}}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":1,\"selectedIds\":[\"core/proof\",\"design/lifetime\"],\"reason\":\"sticky_kept\",\"omissionReasons\":[]}"},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "r2", "name": "read_file_range", "parameters": {"path": "project://Source/Sample/Sample.h", "startLine": 31, "endLine": 50}},
+              {"type": "toolCallRequest", "toolCallRequestId": "r3", "name": "read_symbol", "parameters": {"path": "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", "symbol": "AActor::Tick"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "r4", "name": "read_symbol", "parameters": {"path": "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", "symbol": "AActor::Missing"}},
+              {"type": "toolCallResult", "toolCallRequestId": "r2", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"path\\\":\\\"project://Source/Sample/Sample.h\\\",\\\"range\\\":{\\\"unit\\\":\\\"line\\\",\\\"start\\\":31,\\\"end\\\":40,\\\"total\\\":40}}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "r3", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true,\\\"path\\\":\\\"engine://Engine/Source/Runtime/Engine/Private/Actor.cpp\\\",\\\"startLine\\\":100,\\\"endLine\\\":129}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "r4", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"SYMBOL_NOT_FOUND\\\"}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":1,\"finishReason\":\"toolCalls\",\"predictionStats\":{\"promptTokensCount\":2000,\"predictedTokensCount\":5000},\"predictionUsage\":{\"reasoningTokensCount\":4500},\"modelPrefillMs\":4000,\"modelGenerationElapsedMs\":20000,\"executionCost\":{\"executionElapsedMs\":30000}}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"reasoning_recovery_scheduled\",\"attempt\":1}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"working_context_projection\",\"roundIndex\":2,\"changed\":true,\"reason\":\"measured_input_pressure\",\"inputTokens\":3000}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"working_context_projection\",\"roundIndex\":2,\"changed\":false,\"reason\":\"below_trigger\",\"inputTokens\":3000}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":2,\"selectedIds\":[\"core/proof\",\"unreal/responsibility\"],\"reason\":\"included\",\"omissionReasons\":[\"returned_project_target\"]}"},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "w1", "name": "replace_in_file", "parameters": {"path": "project://Source/Sample/Sample.cpp"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "w2", "name": "replace_in_file", "parameters": {"path": "project://Source/Sample/Sample.cpp"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "b1", "name": "build_unreal_project", "parameters": {}},
+              {"type": "toolCallResult", "toolCallRequestId": "w1", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"STALE_RECEIPT\\\"}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "w2", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "b1", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"BUILD_FAILED\\\"}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":2,\"finishReason\":\"eosFound\",\"predictionStats\":{\"promptTokensCount\":3000,\"predictedTokensCount\":200},\"predictionUsage\":{\"reasoningTokensCount\":100},\"modelPrefillMs\":6000,\"modelGenerationElapsedMs\":1000,\"executionCost\":{\"executionElapsedMs\":42000}}"},
+            {"type": "contentBlock", "content": [{"type": "text", "text": "Sample audit 완료."}]}
+          ]
+        }
+      ]
+    }
+  ]
+}
