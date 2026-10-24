@@ -666,3 +666,19 @@ export function referenceSnapshot(state: ReferenceState, history: Chat): Referen
   snapshot.autoSignals = autoSignals;
   return snapshot;
 }
+
+/** Audit checkpoint: the per-file checks a submitted evidence packet records,
+ * one per verified claim type and project source location it cites. The read
+ * ledger ties each to the source version it was done against, so a check
+ * stays valid only while that file's hash is unchanged. */
+export function auditChecksFromPacket(packet: unknown): Array<{ location: string; check: string; claim: string }> {
+  const claims = (packet as { claims?: unknown })?.claims;
+  if (!Array.isArray(claims)) return [];
+  return claims.flatMap(claim => {
+    const value = claim as { claimType?: unknown; proofLevel?: unknown; claim?: unknown; evidence?: unknown };
+    if (typeof value?.claimType !== "string" || !value.claimType || value.proofLevel === "Proposed" || !Array.isArray(value.evidence)) return [];
+    return (value.evidence as Array<{ kind?: unknown; location?: unknown }>)
+      .filter(item => item?.kind === "project_source" && typeof item.location === "string" && item.location)
+      .map(item => ({ location: String(item.location), check: value.claimType as string, claim: String(value.claim || "") }));
+  });
+}

@@ -86,7 +86,7 @@ export class DeliveryController {
     this.observe(captured, timedOut);
     this.observation = { ...this.observation, delivery, objectiveSatisfied };
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
-      || ["research_recovery_complete", "research_recovery_exhausted"].includes(trigger || ""));
+      || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence"].includes(trigger || ""));
     const partial = needsPartial ? evidenceBackedPartialReport(history, captured.messages,
       delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null;
     const outcome = classifyExecutionOutcome({ ...this.observation, partialReportDelivered: needsPartial });

@@ -74,6 +74,9 @@ export const workingContextModule = require("./working-context.js") as {
     summaryRefs(): Set<string>;
     verifiedNoteRefs(note: unknown): Set<string>;
     summaryEvidence(maxItems?: number, maxChars?: number): Array<Record<string, unknown>>;
+    readLedger: ReadLedgerLike;
+    archiveRefFor(request: ToolCallRequest, result: unknown): ArchiveLocator | null;
+    archiveLocator(ref: { evidenceId: string; version: string } | undefined, withOutline?: boolean): ArchiveLocator | null;
   };
   serialize(history: Chat): Array<unknown>;
   validateSemanticNote(text: string, refs: Set<string>, generation: number,
@@ -85,6 +88,49 @@ export const { REASONING_SEPARATOR } = require("./continuity-text.js") as { REAS
 
 export const toolMemory = require("./compaction-tool-memory.js") as {
   decodeToolResultRecord(content: unknown): { value?: Record<string, unknown>; error?: string };
+};
+
+export type ArchiveLocator = { evidenceId: string; version: string; readHandle: string; outline?: string[] };
+/** What one source read, projection or archive page covers of one path+version. */
+export type ReadFacts = { path: string; key: string; sourceVersion: string; lines: [number, number] | null;
+  bytes: [number, number] | null; complete: boolean; totalLines: number | null; size: number | null; chars: number;
+  partialPage?: boolean };
+export type LedgerEntry = { path: string; key: string; sourceVersion: string; lineRanges: Array<[number, number]>;
+  byteRanges: Array<[number, number]>; complete: boolean; totalLines: number | null; size: number | null; chars: number;
+  firstRound: number | null; firstTurn: string; lastRound: number | null; deliveries: number; redundant: number;
+  duplicatedChars: number; archivePages: number; checks: Array<{ check: string; round: number | null; claim?: string }>;
+  archiveRef?: { evidenceId: string; version: string } };
+export type ReadLedgerLike = {
+  readonly size: number;
+  get(path: string, sourceVersion: string): LedgerEntry | null;
+  latestFor(path: string): LedgerEntry | null;
+  entries(): LedgerEntry[];
+  classify(facts: ReadFacts | null): { status: "unknown" | "new_file" | "new_version" | "new_range" | "redundant" | "narrower";
+    entry: LedgerEntry | null; previous?: LedgerEntry | null };
+  record(facts: ReadFacts | null, options?: { round?: number | null; turn?: string; toolName?: string;
+    archiveRef?: { evidenceId: string; version: string } | null }): LedgerEntry | null;
+  attachArchiveRef(facts: ReadFacts | null, archiveRef: { evidenceId: string; version: string } | null): LedgerEntry | null;
+  noteRedundant(entry: LedgerEntry | null, round: number | null, duplicatedChars?: number, extra?: Record<string, unknown>): void;
+  notePage(facts: ReadFacts | null, round: number | null): boolean;
+  recordCheck(location: string, check: string, round?: number | null, claim?: string): boolean;
+  rememberResultSize(requestKey: string, bytes: number): void;
+  knownResultBytes(requestKey: string): number | undefined;
+  stats(): Record<string, number>;
+  events: Array<Record<string, unknown>>;
+  toJSON(): Record<string, unknown>;
+  load(value: unknown): boolean;
+};
+export const readLedgerModule = require("./read-ledger.js") as {
+  ReadLedger: new () => ReadLedgerLike;
+  SOURCE_READ_TOOLS: Set<string>;
+  readFacts(value: unknown): ReadFacts | null;
+  projectionFacts(value: unknown): ReadFacts | null;
+  archivePageFacts(value: unknown): ReadFacts | null;
+  pathKey(value: unknown): string;
+  unchangedReadNotice(entry: LedgerEntry, locator: ArchiveLocator | null): string;
+  deliveredText(entry: LedgerEntry): string;
+  ledgerFact(ledger: ReadLedgerLike, options: { observations?: Array<Record<string, unknown>>; excerpts?: Set<string>;
+    handles?: Map<string, string>; reportNow?: boolean }): string | null;
 };
 
 export const inputAvailability = require("./input-availability.js") as {

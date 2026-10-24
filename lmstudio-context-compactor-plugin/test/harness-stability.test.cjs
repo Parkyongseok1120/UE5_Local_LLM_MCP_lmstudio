@@ -149,9 +149,13 @@ test("body paging preserves exact Unicode content, canonical identity and distin
   const projection = { archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash },
     bodyField: "content", projectedBodyRanges: [result.returnedRange], bodyRangeUnit: "utf16_code_units" };
   assert.equal(recoveryCoverageDescriptors(result)[0].key, projectionCoverageDescriptors(projection)[0].key);
+  // A handle minted by the record's own lineage still names it once a child
+  // lineage is granted membership; without membership it names nothing.
   archive.setAccess("child", [[record.evidenceId, record.archivedBodyHash]]);
-  assert.equal(archive.readByHandle(handle).errorCode, "read_handle_unavailable");
+  assert.equal(archive.readByHandle(handle).ok, true);
   assert.equal(archive.readByHandle(archive.readHandleFor(record)).ok, true);
+  archive.setAccess("stranger", []);
+  assert.equal(archive.readByHandle(handle).errorCode, "read_handle_unavailable");
 });
 
 test("public archive selectors preserve legacy catalog and reject mixed identities", async () => {

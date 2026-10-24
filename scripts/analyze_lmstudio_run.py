@@ -2,8 +2,10 @@
 
 Reads ``~/.lmstudio/conversations/<id>.conversation.json`` and reports per-run
 metrics: round timing, token totals, tool calls, projections, reasoning spikes,
-source files read (and re-read), guidance selection changes, and write/build
-outcomes. ``--json`` prints the same data as JSON; ``--compare`` adds a
+source files read (and re-read), body deliveries per file (by path + sha + range,
+across source reads and archive pages, with redundant same-version deliveries,
+re-reads right after a compaction, cross-evidence version mismatches and
+invented read handles), guidance selection changes, and write/build outcomes. ``--json`` prints the same data as JSON; ``--compare`` adds a
 side-by-side table against a second conversation.
 """
 
@@ -20,6 +22,12 @@ from typing import Any
 READ_TOOLS = {"read_file", "read_file_range", "read_symbol"}
 WRITE_BUILD_TOOLS = ("replace_in_file", "apply_edit_bundle", "write_file", "build_unreal_project")
 REASONING_SPIKE_TOKENS = 4000
+ARCHIVE_READ_TOOL = "evidence_first_read_context"
+# Source code runs about 0.3 tokens per character; this only scales chars.
+CHARS_PER_TOKEN_ESTIMATE = 3.5
+# A re-read this many rounds after a compaction event counts as compaction-driven.
+REREAD_AFTER_COMPACTION_ROUNDS = 2
+HANDLE_ERRORS = {"read_handle_unavailable", "invalid_read_handle"}
 SOURCE_SCHEMES = {"project": "project://", "engine": "engine://"}
 
 
@@ -133,6 +141,11 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
     build_ids: list[str] = []
     requests: dict[str, dict[str, Any]] = {}
     results: list[tuple[str, Any]] = []
+    result_rounds: list[int] = []
+    raw_texts: list[str] = []
+    result_text_index: list[int] = []
+    ledger_events: list[dict[str, Any]] = []
+    report_now_events: list[dict[str, Any]] = []
     tool_calls: Counter[str] = Counter()
     thinking_blocks = 0
 
@@ -143,8 +156,13 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
             if not isinstance(event, dict):
                 continue
             name = event.get("event")
+            raw_texts.append(str(step.get("debugInfo")))
             if name == "direct_round_observation":
                 rounds.append(event)
+            elif name == "read_ledger":
+                ledger_events.append(event)
+            elif name == "report_now":
+                report_now_events.append(event)
             elif name == "working_context_projection":
                 projections.append(event)
             elif name == "reasoning_recovery_scheduled":
@@ -165,6 +183,10 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
                 elif item_type == "toolCallResult":
                     request_id = str(item.get("toolCallRequestId"))
                     results.append((request_id, _tool_result_payload(item.get("content"))))
+                    # Results precede their round's direct_round_observation event.
+                    result_rounds.append(len(rounds))
+                    result_text_index.append(len(raw_texts))
+                    raw_texts.append(str(item.get("content")))
 
     # Timing and tokens. executionElapsedMs is cumulative across the run.
     prefill_ms = sum(r.get("modelPrefillMs") or 0 for r in rounds)
@@ -250,6 +272,9 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
             })
         previous = selected
 
+    deliveries = delivery_metrics(requests, results, result_rounds, raw_texts, result_text_index,
+                                  [p.get("roundIndex") for p in changed_projections], ledger_events)
+
     return {
         "messageIndex": message_index,
         "loadedBuildIds": sorted(set(build_ids)),
@@ -283,6 +308,167 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         "guidanceChanges": guidance_changes,
         "writeBuild": {name: {"calls": sum(c.values()), "outcomes": dict(c)} for name, c in write_build.items()},
         "toolErrors": dict(tool_errors.most_common()),
+        "deliveries": deliveries,
+        "redundantDeliveries": deliveries["redundant"],
+        "duplicatedTokensEstimate": deliveries["duplicatedTokensEstimate"],
+        "rereadsAfterCompaction": deliveries["rereadsAfterCompaction"],
+        "reportNowEvents": [{"roundIndex": e.get("roundIndex"), "trigger": e.get("trigger"), "finalize": e.get("finalize")}
+                            for e in report_now_events],
+    }
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _covers(ranges: list[tuple[int, int]], target: tuple[int, int] | None) -> bool:
+    return target is not None and any(start <= target[0] and end >= target[1] for start, end in ranges)
+
+
+def _body(payload: dict[str, Any]) -> str | None:
+    return next((payload[key] for key in ("content", "text", "body", "code") if isinstance(payload.get(key), str)), None)
+
+
+def _delivery(name: str, payload: Any) -> dict[str, Any] | None:
+    """One body returned to the model: its path, sha, range and size.
+
+    Source reads give lines (or a byte window); an archive page gives the lines
+    it returned, or its record's source range when it returned the whole body.
+    A partial character page of a body has no line range of its own."""
+    if not isinstance(payload, dict) or payload.get("ok") is False or payload.get("errorCode"):
+        return None
+    body = _body(payload)
+    if body is None:
+        return None
+    if name in READ_TOOLS:
+        path, sha, facts, source = payload.get("path"), payload.get("sha256") or payload.get("sourceVersion"), payload, "source"
+    elif name == ARCHIVE_READ_TOOL and payload.get("kind") == "historical_evidence_range":
+        identity = payload.get("sourceIdentity") or {}
+        facts = payload.get("sourceFacts") or {}
+        path, sha, source = identity.get("path"), payload.get("sourceVersion"), "archive"
+    else:
+        return None
+    if not isinstance(path, str) or not path or not isinstance(sha, str) or not sha:
+        return None
+    lines = _returned_line_span(facts)
+    total = _int(facts.get("totalLines"))
+    offset, nxt, size = _int(facts.get("offsetBytes")), _int(facts.get("nextOffsetBytes")), _int(facts.get("size"))
+    byte_range = (offset, nxt - 1) if offset is not None and nxt is not None and nxt > offset and lines is None else None
+    complete = bool(lines and lines[0] == 1 and total and lines[1] >= total) or bool(
+        byte_range and offset == 0 and size is not None and nxt >= size and facts.get("hasMore") is not True)
+    if source == "archive":
+        returned = payload.get("returnedLines")
+        if isinstance(returned, list) and len(returned) == 2 and all(_int(x) is not None for x in returned) and returned[1] >= returned[0]:
+            lines, byte_range, complete = (returned[0], returned[1]), None, False
+        elif payload.get("bodyComplete") is not True:
+            lines, byte_range, complete = None, None, False
+    return {"path": path, "sha": sha.lower(), "lines": lines, "bytes": byte_range, "complete": complete,
+            "chars": len(body), "source": source}
+
+
+def delivery_metrics(requests: dict[str, dict[str, Any]], results: list[tuple[str, Any]], result_rounds: list[int],
+                     raw_texts: list[str], result_text_index: list[int], projection_rounds: list[Any],
+                     ledger_events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per file: bodies delivered by path + sha + range, and which were redundant.
+
+    A delivery is redundant when an earlier delivery of the same path and sha
+    already covered its range (a whole-file delivery covers every range). A
+    result the plugin replaced with an UNCHANGED fact (read_ledger event) was
+    not a body the model received and is counted as suppressed instead.
+
+    An invented handle is a failed handle read whose handle appears nowhere
+    earlier in this transcript. Handles shown only inside a compacted model
+    input are not in the transcript, so this is an upper bound."""
+    replaced = {str(call) for event in ledger_events for call in event.get("replacedCallIds") or []}
+    compactions = sorted(r for r in projection_rounds if isinstance(r, int))
+    owners: dict[str, tuple[str, str]] = {}
+    for _, payload in results:
+        if isinstance(payload, dict) and isinstance(payload.get("evidenceId"), str) and isinstance(payload.get("version"), str):
+            owners.setdefault(payload["version"], (payload["evidenceId"], str((payload.get("sourceIdentity") or {}).get("path") or "")))
+    state: dict[tuple[str, str], dict[str, Any]] = {}
+    files: dict[str, dict[str, Any]] = {}
+    totals = Counter()
+    mismatches: list[dict[str, Any]] = []
+    invented: list[dict[str, Any]] = []
+    for index, (request_id, payload) in enumerate(results):
+        request = requests.get(request_id) or {}
+        name = str(request.get("name"))
+        params = request.get("parameters") or {}
+        round_index = result_rounds[index] if index < len(result_rounds) else None
+        error = payload.get("errorCode") if isinstance(payload, dict) else None
+        if name == ARCHIVE_READ_TOOL and error == "version_mismatch":
+            version = str(params.get("version") or "")
+            owner = (payload.get("versionBelongsTo") or {}) if isinstance(payload, dict) else {}
+            owner_id = owner.get("evidenceId") or (owners.get(version) or (None, None))[0]
+            cross = bool(owner_id and owner_id != params.get("evidenceId"))
+            mismatches.append({"roundIndex": round_index, "evidenceId": str(params.get("evidenceId") or "")[:11],
+                               "version": version[:8], "crossEvidence": cross,
+                               "versionBelongsTo": str(owner.get("path") or (owners.get(version) or (None, ""))[1] or "") or None})
+        if name == ARCHIVE_READ_TOOL and error in HANDLE_ERRORS:
+            handle = str(params.get("readHandle") or "")
+            position = result_text_index[index] if index < len(result_text_index) else len(raw_texts)
+            if handle and not any(handle in text for text in raw_texts[:position]):
+                invented.append({"roundIndex": round_index, "readHandle": handle})
+        delivery = _delivery(name, payload)
+        if delivery is None:
+            continue
+        key = (delivery["path"], delivery["sha"])
+        known = state.setdefault(key, {"lines": [], "bytes": [], "complete": False, "delivered": False})
+        entry = files.setdefault(delivery["path"], {"path": delivery["path"], "deliveries": 0, "redundant": 0,
+                                                    "duplicatedChars": 0, "suppressed": 0, "rereadsAfterCompaction": 0,
+                                                    "shas": Counter(), "ranges": Counter()})
+        rng = f"lines {delivery['lines'][0]}-{delivery['lines'][1]}" if delivery["lines"] else \
+            f"bytes {delivery['bytes'][0]}-{delivery['bytes'][1] + 1}" if delivery["bytes"] else "chars (partial page)"
+        if str(request_id) in replaced:
+            entry["suppressed"] += 1
+            totals["suppressed"] += 1
+            continue
+        redundant = known["delivered"] and (known["complete"] or _covers(known["lines"], delivery["lines"])
+                                            or _covers(known["bytes"], delivery["bytes"]))
+        entry["deliveries"] += 1
+        entry["shas"][delivery["sha"][:8]] += 1
+        entry["ranges"][f"{delivery['sha'][:8]} {rng}"] += 1
+        totals[f"{delivery['source']}Deliveries"] += 1
+        totals["deliveries"] += 1
+        if delivery["source"] == "source" and known["delivered"]:
+            totals["rereads"] += 1
+        if redundant:
+            entry["redundant"] += 1
+            entry["duplicatedChars"] += delivery["chars"]
+            totals["redundant"] += 1
+            totals["duplicatedChars"] += delivery["chars"]
+            after = round_index is not None and any(0 <= round_index - r <= REREAD_AFTER_COMPACTION_ROUNDS for r in compactions)
+            if delivery["source"] == "source" and after:
+                entry["rereadsAfterCompaction"] += 1
+                totals["rereadsAfterCompaction"] += 1
+        known["delivered"] = True
+        known["complete"] = known["complete"] or delivery["complete"]
+        if delivery["lines"]:
+            known["lines"].append(delivery["lines"])
+        if delivery["bytes"]:
+            known["bytes"].append(delivery["bytes"])
+    per_file = []
+    for entry in sorted(files.values(), key=lambda item: (-item["duplicatedChars"], item["path"])):
+        per_file.append({**entry, "shas": dict(entry["shas"]), "ranges": dict(entry["ranges"].most_common()),
+                         "duplicatedTokensEstimate": round(entry["duplicatedChars"] / CHARS_PER_TOKEN_ESTIMATE)})
+    return {
+        "deliveries": totals["deliveries"],
+        "sourceDeliveries": totals["sourceDeliveries"],
+        "archiveDeliveries": totals["archiveDeliveries"],
+        "sourceRereads": totals["rereads"],
+        "redundant": totals["redundant"],
+        "duplicatedChars": totals["duplicatedChars"],
+        "duplicatedTokensEstimate": round(totals["duplicatedChars"] / CHARS_PER_TOKEN_ESTIMATE),
+        "rereadsAfterCompaction": totals["rereadsAfterCompaction"],
+        "suppressedByLedger": totals["suppressed"],
+        "versionMismatches": len(mismatches),
+        "crossEvidenceVersionMismatches": sum(1 for item in mismatches if item["crossEvidence"]),
+        "versionMismatchDetails": mismatches,
+        "inventedHandles": len(invented),
+        "inventedHandleDetails": invented,
+        "ledgerRedundantRereads": sum(int(e.get("redundantRereads") or 0) for e in ledger_events),
+        "ledgerArchiveRepages": sum(int(e.get("archiveRepages") or 0) for e in ledger_events),
+        "files": per_file,
     }
 
 
@@ -316,6 +502,9 @@ COMPARE_FIELDS = (
     ("engineFiles", "engine files"),
     ("returnedLines", "returned lines"),
     ("rereadLines", "re-read lines"),
+    ("redundantDeliveries", "redundant deliveries"),
+    ("duplicatedTokensEstimate", "duplicated tokens est"),
+    ("rereadsAfterCompaction", "re-reads after compaction"),
 )
 
 
@@ -358,6 +547,28 @@ def format_report(report: dict[str, Any]) -> str:
         out.append(f"    {f['path']}: {f['reads']} reads, {f['returnedLines']} lines" + (f", {reread} re-read" if reread else ""))
     if report["readFailures"]:
         out.append(f"  read failures: {report['readFailures']}")
+    d = report["deliveries"]
+    out.append(
+        f"  body deliveries: {d['deliveries']} ({d['sourceDeliveries']} source, {d['archiveDeliveries']} archive), "
+        f"{d['redundant']} redundant, ~{d['duplicatedTokensEstimate']} duplicated tokens ({d['duplicatedChars']} chars), "
+        f"{d['sourceRereads']} source re-reads of a delivered version, {d['rereadsAfterCompaction']} within "
+        f"{REREAD_AFTER_COMPACTION_ROUNDS} rounds after a compaction"
+    )
+    out.append(
+        f"  suppressed by ledger: {d['suppressedByLedger']}, ledger redundant re-reads: {d['ledgerRedundantRereads']}, "
+        f"archive re-pages: {d['ledgerArchiveRepages']}, report_now: {len(report['reportNowEvents'])}"
+    )
+    out.append(
+        f"  version mismatches: {d['versionMismatches']} ({d['crossEvidenceVersionMismatches']} with another record's version), "
+        f"invented handles: {d['inventedHandles']}"
+    )
+    for f in d["files"]:
+        if not f["redundant"] and not f["suppressed"]:
+            continue
+        out.append(
+            f"    {f['path']}: {f['deliveries']} deliveries, {f['redundant']} redundant (~{f['duplicatedTokensEstimate']} tokens), "
+            f"{f['rereadsAfterCompaction']} after compaction" + (f", {f['suppressed']} suppressed" if f["suppressed"] else "")
+        )
     out.append(f"  guidance selection changes: {len(report['guidanceChanges'])}")
     for g in report["guidanceChanges"]:
         delta = " ".join([*(f"+{x}" for x in g["added"]), *(f"-{x}" for x in g["removed"])]) or "(cleared)"

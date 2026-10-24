@@ -180,9 +180,12 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
+/** Headroom over a known earlier result size: metadata and a grown file. */
+const KNOWN_SIZE_SLACK = 1.25;
+const KNOWN_SIZE_MARGIN_BYTES = 512;
 
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
-  args: Record<string, unknown>) {
+  args: Record<string, unknown>, knownResultBytes?: number) {
   const contract = readResultContract(tool);
   const { field } = contract;
   // Character contracts allow for UTF-8/JSON expansion and envelope overhead.
@@ -195,9 +198,14 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const adaptive = field !== null && contract.adaptiveDefault && args[field] === undefined
     && contract.defaultValue > DEFAULT_READ_FLOOR_BYTES;
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
+  // The same unchanged request returned this many bytes before: reserve about
+  // that, not a half-batch share, so parallel peers are not starved.
+  const known = field === "byteBudget" && Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0
+    ? Math.ceil(knownResultBytes! * KNOWN_SIZE_SLACK) + KNOWN_SIZE_MARGIN_BYTES : null;
   const requested = field ? tokens(args[field] === undefined
-    ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : Number(args[field])) : 3072;
+    ? known !== null ? Math.min(contract.defaultValue, known)
+      : adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
+    : known !== null ? Math.min(Number(args[field]), known) : Number(args[field])) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;

@@ -6189,3 +6189,49 @@ test("the research path that ends on unexecuted tool text delivers an evidence-b
   assert.equal(delivered.reason, "raw_tool_intent_not_retried");
   assert.ok(ctl.blocks.some(block => /부분 조사 보고/u.test(block.text)));
 });
+
+// Run 1792842246501: the same unchanged file was read again and again. Each
+// repeat enters the input as an UNCHANGED fact; after K rounds with no new
+// file, version or range the model is told to report now, and the second time
+// research ends with one tool-free report.
+test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then a tool-free report", async () => {
+  const history = Chat.from([{ role: "user", content: "Audit the character code." }]);
+  const tool = { name: "read_file", description: "Read", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" };
+  const filePath = "project://Source/Game/LedgerCharacter.cpp";
+  const body = Array.from({ length: 60 }, (_, i) => `// line ${i + 1} ${"q".repeat(40)}`).join("\n");
+  let calls = 0; const inputs = [], toolCounts = [];
+  const model = { identifier: "ledger-fixture", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, tools, options) {
+      inputs.push(chat.toString()); toolCounts.push(tools.length); calls++;
+      if (!tools.length) {
+        options.onMessage(ChatMessage.from({ role: "assistant", content: "Final report from the delivered evidence." }));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound" } }); return;
+      }
+      const request = { id: `ledger-${calls}`, type: "function", name: "read_file", arguments: { path: filePath } };
+      await options.guardToolCall(0, 7, { toolCallRequest: request, allow() {}, allowAndOverrideParameters() {}, deny() {} });
+      options.onToolCallRequestFinalized(0, 7, { toolCallRequest: request });
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: filePath, canonicalProject: "C:/Fixture/Fixture.uproject", sha256: "3c".repeat(32),
+          startLine: 1, endLine: 60, totalLines: 60, content: body }) }] }));
+      options.onRoundEnd(0); throw options.signal.reason;
+    } };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", toolStagnationAction: "warn",
+    toolStagnationRounds: 20, noNewEvidenceRounds: 3, maxResearchRounds: 30 }, [tool]);
+  await handlePredictionLoop(ctl);
+  const ledger = ctl.debugValues.filter(value => value.event === "read_ledger");
+  assert.equal(ledger[0].newDeliveries, 1);
+  assert.equal(ledger[1].redundantRereads, 1);
+  assert.equal(ledger[1].bodiesReplaced, 1);
+  assert.deepEqual(ledger[1].replacedCallIds, ["ledger-2"], "the analyzer learns which transcript bodies the model did not get");
+  assert.match(inputs[2], /UNCHANGED: project:\/\/Source\/Game\/LedgerCharacter\.cpp sha 3c3c3c3c is the same version already returned in round 1/);
+  assert.equal(inputs[2].split("// line 17 ").length - 1, 1, "the body is delivered once");
+  const reportNow = ctl.debugValues.filter(value => value.event === "report_now");
+  assert.deepEqual(reportNow.map(value => [value.roundIndex, value.trigger, value.finalize]), [[3, 1, false], [6, 2, true]]);
+  assert.match(inputs[4], /Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
+  assert.match(inputs[4], /Runtime read ledger \(kept across compaction\)/);
+  assert.equal(calls, 8);
+  assert.equal(toolCounts.at(-1), 0, "the second trigger ends research with a tool-free report");
+  assert.ok(ctl.debugValues.some(value => value.event === "research_recovery_finalization" && value.trigger === "research_no_new_evidence"));
+});

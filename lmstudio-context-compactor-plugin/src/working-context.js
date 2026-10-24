@@ -16,6 +16,7 @@ const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
 const { sourceOutline } = require("./source-outline.js");
+const { ReadLedger } = require("./read-ledger.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -285,9 +286,13 @@ class WorkingContext {
     this.exposure = new Map();
     this.note = null;
     this.referenceObservations = [];
+    this.readLedger = new ReadLedger();
     this.lineage = options.lineage || null;
     this.parentLineage = options.parentLineage || null;
     this.archive.setAccess(this.lineage || scope.lineage);
+    // A readHandle shown in a restored projection was minted under the parent
+    // lineage; it names the same record once that record's membership is granted.
+    this.archive.handleLineages = [this.parentLineage].filter(Boolean);
     this.archive.protectedWindows = new Set([this.windowFile(this.lineage), this.windowFile(this.parentLineage)]);
     this.windowDigest = undefined;
     this.lastSummaryInput = "";
@@ -483,7 +488,8 @@ class WorkingContext {
         // Duplicate callbacks/replays cannot reopen a completed consumer.
         if (this.consumedRawResults.has(rawExposureKey(request, result, envelope))) continue;
         const value = decodeToolResultRecord(envelope).value;
-        if (!value || value.kind === "archived_tool_result_projection") continue;
+        // An UNCHANGED fact points at an already archived record of that version.
+        if (!value || ["archived_tool_result_projection", "redundant_source_read"].includes(value.kind)) continue;
         if (["historical_evidence_range", "historical_evidence_index"].includes(value.kind)) {
           // Rehydration is a new returned page even when its source ID was
           // consumed before. Pin that exact page until its first consumer;
@@ -496,6 +502,29 @@ class WorkingContext {
       }
     }
     return captured;
+  }
+
+  /** The archive record a returned result was captured as, with its handle. */
+  archiveRefFor(request, result) {
+    const ref = this.rawRefs.get(rawExposureKey(request, result, serializedResultContent(result.content)));
+    return ref ? this.archiveLocator({ evidenceId: ref[0], version: ref[1] }) : null;
+  }
+
+  /** A still-readable archive record as {evidenceId, version, readHandle}, plus
+   * its declaration outline when it holds a project source body. */
+  archiveLocator(ref, withOutline = false) {
+    if (!ref?.evidenceId || !ref?.version) return null;
+    const loaded = this.archive.load(ref.evidenceId);
+    if (!loaded.ok || loaded.record.archivedBodyHash !== ref.version) return null;
+    const locator = { evidenceId: ref.evidenceId, version: ref.version, readHandle: this.archive.readHandleFor(loaded.record) };
+    if (withOutline) {
+      const value = decodeToolResultRecord(loaded.record.body).value;
+      const body = value && evidenceBodyView(value);
+      const outline = body && sourceOutline(body.body, { path: value.path, startLine: value.startLine,
+        offsetBytes: value.offsetBytes, lineNumbers: value.lineNumbers === true });
+      if (outline) locator.outline = outline.entries.slice(0, 16);
+    }
+    return locator;
   }
 
   summaryRefs() {
@@ -570,7 +599,8 @@ class WorkingContext {
         const originalEnvelope = serializedResultContent(result.content);
         const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-          || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(parsed.kind)) return result;
+          || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index",
+            "redundant_source_read"].includes(parsed.kind)) return result;
         // The caller's known observation classification alone is not execution proof.
         if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
         // A projection has fixed identity/range metadata. Avoid archiving and
@@ -717,7 +747,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -727,6 +757,7 @@ class WorkingContext {
           startOffset: { type: "integer", minimum: 0, description: "UTF-16 offset in the selected representation; use read nextOffset." },
           startLine: { type: "integer", minimum: 1, description: "First source-file line of a view=body read; use read nextStartLine to continue." },
           endLine: { type: "integer", minimum: 1, description: "Last source-file line (inclusive) with startLine; omitted reads to the body end." },
+          symbol: { type: "string", description: "A declaration name from the record's sourceOutline (e.g. AMyActor::Fire); reads that span of a view=body source record." },
           maxChars: { type: "integer", minimum: 1, maximum: ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
             description: "Whole serialized JSON response budget, including metadata and escaping. Default 4096. Keep fixed while paging; do not subtract already-read content." } },
         anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
@@ -742,13 +773,29 @@ class WorkingContext {
           return args.catalogVersion === 2 || args.continuation ? this.archive.catalogPage(args) : this.archive.catalog(args);
         }
         if (args.endLine !== undefined && args.startLine === undefined) return { ok: false, errorCode: "start_line_required" };
-        if (args.startLine !== undefined && args.startOffset !== undefined) return { ok: false, errorCode: "pagination_conflict" };
-        const lines = args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
-        if (args.readHandle) return this.archive.readByHandle(args.readHandle,
-          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body", lines);
-        return this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars,
-          args.view ?? (lines ? "body" : "envelope"), lines);
+        if ((args.startLine !== undefined || args.symbol !== undefined) && args.startOffset !== undefined
+          || args.symbol !== undefined && args.startLine !== undefined) return { ok: false, errorCode: "pagination_conflict" };
+        const lines = args.symbol !== undefined ? { symbol: String(args.symbol) }
+          : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
+        const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
+          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body", lines, args.path)
+          : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars,
+            args.view ?? (lines ? "body" : "envelope"), lines);
+        return this.explainArchiveError(result);
       } });
+  }
+
+  /** A version_mismatch names an archive record digest, never a source edit.
+   * Say whether the file's latest read still has the record's source hash. */
+  explainArchiveError(result) {
+    if (result?.errorCode !== "version_mismatch" || !result.path || !result.sourceVersion) return result;
+    const latest = this.readLedger.latestFor(result.path);
+    if (!latest) return result;
+    const unchanged = latest.sourceVersion === String(result.sourceVersion).toLowerCase();
+    return { ...result, sourceUnchanged: unchanged, latestReadSha256: latest.sourceVersion,
+      message: `${result.message} ${unchanged
+        ? `The latest read of ${result.path} returned the same sha ${latest.sourceVersion.slice(0, 8)}: the file is unchanged.`
+        : `The latest read of ${result.path} returned sha ${latest.sourceVersion.slice(0, 8)}, a different version than this record.`}` };
   }
 
   refsValid(refs = [...this.refs], allowExpired = false) { return refs.every(([id, version]) => {
@@ -895,7 +942,7 @@ class WorkingContext {
           ? canonical.map(entry => hash(entry).slice(0, 16)) : null,
         replacement, refs: [...candidateRefs], membership: this.archive.exportMembership(), rawBindings, consumedBindings,
         pendingRefs: [...this.returnedRefs], pendingHistoricalResults, note: this.note, referenceObservations,
-        createdAt: this.archive.now(),
+        readLedger: this.readLedger.toJSON(), createdAt: this.archive.now(),
         lastSummaryInput: this.lastSummaryInput, summaryAttempts: this.summaryAttempts.slice(-SUMMARY_POLICY.retainedEvents), modelFingerprint, measurement,
         measurementSubject: measurement ? "live_candidate_before_persistence_sanitization" : "terminal_unmeasured",
         remeasureRequired: true };
@@ -1002,6 +1049,7 @@ class WorkingContext {
       this.archivedEvidenceKnown = undefined;
       this.manifest = manifest; this.generation = body.generation; this.refs = refs; this.note = body.note;
       this.referenceObservations = Array.isArray(body.referenceObservations) ? body.referenceObservations : [];
+      this.readLedger.load(body.readLedger);
       this.rawRefs = rawRefs; this.returnedRefs = returnedRefs;
       this.pendingHistoricalResults = pendingHistoricalResults; this.consumedRawResults = consumedRawResults;
       this.restoredResultKeys = inputResultKeys(restored);

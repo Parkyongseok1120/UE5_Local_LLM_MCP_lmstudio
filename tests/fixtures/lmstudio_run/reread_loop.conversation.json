@@ -1,0 +1,266 @@
+{
+ "name": "synthetic re-read loop fixture",
+ "messages": [
+  {
+   "currentlySelected": 0,
+   "versions": [
+    {
+     "type": "singleStep",
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Audit the sample character."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "currentlySelected": 0,
+   "versions": [
+    {
+     "type": "multiStep",
+     "role": "assistant",
+     "steps": [
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_runtime_identity\", \"loadedBuildId\": \"build-reread-loop\"}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "c1",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Private/SampleCharacter.cpp"
+         }
+        },
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "t1",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Public/SampleTypes.h"
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "c1",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\", \\\"sha256\\\": \\\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 60, \\\"totalLines\\\": 60, \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 1\\\\n// SampleCharacter.cpp synthetic line 2\\\\n// SampleCharacter.cpp synthetic line 3\\\\n// SampleCharacter.cpp synthetic line 4\\\\n// SampleCharacter.cpp synthetic line 5\\\\n// SampleCharacter.cpp synthetic line 6\\\\n// SampleCharacter.cpp synthetic line 7\\\\n// SampleCharacter.cpp synthetic line 8\\\\n// SampleCharacter.cpp synthetic line 9\\\\n// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\\n// SampleCharacter.cpp synthetic line 21\\\\n// SampleCharacter.cpp synthetic line 22\\\\n// SampleCharacter.cpp synthetic line 23\\\\n// SampleCharacter.cpp synthetic line 24\\\\n// SampleCharacter.cpp synthetic line 25\\\\n// SampleCharacter.cpp synthetic line 26\\\\n// SampleCharacter.cpp synthetic line 27\\\\n// SampleCharacter.cpp synthetic line 28\\\\n// SampleCharacter.cpp synthetic line 29\\\\n// SampleCharacter.cpp synthetic line 30\\\\n// SampleCharacter.cpp synthetic line 31\\\\n// SampleCharacter.cpp synthetic line 32\\\\n// SampleCharacter.cpp synthetic line 33\\\\n// SampleCharacter.cpp synthetic line 34\\\\n// SampleCharacter.cpp synthetic line 35\\\\n// SampleCharacter.cpp synthetic line 36\\\\n// SampleCharacter.cpp synthetic line 37\\\\n// SampleCharacter.cpp synthetic line 38\\\\n// SampleCharacter.cpp synthetic line 39\\\\n// SampleCharacter.cpp synthetic line 40\\\\n// SampleCharacter.cpp synthetic line 41\\\\n// SampleCharacter.cpp synthetic line 42\\\\n// SampleCharacter.cpp synthetic line 43\\\\n// SampleCharacter.cpp synthetic line 44\\\\n// SampleCharacter.cpp synthetic line 45\\\\n// SampleCharacter.cpp synthetic line 46\\\\n// SampleCharacter.cpp synthetic line 47\\\\n// SampleCharacter.cpp synthetic line 48\\\\n// SampleCharacter.cpp synthetic line 49\\\\n// SampleCharacter.cpp synthetic line 50\\\\n// SampleCharacter.cpp synthetic line 51\\\\n// SampleCharacter.cpp synthetic line 52\\\\n// SampleCharacter.cpp synthetic line 53\\\\n// SampleCharacter.cpp synthetic line 54\\\\n// SampleCharacter.cpp synthetic line 55\\\\n// SampleCharacter.cpp synthetic line 56\\\\n// SampleCharacter.cpp synthetic line 57\\\\n// SampleCharacter.cpp synthetic line 58\\\\n// SampleCharacter.cpp synthetic line 59\\\\n// SampleCharacter.cpp synthetic line 60\\\"}\"}]"
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "t1",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Public/SampleTypes.h\\\", \\\"sha256\\\": \\\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 20, \\\"totalLines\\\": 20, \\\"content\\\": \\\"// SampleTypes.h synthetic line 1\\\\n// SampleTypes.h synthetic line 2\\\\n// SampleTypes.h synthetic line 3\\\\n// SampleTypes.h synthetic line 4\\\\n// SampleTypes.h synthetic line 5\\\\n// SampleTypes.h synthetic line 6\\\\n// SampleTypes.h synthetic line 7\\\\n// SampleTypes.h synthetic line 8\\\\n// SampleTypes.h synthetic line 9\\\\n// SampleTypes.h synthetic line 10\\\\n// SampleTypes.h synthetic line 11\\\\n// SampleTypes.h synthetic line 12\\\\n// SampleTypes.h synthetic line 13\\\\n// SampleTypes.h synthetic line 14\\\\n// SampleTypes.h synthetic line 15\\\\n// SampleTypes.h synthetic line 16\\\\n// SampleTypes.h synthetic line 17\\\\n// SampleTypes.h synthetic line 18\\\\n// SampleTypes.h synthetic line 19\\\\n// SampleTypes.h synthetic line 20\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 0, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 1500}}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "c2",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Private/SampleCharacter.cpp",
+          "byteBudget": 16384
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "c2",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\", \\\"sha256\\\": \\\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 60, \\\"totalLines\\\": 60, \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 1\\\\n// SampleCharacter.cpp synthetic line 2\\\\n// SampleCharacter.cpp synthetic line 3\\\\n// SampleCharacter.cpp synthetic line 4\\\\n// SampleCharacter.cpp synthetic line 5\\\\n// SampleCharacter.cpp synthetic line 6\\\\n// SampleCharacter.cpp synthetic line 7\\\\n// SampleCharacter.cpp synthetic line 8\\\\n// SampleCharacter.cpp synthetic line 9\\\\n// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\\n// SampleCharacter.cpp synthetic line 21\\\\n// SampleCharacter.cpp synthetic line 22\\\\n// SampleCharacter.cpp synthetic line 23\\\\n// SampleCharacter.cpp synthetic line 24\\\\n// SampleCharacter.cpp synthetic line 25\\\\n// SampleCharacter.cpp synthetic line 26\\\\n// SampleCharacter.cpp synthetic line 27\\\\n// SampleCharacter.cpp synthetic line 28\\\\n// SampleCharacter.cpp synthetic line 29\\\\n// SampleCharacter.cpp synthetic line 30\\\\n// SampleCharacter.cpp synthetic line 31\\\\n// SampleCharacter.cpp synthetic line 32\\\\n// SampleCharacter.cpp synthetic line 33\\\\n// SampleCharacter.cpp synthetic line 34\\\\n// SampleCharacter.cpp synthetic line 35\\\\n// SampleCharacter.cpp synthetic line 36\\\\n// SampleCharacter.cpp synthetic line 37\\\\n// SampleCharacter.cpp synthetic line 38\\\\n// SampleCharacter.cpp synthetic line 39\\\\n// SampleCharacter.cpp synthetic line 40\\\\n// SampleCharacter.cpp synthetic line 41\\\\n// SampleCharacter.cpp synthetic line 42\\\\n// SampleCharacter.cpp synthetic line 43\\\\n// SampleCharacter.cpp synthetic line 44\\\\n// SampleCharacter.cpp synthetic line 45\\\\n// SampleCharacter.cpp synthetic line 46\\\\n// SampleCharacter.cpp synthetic line 47\\\\n// SampleCharacter.cpp synthetic line 48\\\\n// SampleCharacter.cpp synthetic line 49\\\\n// SampleCharacter.cpp synthetic line 50\\\\n// SampleCharacter.cpp synthetic line 51\\\\n// SampleCharacter.cpp synthetic line 52\\\\n// SampleCharacter.cpp synthetic line 53\\\\n// SampleCharacter.cpp synthetic line 54\\\\n// SampleCharacter.cpp synthetic line 55\\\\n// SampleCharacter.cpp synthetic line 56\\\\n// SampleCharacter.cpp synthetic line 57\\\\n// SampleCharacter.cpp synthetic line 58\\\\n// SampleCharacter.cpp synthetic line 59\\\\n// SampleCharacter.cpp synthetic line 60\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 1, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 3000}}"
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"working_context_projection\", \"roundIndex\": 2, \"changed\": true, \"reason\": \"measured_input_pressure\", \"inputTokens\": 30000}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "c3",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Private/SampleCharacter.cpp",
+          "byteBudget": 8192
+         }
+        },
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "a1",
+         "name": "evidence_first_read_context",
+         "parameters": {
+          "action": "read",
+          "readHandle": "h_1a1a1a1a1a1a1a1a1a1a1a1a",
+          "view": "body"
+         }
+        },
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "a2",
+         "name": "evidence_first_read_context",
+         "parameters": {
+          "action": "read",
+          "readHandle": "h_2b2b2b2b2b2b2b2b2b2b2b2b",
+          "view": "body"
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "c3",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\", \\\"sha256\\\": \\\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 60, \\\"totalLines\\\": 60, \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 1\\\\n// SampleCharacter.cpp synthetic line 2\\\\n// SampleCharacter.cpp synthetic line 3\\\\n// SampleCharacter.cpp synthetic line 4\\\\n// SampleCharacter.cpp synthetic line 5\\\\n// SampleCharacter.cpp synthetic line 6\\\\n// SampleCharacter.cpp synthetic line 7\\\\n// SampleCharacter.cpp synthetic line 8\\\\n// SampleCharacter.cpp synthetic line 9\\\\n// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\\n// SampleCharacter.cpp synthetic line 21\\\\n// SampleCharacter.cpp synthetic line 22\\\\n// SampleCharacter.cpp synthetic line 23\\\\n// SampleCharacter.cpp synthetic line 24\\\\n// SampleCharacter.cpp synthetic line 25\\\\n// SampleCharacter.cpp synthetic line 26\\\\n// SampleCharacter.cpp synthetic line 27\\\\n// SampleCharacter.cpp synthetic line 28\\\\n// SampleCharacter.cpp synthetic line 29\\\\n// SampleCharacter.cpp synthetic line 30\\\\n// SampleCharacter.cpp synthetic line 31\\\\n// SampleCharacter.cpp synthetic line 32\\\\n// SampleCharacter.cpp synthetic line 33\\\\n// SampleCharacter.cpp synthetic line 34\\\\n// SampleCharacter.cpp synthetic line 35\\\\n// SampleCharacter.cpp synthetic line 36\\\\n// SampleCharacter.cpp synthetic line 37\\\\n// SampleCharacter.cpp synthetic line 38\\\\n// SampleCharacter.cpp synthetic line 39\\\\n// SampleCharacter.cpp synthetic line 40\\\\n// SampleCharacter.cpp synthetic line 41\\\\n// SampleCharacter.cpp synthetic line 42\\\\n// SampleCharacter.cpp synthetic line 43\\\\n// SampleCharacter.cpp synthetic line 44\\\\n// SampleCharacter.cpp synthetic line 45\\\\n// SampleCharacter.cpp synthetic line 46\\\\n// SampleCharacter.cpp synthetic line 47\\\\n// SampleCharacter.cpp synthetic line 48\\\\n// SampleCharacter.cpp synthetic line 49\\\\n// SampleCharacter.cpp synthetic line 50\\\\n// SampleCharacter.cpp synthetic line 51\\\\n// SampleCharacter.cpp synthetic line 52\\\\n// SampleCharacter.cpp synthetic line 53\\\\n// SampleCharacter.cpp synthetic line 54\\\\n// SampleCharacter.cpp synthetic line 55\\\\n// SampleCharacter.cpp synthetic line 56\\\\n// SampleCharacter.cpp synthetic line 57\\\\n// SampleCharacter.cpp synthetic line 58\\\\n// SampleCharacter.cpp synthetic line 59\\\\n// SampleCharacter.cpp synthetic line 60\\\"}\"}]"
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "a1",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"historical_evidence_range\\\", \\\"evidenceId\\\": \\\"ev_e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1\\\", \\\"version\\\": \\\"f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1\\\", \\\"sourceVersion\\\": \\\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\\\", \\\"sourceIdentity\\\": {\\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\"}, \\\"toolName\\\": \\\"read_file\\\", \\\"sourceFacts\\\": {\\\"startLine\\\": 1, \\\"endLine\\\": 60, \\\"totalLines\\\": 60}, \\\"bodyComplete\\\": true, \\\"returnedRange\\\": [0, 100], \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 1\\\\n// SampleCharacter.cpp synthetic line 2\\\\n// SampleCharacter.cpp synthetic line 3\\\\n// SampleCharacter.cpp synthetic line 4\\\\n// SampleCharacter.cpp synthetic line 5\\\\n// SampleCharacter.cpp synthetic line 6\\\\n// SampleCharacter.cpp synthetic line 7\\\\n// SampleCharacter.cpp synthetic line 8\\\\n// SampleCharacter.cpp synthetic line 9\\\\n// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\\n// SampleCharacter.cpp synthetic line 21\\\\n// SampleCharacter.cpp synthetic line 22\\\\n// SampleCharacter.cpp synthetic line 23\\\\n// SampleCharacter.cpp synthetic line 24\\\\n// SampleCharacter.cpp synthetic line 25\\\\n// SampleCharacter.cpp synthetic line 26\\\\n// SampleCharacter.cpp synthetic line 27\\\\n// SampleCharacter.cpp synthetic line 28\\\\n// SampleCharacter.cpp synthetic line 29\\\\n// SampleCharacter.cpp synthetic line 30\\\\n// SampleCharacter.cpp synthetic line 31\\\\n// SampleCharacter.cpp synthetic line 32\\\\n// SampleCharacter.cpp synthetic line 33\\\\n// SampleCharacter.cpp synthetic line 34\\\\n// SampleCharacter.cpp synthetic line 35\\\\n// SampleCharacter.cpp synthetic line 36\\\\n// SampleCharacter.cpp synthetic line 37\\\\n// SampleCharacter.cpp synthetic line 38\\\\n// SampleCharacter.cpp synthetic line 39\\\\n// SampleCharacter.cpp synthetic line 40\\\\n// SampleCharacter.cpp synthetic line 41\\\\n// SampleCharacter.cpp synthetic line 42\\\\n// SampleCharacter.cpp synthetic line 43\\\\n// SampleCharacter.cpp synthetic line 44\\\\n// SampleCharacter.cpp synthetic line 45\\\\n// SampleCharacter.cpp synthetic line 46\\\\n// SampleCharacter.cpp synthetic line 47\\\\n// SampleCharacter.cpp synthetic line 48\\\\n// SampleCharacter.cpp synthetic line 49\\\\n// SampleCharacter.cpp synthetic line 50\\\\n// SampleCharacter.cpp synthetic line 51\\\\n// SampleCharacter.cpp synthetic line 52\\\\n// SampleCharacter.cpp synthetic line 53\\\\n// SampleCharacter.cpp synthetic line 54\\\\n// SampleCharacter.cpp synthetic line 55\\\\n// SampleCharacter.cpp synthetic line 56\\\\n// SampleCharacter.cpp synthetic line 57\\\\n// SampleCharacter.cpp synthetic line 58\\\\n// SampleCharacter.cpp synthetic line 59\\\\n// SampleCharacter.cpp synthetic line 60\\\"}\"}]"
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "a2",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"historical_evidence_range\\\", \\\"evidenceId\\\": \\\"ev_e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2\\\", \\\"version\\\": \\\"f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2\\\", \\\"sourceVersion\\\": \\\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\\\", \\\"sourceIdentity\\\": {\\\"path\\\": \\\"project://Source/Sample/Public/SampleTypes.h\\\"}, \\\"toolName\\\": \\\"read_file\\\", \\\"sourceFacts\\\": {\\\"startLine\\\": 1, \\\"endLine\\\": 20, \\\"totalLines\\\": 20}, \\\"bodyComplete\\\": true, \\\"returnedRange\\\": [0, 100], \\\"content\\\": \\\"// SampleTypes.h synthetic line 1\\\\n// SampleTypes.h synthetic line 2\\\\n// SampleTypes.h synthetic line 3\\\\n// SampleTypes.h synthetic line 4\\\\n// SampleTypes.h synthetic line 5\\\\n// SampleTypes.h synthetic line 6\\\\n// SampleTypes.h synthetic line 7\\\\n// SampleTypes.h synthetic line 8\\\\n// SampleTypes.h synthetic line 9\\\\n// SampleTypes.h synthetic line 10\\\\n// SampleTypes.h synthetic line 11\\\\n// SampleTypes.h synthetic line 12\\\\n// SampleTypes.h synthetic line 13\\\\n// SampleTypes.h synthetic line 14\\\\n// SampleTypes.h synthetic line 15\\\\n// SampleTypes.h synthetic line 16\\\\n// SampleTypes.h synthetic line 17\\\\n// SampleTypes.h synthetic line 18\\\\n// SampleTypes.h synthetic line 19\\\\n// SampleTypes.h synthetic line 20\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 2, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 4500}}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "a3",
+         "name": "evidence_first_read_context",
+         "parameters": {
+          "action": "read",
+          "evidenceId": "ev_e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+          "version": "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2",
+          "view": "body"
+         }
+        },
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "a4",
+         "name": "evidence_first_read_context",
+         "parameters": {
+          "action": "read",
+          "readHandle": "h_9c9c9c9c9c9c9c9c9c9c9c9c",
+          "view": "body"
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "a3",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": false, \\\"errorCode\\\": \\\"version_mismatch\\\"}\"}]"
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "a4",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": false, \\\"errorCode\\\": \\\"read_handle_unavailable\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 3, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 6000}}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "c4",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Private/SampleCharacter.cpp"
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "c4",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\", \\\"sha256\\\": \\\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 61, \\\"totalLines\\\": 61, \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 1\\\\n// SampleCharacter.cpp synthetic line 2\\\\n// SampleCharacter.cpp synthetic line 3\\\\n// SampleCharacter.cpp synthetic line 4\\\\n// SampleCharacter.cpp synthetic line 5\\\\n// SampleCharacter.cpp synthetic line 6\\\\n// SampleCharacter.cpp synthetic line 7\\\\n// SampleCharacter.cpp synthetic line 8\\\\n// SampleCharacter.cpp synthetic line 9\\\\n// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\\n// SampleCharacter.cpp synthetic line 21\\\\n// SampleCharacter.cpp synthetic line 22\\\\n// SampleCharacter.cpp synthetic line 23\\\\n// SampleCharacter.cpp synthetic line 24\\\\n// SampleCharacter.cpp synthetic line 25\\\\n// SampleCharacter.cpp synthetic line 26\\\\n// SampleCharacter.cpp synthetic line 27\\\\n// SampleCharacter.cpp synthetic line 28\\\\n// SampleCharacter.cpp synthetic line 29\\\\n// SampleCharacter.cpp synthetic line 30\\\\n// SampleCharacter.cpp synthetic line 31\\\\n// SampleCharacter.cpp synthetic line 32\\\\n// SampleCharacter.cpp synthetic line 33\\\\n// SampleCharacter.cpp synthetic line 34\\\\n// SampleCharacter.cpp synthetic line 35\\\\n// SampleCharacter.cpp synthetic line 36\\\\n// SampleCharacter.cpp synthetic line 37\\\\n// SampleCharacter.cpp synthetic line 38\\\\n// SampleCharacter.cpp synthetic line 39\\\\n// SampleCharacter.cpp synthetic line 40\\\\n// SampleCharacter.cpp synthetic line 41\\\\n// SampleCharacter.cpp synthetic line 42\\\\n// SampleCharacter.cpp synthetic line 43\\\\n// SampleCharacter.cpp synthetic line 44\\\\n// SampleCharacter.cpp synthetic line 45\\\\n// SampleCharacter.cpp synthetic line 46\\\\n// SampleCharacter.cpp synthetic line 47\\\\n// SampleCharacter.cpp synthetic line 48\\\\n// SampleCharacter.cpp synthetic line 49\\\\n// SampleCharacter.cpp synthetic line 50\\\\n// SampleCharacter.cpp synthetic line 51\\\\n// SampleCharacter.cpp synthetic line 52\\\\n// SampleCharacter.cpp synthetic line 53\\\\n// SampleCharacter.cpp synthetic line 54\\\\n// SampleCharacter.cpp synthetic line 55\\\\n// SampleCharacter.cpp synthetic line 56\\\\n// SampleCharacter.cpp synthetic line 57\\\\n// SampleCharacter.cpp synthetic line 58\\\\n// SampleCharacter.cpp synthetic line 59\\\\n// SampleCharacter.cpp synthetic line 60\\\\n// SampleCharacter.cpp synthetic line 61\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 4, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 7500}}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "c5",
+         "name": "read_file_range",
+         "parameters": {
+          "path": "project://Source/Sample/Private/SampleCharacter.cpp",
+          "startLine": 10,
+          "endLine": 20
+         }
+        },
+        {
+         "type": "toolCallRequest",
+         "toolCallRequestId": "t2",
+         "name": "read_file",
+         "parameters": {
+          "path": "project://Source/Sample/Public/SampleTypes.h"
+         }
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "c5",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Private/SampleCharacter.cpp\\\", \\\"sha256\\\": \\\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\\\", \\\"startLine\\\": 10, \\\"endLine\\\": 20, \\\"totalLines\\\": 61, \\\"content\\\": \\\"// SampleCharacter.cpp synthetic line 10\\\\n// SampleCharacter.cpp synthetic line 11\\\\n// SampleCharacter.cpp synthetic line 12\\\\n// SampleCharacter.cpp synthetic line 13\\\\n// SampleCharacter.cpp synthetic line 14\\\\n// SampleCharacter.cpp synthetic line 15\\\\n// SampleCharacter.cpp synthetic line 16\\\\n// SampleCharacter.cpp synthetic line 17\\\\n// SampleCharacter.cpp synthetic line 18\\\\n// SampleCharacter.cpp synthetic line 19\\\\n// SampleCharacter.cpp synthetic line 20\\\"}\"}]"
+        },
+        {
+         "type": "toolCallResult",
+         "toolCallRequestId": "t2",
+         "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"kind\\\": \\\"workspace_file_observation\\\", \\\"path\\\": \\\"project://Source/Sample/Public/SampleTypes.h\\\", \\\"sha256\\\": \\\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 20, \\\"totalLines\\\": 20, \\\"content\\\": \\\"// SampleTypes.h synthetic line 1\\\\n// SampleTypes.h synthetic line 2\\\\n// SampleTypes.h synthetic line 3\\\\n// SampleTypes.h synthetic line 4\\\\n// SampleTypes.h synthetic line 5\\\\n// SampleTypes.h synthetic line 6\\\\n// SampleTypes.h synthetic line 7\\\\n// SampleTypes.h synthetic line 8\\\\n// SampleTypes.h synthetic line 9\\\\n// SampleTypes.h synthetic line 10\\\\n// SampleTypes.h synthetic line 11\\\\n// SampleTypes.h synthetic line 12\\\\n// SampleTypes.h synthetic line 13\\\\n// SampleTypes.h synthetic line 14\\\\n// SampleTypes.h synthetic line 15\\\\n// SampleTypes.h synthetic line 16\\\\n// SampleTypes.h synthetic line 17\\\\n// SampleTypes.h synthetic line 18\\\\n// SampleTypes.h synthetic line 19\\\\n// SampleTypes.h synthetic line 20\\\"}\"}]"
+        }
+       ]
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"read_ledger\", \"roundIndex\": 5, \"readResults\": 2, \"newDeliveries\": 0, \"redundantRereads\": 1, \"duplicatedChars\": 600, \"archiveRepages\": 0, \"bodiesReplaced\": 1, \"replacedCallIds\": [\"t2\"]}"
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"report_now\", \"roundIndex\": 5, \"trigger\": 1, \"rounds\": 3, \"finalize\": false}"
+      },
+      {
+       "type": "debugInfoBlock",
+       "debugInfo": "{\"event\": \"direct_round_observation\", \"roundIndex\": 5, \"finishReason\": \"toolCalls\", \"predictionStats\": {\"promptTokensCount\": 1000, \"predictedTokensCount\": 50}, \"predictionUsage\": {\"reasoningTokensCount\": 10}, \"modelPrefillMs\": 1000, \"modelGenerationElapsedMs\": 500, \"executionCost\": {\"executionElapsedMs\": 9000}}"
+      },
+      {
+       "type": "contentBlock",
+       "content": [
+        {
+         "type": "text",
+         "text": "Final report from delivered evidence."
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

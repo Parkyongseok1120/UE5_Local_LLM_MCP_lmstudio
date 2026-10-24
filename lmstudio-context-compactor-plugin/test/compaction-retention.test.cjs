@@ -193,3 +193,38 @@ test("with shown data blocks each round's model input is an exact prefix of the 
   assert.equal(dataTexts.filter(text => text === "Runtime read-result budget facts: low").length, 1);
   assert.equal(history.getMessagesArray().length, 12, "data blocks are never written into the source history");
 });
+
+// A projected source read still proves which version and lines were read: the
+// checkpoint keeps it as a file observation ("read at sha X"), not only as an
+// archive reference, so compaction does not turn it into "never read".
+test("a projected read with a source hash and range becomes a file observation in the checkpoint", () => {
+  const { parseToolResult } = require("../src/compaction-tool-memory.js");
+  const sha = "3c".repeat(32);
+  const projection = { kind: "archived_tool_result_projection", toolName: "read_file", sourceVersion: sha,
+    sourceIdentity: { path: "project://Source/Game/LedgerCharacter.cpp" },
+    sourceFacts: { ok: true, startLine: 1, endLine: 420, totalLines: 420 },
+    archiveRef: { evidenceId: `ev_${"a".repeat(64)}`, version: "b".repeat(64), readHandle: "h_" + "c".repeat(24) },
+    bodyComplete: false, excerpt: "// line 1" };
+  const parsed = parseToolResult(JSON.stringify(projection));
+  assert.equal(parsed.historicalEvidence.evidenceId, `ev_${"a".repeat(64)}`);
+  assert.equal(parsed.path, "project://Source/Game/LedgerCharacter.cpp");
+  assert.equal(parsed.sha256, sha);
+  assert.deepEqual([parsed.startLine, parsed.endLine, parsed.totalLines], [1, 420, 420]);
+  const unversioned = parseToolResult(JSON.stringify({ ...projection, sourceVersion: "unknown-version" }));
+  assert.equal(unversioned.path, undefined, "no hash, no file observation");
+  const messages = [
+    { role: "user", text: "Audit the character code.", index: 0, toolRequests: [], toolResults: [] },
+    { role: "assistant", text: "", index: 1, toolResults: [], toolRequests: [{ type: "function", id: "c1", name: "read_file",
+      arguments: { path: "project://Source/Game/LedgerCharacter.cpp", project: "C:/Game/Game.uproject" } }] },
+    { role: "tool", text: "", index: 2, toolRequests: [], toolResults: [{ toolCallId: "c1", content: JSON.stringify(projection) }] },
+    ...Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: `turn ${i} ${"t ".repeat(400)}`,
+      index: 3 + i, toolRequests: [], toolResults: [] })),
+  ];
+  const checkpoint = core.buildCheckpoint(messages, { recentCompleteTurns: 0, maxCheckpointChars: 20000, maxToolResultChars: 1200 });
+  const files = checkpoint.memory.currentWorkStatus.modifiedOrObservedFiles;
+  const observed = files.find(file => file.path === "project://Source/Game/LedgerCharacter.cpp");
+  assert.ok(observed, JSON.stringify(files));
+  assert.equal(observed.sha256AtObservation, sha);
+  assert.equal(observed.readCoverageState, "complete");
+  assert.deepEqual(observed.observedLineRanges, [{ startLine: 1, endLine: 420 }]);
+});

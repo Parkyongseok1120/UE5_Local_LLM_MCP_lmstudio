@@ -206,3 +206,31 @@ test("a Unity search page cut short or stopped early is named too; a complete Un
     { ...unityPartial, total: 1, truncated: false, nextCursor: null, incomplete: false }, auditTurn());
   assert.equal(partialSearchScopeNotice(complete, "존재하지 않는다."), null);
 });
+
+// When reads only re-deliver versions the ledger holds, the model is told to
+// report from the delivered evidence; restoring an archive page of delivered
+// lines is not counted as new coverage.
+test("report_now names the non-progress counts and asks for the report, not more re-reads", () => {
+  const { reportNowFact } = require("../dist/resume-facts");
+  const fact = reportNowFact(3, { redundantRereads: 4, archiveRepages: 2 });
+  assert.match(fact, /^Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
+  assert.match(fact, /4 same-sha re-read\(s\), 2 archive re-page\(s\)/);
+  assert.match(fact, /Write the final report from that evidence now/);
+  assert.match(fact, /Read only a range that was never delivered/);
+});
+
+test("an archive re-page of delivered lines is not novel to the stagnation detector", () => {
+  const { observeRecoveryProgress } = require("../dist/evidence-manager");
+  const page = { ok: true, kind: "historical_evidence_range", evidenceId: `ev_${"a".repeat(64)}`, version: "b".repeat(64),
+    returnedRange: [0, 400], nextOffset: 400, archiveHasMore: true, rangeUnit: "utf16_code_units", representation: "sanitized_body",
+    bodyField: "content", content: "x".repeat(400) };
+  const messages = exchange("p1", "evidence_first_read_context", { readHandle: "h_" + "c".repeat(24) }, page).getMessagesArray();
+  const fresh = observeRecoveryProgress(messages, new Set(), new Map());
+  assert.equal(fresh.newArchiveUnits, 1);
+  const repaged = observeRecoveryProgress(messages, new Set(), new Map(), undefined, [], () => true);
+  assert.equal(repaged.newArchiveUnits, 0);
+  assert.equal(repaged.archiveRepageCount, 1);
+  const detector = new ToolRoundStagnationDetector();
+  for (let i = 0; i < 3; i++) detector.observe(messages, repaged);
+  assert.equal(detector.observe(messages, repaged).cycleDetected, true, "re-pages repeat without novelty");
+});

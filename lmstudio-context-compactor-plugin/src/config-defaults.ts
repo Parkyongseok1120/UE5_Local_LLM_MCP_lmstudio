@@ -30,6 +30,7 @@ export const NUMERIC_FIELDS = Object.freeze({
   pastReasoningTokens: field(0, 0, 16384),
   maxResearchRounds: field(60, 0, 1000),
   toolStagnationRounds: field(3, 2, 20),
+  noNewEvidenceRounds: field(3, 1, 20),
   generationRepeatCount: field(3, 2, 10),
   auditResearchSeconds: field(100, 1, 3600),
   auditResearchRounds: field(12, 1, 100),

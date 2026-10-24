@@ -35,7 +35,7 @@ test("partial projections in the input are listed once with their read handles",
   assert.equal(count, 1);
   assert.match(fact, /1 earlier tool result\(s\) are present in this input only in part/);
   assert.match(fact, /- project:\/\/Source\/Game\/GameMode\.cpp: read_file \(512 of 5988 chars shown; readHandle=h-a\)/);
-  assert.match(fact, /evidence_first_read_context\(action=read, readHandle, view=body\)/);
+  assert.match(fact, /evidence_first_read_context\(action=read, readHandle, view=body, startLine\/endLine of the span, or symbol=its name\), not the whole body from offset 0/);
   assert.doesNotMatch(fact, /Done\.h|Whole\.h/);
 });
 

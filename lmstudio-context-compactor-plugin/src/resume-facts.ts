@@ -10,7 +10,8 @@ const MAX_RANGES_PER_FILE = 4;
 const MAX_PROJECTION_FACT_CHARS = 2400;
 
 type ProjectionView = { toolName: string; path: string; shown: number; total: number; readHandle: string;
-  lines: [number, number] | null };
+  lines: [number, number] | null; outline: string[] };
+const MAX_OUTLINE_SPANS = 4;
 
 function partialProjections(messages: ChatMessage[]): ProjectionView[] {
   const views: ProjectionView[] = [];
@@ -27,7 +28,9 @@ function partialProjections(messages: ChatMessage[]): ProjectionView[] {
       views.push({ toolName: String(value.toolName || "tool"), path: String(value.sourceIdentity?.path || "").slice(0, 160),
         shown: Number.isFinite(total) && Number.isFinite(omitted) ? Math.max(0, total - omitted) : 0,
         total: Number.isFinite(total) ? total : 0, readHandle,
-        lines: Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start ? [start, end] : null });
+        lines: Number.isInteger(start) && Number.isInteger(end) && start > 0 && end >= start ? [start, end] : null,
+        outline: Array.isArray(value.sourceOutline?.entries)
+          ? value.sourceOutline.entries.filter((entry: unknown) => typeof entry === "string").slice(0, MAX_OUTLINE_SPANS) : [] });
     }
   }
   return views;
@@ -35,7 +38,8 @@ function partialProjections(messages: ChatMessage[]): ProjectionView[] {
 
 function projectionLine(path: string, views: ProjectionView[]): string {
   const ranges = views.slice(-MAX_RANGES_PER_FILE).map(view => (view.lines ? `lines ${view.lines[0]}-${view.lines[1]}` : view.toolName)
-    + ` (${view.shown} of ${view.total} chars shown; readHandle=${view.readHandle})`);
+    + ` (${view.shown} of ${view.total} chars shown; readHandle=${view.readHandle}`
+    + (view.outline.length ? `; spans: ${view.outline.map(entry => entry.slice(0, 60)).join(" | ")}` : "") + ")");
   const more = views.length > MAX_RANGES_PER_FILE ? `; ${views.length - MAX_RANGES_PER_FILE} older partial result(s)` : "";
   return `- ${path || "(path not recorded)"}: ${ranges.join("; ")}${more}`;
 }
@@ -68,9 +72,19 @@ export function partialProjectionFact(messages: ChatMessage[]): { fact: string |
       + "including exact calls, arguments, conditions and UPROPERTY/UFUNCTION specifiers, is not in this input; "
       + "code quoted in your earlier notes or validation packets is not the source. Before quoting such code or "
       + "stating that something is absent there, page only that scope with evidence_first_read_context(action=read, "
-      + "readHandle, view=body), or read the focused current source range if the handle is unavailable. "
+      + "readHandle, view=body, startLine/endLine of the span, or symbol=its name), not the whole body from offset 0; "
+      + "or read the focused current source range if the handle is unavailable. "
       + "Do not claim whole-source review or absence from a partial body.",
   ].join("\n") };
+}
+
+/** The runtime fact after K tool rounds that only re-delivered versions the
+ * read ledger already held: write the report from what was returned. */
+export function reportNowFact(rounds: number, stats: Record<string, number>): string {
+  return `Runtime evidence observation: report_now. The last ${rounds} tool round(s) returned no new file, version or range `
+    + `(${stats.redundantRereads || 0} same-sha re-read(s), ${stats.archiveRepages || 0} archive re-page(s) of delivered lines so far). `
+    + "The read ledger lists what was delivered and verified; the files are unchanged. Write the final report from that evidence now, "
+    + "marking unverified items as unresolved. Read only a range that was never delivered, and only if the report cannot be written without it.";
 }
 
 /** The previous assistant turn ended after tool results with no answer text:

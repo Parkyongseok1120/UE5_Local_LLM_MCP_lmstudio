@@ -10,6 +10,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "analyze_lmstudio_run.py"
 FIXTURE = ROOT / "tests" / "fixtures" / "lmstudio_run" / "synthetic.conversation.json"
+# Synthetic stand-in for run 1792842246501 (no user code): same-sha re-reads
+# around a compaction, archive pages of delivered versions, a cross-evidence
+# version mismatch, an invented handle, a changed sha and a suppressed re-read.
+REREAD_FIXTURE = ROOT / "tests" / "fixtures" / "lmstudio_run" / "reread_loop.conversation.json"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from analyze_lmstudio_run import analyze_message, analyze_path, load_conversation  # noqa: E402
@@ -135,3 +139,54 @@ def test_reference_conversations_when_present(conversation_id: str) -> None:
         "rounds", "toolCalls", "executionS", "prefillS", "generationS", "projectFiles", "engineFiles", "returnedLines",
     ))
     assert actual == REFERENCE_RUNS[conversation_id]
+
+
+def test_deliveries_by_path_sha_and_range_across_source_and_archive_reads() -> None:
+    report = analyze_path(str(REREAD_FIXTURE), None)
+    d = report["deliveries"]
+    assert (d["deliveries"], d["sourceDeliveries"], d["archiveDeliveries"]) == (8, 6, 2)
+    # c2/c3 same sha whole file, a1/a2 archive pages of delivered versions, c5 inside the new sha's whole read.
+    assert d["redundant"] == report["redundantDeliveries"] == 5
+    assert d["duplicatedChars"] == 3 * 2450 + 690 + 450
+    assert d["duplicatedTokensEstimate"] == report["duplicatedTokensEstimate"] == round(8490 / 3.5)
+    assert d["sourceRereads"] == 3
+    # Only c3 lands within two rounds after the round-2 compaction.
+    assert d["rereadsAfterCompaction"] == report["rereadsAfterCompaction"] == 1
+    character, types = d["files"]
+    assert character["path"].endswith("SampleCharacter.cpp")
+    assert character["shas"] == {"a1a1a1a1": 4, "c3c3c3c3": 2}
+    assert character["ranges"]["a1a1a1a1 lines 1-60"] == 4
+    assert (character["deliveries"], character["redundant"], character["rereadsAfterCompaction"]) == (6, 4, 1)
+    assert (types["deliveries"], types["redundant"], types["suppressed"]) == (2, 1, 1)
+
+
+def test_cross_evidence_version_mismatch_invented_handles_and_ledger_events() -> None:
+    report = analyze_path(str(REREAD_FIXTURE), None)
+    d = report["deliveries"]
+    assert (d["versionMismatches"], d["crossEvidenceVersionMismatches"]) == (1, 1)
+    assert d["versionMismatchDetails"][0]["versionBelongsTo"].endswith("SampleTypes.h")
+    assert d["inventedHandles"] == 1
+    assert d["inventedHandleDetails"][0]["readHandle"] == "h_" + "9c" * 12
+    assert d["suppressedByLedger"] == 1
+    assert d["ledgerRedundantRereads"] == 1
+    assert report["reportNowEvents"] == [{"roundIndex": 5, "trigger": 1, "finalize": False}]
+    text = _run(str(REREAD_FIXTURE))
+    assert text.returncode == 0, text.stderr
+    assert "body deliveries: 8 (6 source, 2 archive), 5 redundant" in text.stdout
+    assert "version mismatches: 1 (1 with another record's version), invented handles: 1" in text.stdout
+
+
+# Baseline of run 1792842246501, before the read ledger: the measurement the
+# fix is compared against (the run itself is not in the repository).
+@pytest.mark.smoke
+def test_reread_loop_reference_run_when_present() -> None:
+    path = Path.home() / ".lmstudio" / "conversations" / "1792842246501.conversation.json"
+    if not path.is_file():
+        pytest.skip("reference conversation not on this machine")
+    d = analyze_path(str(path), 3)["deliveries"]
+    assert (d["sourceDeliveries"], d["sourceRereads"], d["rereadsAfterCompaction"]) == (49, 33, 15)
+    assert (d["deliveries"], d["redundant"]) == (63, 47)
+    assert (d["crossEvidenceVersionMismatches"], d["inventedHandles"]) == (1, 1)
+    character = next(f for f in d["files"] if f["path"].endswith("LatencyMultiCombatCharacter.cpp"))
+    assert character["shas"] == {"3cddf4aa": 7}
+    assert character["redundant"] == 6

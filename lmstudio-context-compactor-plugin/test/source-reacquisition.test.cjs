@@ -218,3 +218,162 @@ test("archived conversation prose is labelled as this run's own earlier text, no
   const { mandatoryContinuity } = require("../src/checkpoint-budget.js");
   if (mandatoryContinuity) assert.match(mandatoryContinuity({}).archiveDiscovery, /this same execution.*not a previous session/);
 });
+
+// --- Read ledger: a same-hash re-read after compaction (run 1792842246501) ---
+// Synthetic stand-ins for that run: a 420-line source read in full, projected
+// away under input pressure, then read again with the same sha.
+const { EvidenceManager } = require("../dist/evidence-manager");
+const SOURCE = "project://Source/Game/LedgerCharacter.cpp", TYPES = "project://Source/Game/LedgerTypes.h";
+const shaOf = seed => seed.repeat(64).slice(0, 64);
+const readTool = { name: "read_file", pluginIdentifier: "mcp/unreal-agent" };
+const rangeTool = { name: "read_file_range", pluginIdentifier: "mcp/unreal-agent" };
+const characterBody = [...Array(420)].map((_, i) => i === 199 ? "void ALedgerCharacter::Fire() {" : i === 202 ? "}"
+  : `// line ${i + 1} ${"y".repeat(40)}`).join("\n");
+
+function readResult(path, sha, content, extra = {}) {
+  const lines = content.split("\n").length;
+  return { ok: true, kind: "workspace_file_observation", path, canonicalProject: "C:/Game/Game.uproject", sha256: sha,
+    startLine: 1, endLine: lines, totalLines: lines, content, ...extra };
+}
+
+function exchangeMessages(id, name, args, value) {
+  return [ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: { type: "function", id, name, arguments: args } }] }),
+    ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id, content: JSON.stringify(value) }] })];
+}
+
+function returnRound(manager, messages, roundIndex) {
+  const screening = manager.screenReturnedReads(messages, roundIndex);
+  manager.captureReturned(screening.messages, "exec", `input-${roundIndex}`);
+  manager.recordReturnedReads(screening);
+  return screening;
+}
+
+function ledgerSetup() {
+  const context = new WorkingContext(scope);
+  const archiveTool = context.tool();
+  localObservationTools.add(archiveTool);
+  const manager = new EvidenceManager(context, [readTool, rangeTool, archiveTool]);
+  const history = Chat.from([{ role: "user", content: "Audit the character code." }]);
+  const first = returnRound(manager, exchangeMessages("c1", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 0);
+  for (const message of first.messages) history.append(message);
+  return { context, manager, history, archiveTool, first };
+}
+
+const resultOf = screening => JSON.parse(screening.messages.at(-1).getToolCallResults()[0].content);
+
+test("a full read, a projection, then the identical read returns an UNCHANGED fact and locator, not a second body", async () => {
+  const { context, manager, history, archiveTool, first } = ledgerSetup();
+  assert.equal(first.newDeliveries, 1);
+  assert.equal(first.replaced, 0);
+  const projected = manager.project(history, {}, 512).history;
+  assert.match(projected.toString(), /archived_tool_result_projection/);
+  const again = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE, byteBudget: 24576 },
+    readResult(SOURCE, shaOf("3c"), characterBody, { repeatReceipt: "rr_2" })), 5);
+  assert.equal(again.replaced, 1);
+  assert.equal(again.redundant, 1);
+  assert.equal(again.duplicatedChars, characterBody.length);
+  assert.equal(again.newDeliveries, 0);
+  const fact = resultOf(again);
+  assert.equal(fact.kind, "redundant_source_read");
+  assert.equal(fact.content, undefined, "no second body");
+  assert.equal(fact.sha256, shaOf("3c"));
+  assert.equal(fact.unchangedSince, "round 1");
+  assert.equal(fact.readCoverageState, "complete");
+  assert.equal(fact.repeatReceipt, "rr_2");
+  assert.match(fact.notice, /^UNCHANGED: .*LedgerCharacter\.cpp sha 3c3c3c3c is the same version already returned in round 1 \(lines 1-420 \(complete\)\)\. The file was not modified/);
+  assert.ok(fact.sourceOutline.entries.some(entry => /ALedgerCharacter::Fire/.test(entry)));
+  assert.ok(JSON.stringify(fact).length < 2500, "the fact is small");
+  // The locator pages exactly the archived version, by line range or by outline name.
+  const span = await archiveTool.implementation({ action: "read", readHandle: fact.archiveRef.readHandle, view: "body",
+    symbol: "ALedgerCharacter::Fire", maxChars: 4096 }, environment);
+  assert.equal(span.ok, true, JSON.stringify(span));
+  assert.deepEqual(span.requestedLines, [200, 203]);
+  assert.match(span.content, /^void ALedgerCharacter::Fire\(\) \{/);
+  assert.equal(context.readLedger.events.at(-1).type, "redundant_reread");
+  assert.equal(context.readLedger.stats().redundantRereads, 1);
+  assert.equal(manager.observe(again.messages).redundantRereadCount, 1);
+  const after = Chat.from(projected); for (const message of again.messages) after.append(message);
+  const ledgerFact = manager.readLedgerFact(after);
+  assert.match(ledgerFact, /LedgerCharacter\.cpp sha 3c3c3c3c: delivered lines 1-420 \(complete\) in round 1, 1 repeated read\(s\) answered UNCHANGED; visible now: a compacted excerpt only; readHandle=h_[a-f0-9]{24}; verified: none recorded/);
+  assert.match(ledgerFact, /Remaining \(no check recorded at the current sha\): LedgerCharacter\.cpp/);
+});
+
+test("the same path with a new sha returns its full body; a narrower range keeps its body and says it is unchanged", () => {
+  const { manager } = ledgerSetup();
+  const changedBody = characterBody.replace("Fire() {", "Fire(int Burst) {");
+  const changed = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("4d"), changedBody)), 3);
+  assert.equal(changed.replaced, 0);
+  assert.equal(changed.newDeliveries, 1);
+  assert.equal(resultOf(changed).content, changedBody);
+  const narrow = returnRound(manager, exchangeMessages("c3", "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 },
+    { ok: true, path: SOURCE, sha256: shaOf("4d"), startLine: 200, endLine: 203, totalLines: 420,
+      content: changedBody.split("\n").slice(199, 203).join("\n") }), 4);
+  const kept = resultOf(narrow);
+  assert.match(kept.content, /Fire\(int Burst\)/, "a focused re-read of delivered lines keeps its body");
+  assert.equal(kept.unchangedSince, "round 4");
+  assert.match(kept.unchangedNotice, /Same sha 4d4d4d4d .*: the file is unchanged/);
+  assert.equal(narrow.newDeliveries, 0);
+  assert.equal(manager.ledger.latestFor(SOURCE).sourceVersion, shaOf("4d"));
+});
+
+test("a server no-new-information answer and an archive re-page are non-progress, not new evidence", async () => {
+  const { manager, archiveTool } = ledgerSetup();
+  // The receipt names the delivered path even when the request spells it differently.
+  returnRound(manager, exchangeMessages("c1b", "read_file", { path: SOURCE },
+    readResult(SOURCE, shaOf("3c"), characterBody.slice(0, 200), { startLine: 1, endLine: 4, repeatReceipt: "rr_1" })), 1);
+  const server = returnRound(manager, exchangeMessages("c2", "read_file", { path: "C:/Game/Source/Game/LedgerCharacter.cpp", repeatReceipt: "rr_1" },
+    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abc" }), 2);
+  assert.equal(server.redundant, 1);
+  assert.equal(resultOf(server).kind, "redundant_source_read");
+  assert.match(resultOf(server).notice, /UNCHANGED/);
+  const handle = resultOf(server).archiveRef.readHandle;
+  const page = await archiveTool.implementation({ action: "read", readHandle: handle, view: "body", startLine: 1, endLine: 40, maxChars: 8192 }, environment);
+  assert.equal(page.ok, true);
+  const repage = returnRound(manager, exchangeMessages("c3", "evidence_first_read_context", { action: "read", readHandle: handle }, page), 3);
+  assert.equal(repage.repages, 1);
+  assert.equal(repage.newDeliveries, 0);
+  const progress = manager.observe(repage.messages);
+  assert.equal(progress.archiveRepageCount, 1);
+  assert.equal(progress.newArchiveUnits, 0, "restoring delivered lines is not new archive coverage");
+});
+
+test("a version from another record explains whose it is and that the source is unchanged", async () => {
+  const { context, manager, archiveTool } = ledgerSetup();
+  returnRound(manager, exchangeMessages("t1", "read_file", { path: TYPES }, readResult(TYPES, shaOf("54"), "struct FLedgerTypes {};\n".repeat(60))), 1);
+  const [character, types] = [SOURCE, TYPES].map(path => context.readLedger.latestFor(path).archiveRef);
+  const mismatch = await archiveTool.implementation({ action: "read", evidenceId: character.evidenceId, version: types.version, view: "body" }, environment);
+  assert.equal(mismatch.errorCode, "version_mismatch");
+  assert.equal(mismatch.expectedVersion, character.version);
+  assert.equal(mismatch.versionBelongsTo.evidenceId, types.evidenceId);
+  assert.equal(mismatch.versionBelongsTo.path, TYPES);
+  assert.equal(mismatch.sourceUnchanged, true);
+  assert.match(mismatch.message, /belongs to ev_[a-f0-9]{8} \(LedgerTypes\.h\), not to ev_[a-f0-9]{8} \(LedgerCharacter\.cpp\)/);
+  assert.match(mismatch.message, /does not mean the file was modified/);
+  assert.match(mismatch.message, /same sha 3c3c3c3c: the file is unchanged/);
+  // An invented handle names the valid handle(s) for its path instead of a bare error.
+  const invented = await archiveTool.implementation({ action: "read", readHandle: "h_2f9c4e1a8b6d0c3e5f7a9b2d", path: SOURCE }, environment);
+  assert.equal(invented.errorCode, "read_handle_unavailable");
+  assert.deepEqual(invented.validHandles.map(item => item.path), [SOURCE]);
+  assert.match(invented.message, /mistyped or invented/);
+  assert.equal((await archiveTool.implementation({ action: "read", readHandle: invented.validHandles[0].readHandle,
+    view: "body", startLine: 1, endLine: 2 }, environment)).ok, true);
+});
+
+test("verified checks are tied to the sha they were done against and shown as verified versus remaining", () => {
+  const { manager } = ledgerSetup();
+  returnRound(manager, exchangeMessages("t1", "read_file", { path: TYPES }, readResult(TYPES, shaOf("54"), "struct FLedgerTypes {};\n".repeat(60))), 1);
+  const packet = { claims: [
+    { claim: "Fire is server-authoritative", claimType: "behavior", proofLevel: "SourceVerified",
+      evidence: [{ kind: "project_source", location: "Source/Game/LedgerCharacter.cpp:200-203", observation: "Fire()" }] },
+    { claim: "proposal only", claimType: "wiring", proofLevel: "Proposed",
+      evidence: [{ kind: "project_source", location: "Source/Game/LedgerTypes.h:1", observation: "x" }] }] };
+  assert.equal(manager.recordChecks(packet, 2), 1);
+  const empty = Chat.from([{ role: "user", content: "x" }]);
+  const fact = manager.readLedgerFact(empty);
+  assert.match(fact, /LedgerCharacter\.cpp sha 3c3c3c3c: .*verified: behavior/);
+  assert.match(fact, /LedgerTypes\.h sha 54545454: .*verified: none recorded/);
+  assert.match(fact, /Remaining \(no check recorded at the current sha\): LedgerTypes\.h\./);
+  // A new version of the file makes its earlier check a re-check.
+  returnRound(manager, exchangeMessages("c9", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("4d"), characterBody + "\n// edit")), 3);
+  assert.match(manager.readLedgerFact(empty), /LedgerCharacter\.cpp sha 4d4d4d4d: .*verified: none recorded; re-check at this sha: behavior/);
+});

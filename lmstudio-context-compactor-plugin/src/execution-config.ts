@@ -88,6 +88,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     maxToolResultChars: read("maxToolResultChars"),
     toolStagnationAction: stagnationAction(config.get("toolStagnationAction")),
     toolStagnationRounds: read("toolStagnationRounds"),
+    noNewEvidenceRounds: read("noNewEvidenceRounds"),
     maxResearchRounds: read("maxResearchRounds"),
     generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
     generationRepeatCount: read("generationRepeatCount"),

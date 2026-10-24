@@ -820,3 +820,43 @@ test("lines cited later by path:line or by Line N after the file name stay in th
   assert.deepEqual(value.omittedBodyRanges[0], [0, value.projectedBodyRanges[0][0]]);
   assert.equal(value.bodyComplete, false);
 });
+
+// The read ledger is part of the working window: a later turn still knows
+// which version of a file was delivered and what was checked against it, and
+// a readHandle shown under the parent lineage still names its record.
+test("the read ledger and parent-lineage read handles survive a window restore", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "read-ledger-window-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sha = "3c".repeat(32), filePath = "project://Source/Game/LedgerCharacter.cpp";
+  const content = Array.from({ length: 80 }, (_, i) => `// line ${i + 1} ${"z".repeat(50)}`).join("\n");
+  const history = Chat.from([{ role: "user", content: "Audit." }]);
+  history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: {
+    type: "function", id: "c1", name: "read_file", arguments: { path: filePath } } }] }));
+  history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "c1",
+    content: JSON.stringify({ ok: true, path: filePath, sha256: sha, startLine: 1, endLine: 80, totalLines: 80, content }) }] }));
+  const first = new WorkingContext(scope, { root, durable: true, lineage: "turn-1" });
+  first.captureReturned(history, () => true);
+  const request = exchangeIndex(history).matches.get("2:0");
+  const locator = first.archiveRefFor(request, history.getMessagesArray()[2].getToolCallResults()[0]);
+  assert.match(locator.readHandle, /^h_[a-f0-9]{24}$/);
+  first.readLedger.record({ path: filePath, key: "source/game/ledgercharacter.cpp", sourceVersion: sha, lines: [1, 80],
+    bytes: null, complete: true, totalLines: 80, size: null, chars: content.length }, { round: 3, archiveRef: locator });
+  assert.equal(first.readLedger.recordCheck("Source/Game/LedgerCharacter.cpp:10", "behavior", 4), true);
+  const projected = first.project(history, () => true, {}, 512).history;
+  assert.equal(first.commit(history, projected, { exact: true, remainingTokens: 5000 }, hash(serialize(history)), "model"), true);
+
+  const next = new WorkingContext(scope, { root, durable: true, lineage: "turn-2", parentLineage: "turn-1" });
+  const resumed = Chat.from(history); resumed.append("user", "continue");
+  assert.equal(next.restore(resumed).reason, "restored_remeasure_required");
+  const entry = next.readLedger.latestFor(filePath);
+  assert.equal(entry.sourceVersion, sha);
+  assert.equal(entry.complete, true);
+  assert.equal(entry.firstTurn, "earlier");
+  assert.deepEqual(entry.checks.map(item => item.check), ["behavior"]);
+  assert.deepEqual(entry.archiveRef, { evidenceId: locator.evidenceId, version: locator.version });
+  // The handle the restored projection shows was minted under the parent lineage.
+  assert.notEqual(next.archive.readHandleFor(next.archive.load(locator.evidenceId).record), locator.readHandle);
+  const read = next.archive.readByHandle(locator.readHandle, 0, 4096, "body", { startLine: 5, endLine: 6 });
+  assert.equal(read.ok, true, JSON.stringify(read));
+  assert.match(read.content, /^\/\/ line 5 /);
+});

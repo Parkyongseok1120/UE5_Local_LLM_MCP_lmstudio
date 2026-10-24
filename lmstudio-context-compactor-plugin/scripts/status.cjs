@@ -60,6 +60,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/evidence-archive.js",
   "src/evidence-identity.js",
   "src/source-outline.js",
+  "src/read-ledger.js",
   "src/working-context.js",
   "src/note-persistence.ts",
   "src/terminal-persistence.ts",
