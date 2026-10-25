@@ -101,17 +101,28 @@ const HEADING = /^\s{0,3}#{1,6}\s/;
 const CONFIRMED = /\b(?:confirmed|verified)\b|확정|확인했|확인된\s*(?:버그|결함)/iu;
 export type TextFinding = { label: string; severity: string; text: string };
 
-/** Graded findings of an answer: each heading section whose heading names a severity. */
+/** Severity belongs to the heading subtree, or an explicit table/list finding.
+ * Code fences are examples, not structural headings. */
 export function gradedSections(answer: string): TextFinding[] {
-  const sections: Array<{ heading: string; lines: string[] }> = [];
+  const sections: Array<{ heading: string; severity: string | null; lines: string[] }> = [];
+  const parents: Array<{ level: number; severity: string | null }> = [];
+  let fenced = false;
   for (const line of String(answer || "").split(/\r?\n/)) {
-    if (HEADING.test(line)) sections.push({ heading: line.trim(), lines: [line] });
-    else sections.at(-1)?.lines.push(line);
+    if (/^\s*(```|~~~)/u.test(line)) { fenced = !fenced; sections.at(-1)?.lines.push(line); continue; }
+    const heading = !fenced && /^\s{0,3}(#{1,6})\s+(.*)/u.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      while (parents.length && parents.at(-1)!.level >= level) parents.pop();
+      const explicit = SEVERITY.exec(heading[2]);
+      const severity = REJECTED.test(heading[2]) ? null : explicit ? `P${explicit[1]}` : parents.at(-1)?.severity || null;
+      parents.push({ level, severity });
+      sections.push({ heading: heading[2], severity, lines: [line] });
+    } else if (!fenced && SEVERITY.test(line) && /^\s*(?:\||[-*]\s|\*\*|\d+[.)]\s)/u.test(line)) {
+      sections.push({ heading: line.trim(), severity: REJECTED.test(line) ? null : `P${SEVERITY.exec(line)![1]}`, lines: [line] });
+    } else sections.at(-1)?.lines.push(line);
   }
-  return sections.flatMap(({ heading, lines }) => {
-    const severity = SEVERITY.exec(heading);
-    return severity && !REJECTED.test(heading)
-      ? [{ label: heading.replace(/^#+\s*/, "").slice(0, 80), severity: `P${severity[1]}`, text: lines.join("\n") }] : [];
+  return sections.flatMap(({ heading, severity, lines }) => {
+    return severity ? [{ label: heading.slice(0, 80), severity, text: lines.join("\n") }] : [];
   });
 }
 
@@ -159,7 +170,7 @@ export function reportEngineClaimNotice(report: EngineClaimGap[], progress: Engi
 export function unresolvedEngineClaimGaps(gaps: readonly EngineClaimGap[], answer: string, symbol?: string): EngineClaimGap[] {
   const reviewAt = answer.indexOf("## 검토 보완");
   const corrections = reviewAt < 0 ? [] : answer.slice(reviewAt).split(/\r?\n/u)
-    .filter(line => REJECTED.test(line) || /미검증|정정|\bunverified\b|\bcorrect(?:ed|ion)\b/iu.test(line));
+    .filter(line => REJECTED.test(line) || /미검증|미확인|\bunverified\b|\bwithdrawn\b/iu.test(line));
   return gaps.filter(gap => !corrections.some(line => line.includes(gap.factId) || (symbol && hasToken(line, symbol))
     || catalogue.find(entry => entry.fact.id === gap.factId)?.markers.some(marker => marker.test(line))));
 }

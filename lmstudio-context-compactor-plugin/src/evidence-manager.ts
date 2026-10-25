@@ -8,7 +8,7 @@ import { inputAvailability, readLedgerModule, toolMemory, workingContextModule, 
   type ReadFacts, type ReadLedgerLike } from "./context-ports";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
-import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+import { isObservationOnlyToolCall, localObservationTools, type RemoteToolLike } from "./tool-capability-registry";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics } from "./tool-result-semantics.js";
@@ -80,6 +80,27 @@ export class EvidenceManager {
     this.referenceState.batch = Math.max(0, ...observations.map(o => o.batch));
     this.referenceState.seen = new Set(observations.map(o => o.id));
   }
+  /** A rejected window does not erase source observations present in the host
+   * transcript. Rebuild historical hints only: no inherited refs, receipts,
+   * current provider authority, visibility or mutation permission. */
+  rebuildHistoricalReads(history: Chat): number {
+    let restored = 0;
+    const pairs = workingContextModule.exchangeIndex(history);
+    if (pairs.ambiguous) return 0;
+    for (const [mi, message] of history.getMessagesArray().entries()) {
+      for (const [ri, result] of message.getToolCallResults().entries()) {
+        const request = pairs.matches.get(`${mi}:${ri}`);
+        const value = toolMemory.decodeToolResultRecord(result.content).value;
+        if (!request || !readLedgerModule.SOURCE_READ_TOOLS.has(request.name) || !value) continue;
+        const facts = readLedgerModule.verifiedReadFacts(identity.normalizeObservation(value, request, "historical_unverified"));
+        if (!facts) continue;
+        facts.sourceKey = `historical:${facts.sourceKey}`;
+        this.ledger.record(facts, { turn: "earlier", toolName: request.name });
+        restored++;
+      }
+    }
+    return restored;
+  }
   /** Only when no persisted window restored reference observations. */
   seedPriorEngineIdentity(history: Chat, scope: ToolScope, executionId: string) {
     seedPriorEngineIdentity(this.referenceState, history.getMessagesArray(), this.tools, scope, executionId);
@@ -98,9 +119,9 @@ export class EvidenceManager {
     const resolved = resolveInterruptedCalls(current, this.referenceSnapshot(history).items);
     if (JSON.stringify(current) !== JSON.stringify(resolved)) history.append("assistant", renderInterruptedCalls(resolved, prior?.interruptedCallRetention));
   }
-  private readonly observedRounds = new Map<string, RecoveryProgress>();
+  private readonly observedRounds = new Map<string, ReadDelta>();
   seed(history: Chat) {
-    const state = seedRecoveryProgress(history, this.tools);
+    const state = seedRecoveryProgress(history, this.tools, this.resolveProjection);
     for (const fp of state.fingerprints) this.fingerprints.add(fp);
     for (const [key, ranges] of state.coverage)
       this.coverage.set(key, normalizedCoverageRanges([...(this.coverage.get(key) || []), ...ranges]));
@@ -110,10 +131,18 @@ export class EvidenceManager {
     for (const collection of [this.fingerprints, this.coverage, this.currentCoverage])
       while (collection.size > 2048) collection.delete(collection.keys().next().value!);
   }
-  observe(messages: Array<ChatMessage>, roundId?: string) {
+  observe(messages: Array<ChatMessage>, roundId?: string, screening?: ReadScreening): ReadDelta {
     if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
-    const progress = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
+    const observed = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
       this.isArchiveRepage);
+    const repeatRestoreOnly = Boolean(screening && screening.otherResults === 0 && screening.repeatRestores > 0
+      && screening.repeatRestores + screening.redundant >= screening.readResults - screening.failedReads);
+    const noNewEvidence = Boolean(screening && screening.readResults > 0 && screening.failedReads === 0
+      && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
+      && (observed.restoredWorkingEvidenceUnits === 0 || repeatRestoreOnly));
+    const progress: ReadDelta = { ...observed, repeatRestoreOnly, noNewEvidence,
+      usableSourceEvidence: Boolean(screening && screening.newDeliveries + screening.focusedReads > 0),
+      progressed: observed.progressed && !repeatRestoreOnly, usefulProgress: observed.usefulProgress && !repeatRestoreOnly };
     Object.freeze(progress);
     this.boundProgress();
     if (roundId) {
@@ -126,12 +155,11 @@ export class EvidenceManager {
     return this.store?.project(history, request => {
       const matches = this.tools.filter(tool => tool.name === request.name);
       return matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
-    }, { ...metadata, toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])),
-      ...(this.closedFileFacts ? { closedFile: this.isClosedFile } : {}) }, maxChars)
+    }, { ...metadata, toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])) }, maxChars)
       || { history, changed: false, reason: "disabled" };
   }
   captureExposure(history: Chat, modelInputId: string, completed = false) {
-    this.currentCoverage = seedRecoveryProgress(history, this.tools).coverage;
+    this.currentCoverage = seedRecoveryProgress(history, this.tools, this.resolveProjection).coverage;
     this.updateReadVisibility(history);
     this.store?.captureExposure(history, modelInputId, completed);
   }
@@ -171,37 +199,40 @@ export class EvidenceManager {
   // rounds, each a new byte or line window, never counted as re-reading).
   private readonly restoredSpans = new Map<string, Array<[number, number]>>();
   private readonly wholeRestores = new Set<string>();
-  /** File versions whose whole re-read was answered with their closed judgments. */
-  private readonly closedSubstitutions = new Set<string>();
-  private closedFileFacts: ((key: string, sha: string | null) => string[] | null) | null = null;
-  /** The review register's closed judgments per file (see ReviewRegister.closedFileFacts). */
-  setClosedFileFacts(provider: (key: string, sha: string | null) => string[] | null) { this.closedFileFacts = provider; }
-  /** A file whose latest delivered version has only closed judgments. */
-  isClosedFile = (key: string) => Boolean(this.closedFileFacts?.(key, this.ledger.latestFor(key)?.sourceVersion ?? null));
   // The delivered path each receipt this execution may send back stands for.
-  private readonly receiptPaths = new Map<string, string>();
+  private readonly receiptPaths = new Map<string, ReadFacts>();
   private readonly handleCache = new Map<string, string | null>();
   private visibleReads = new Map<string, { line: Array<[number, number]>; utf8_byte: Array<[number, number]> }>();
 
   private updateReadVisibility(history: Chat) {
-    const observations = inputAvailability.currentRawObservations(history.getMessagesArray().map(message =>
-      ({ toolResults: message.getToolCallResults() })) as unknown as Parameters<typeof inputAvailability.currentRawObservations>[0]);
+    const observations = this.rawObservations(history);
     this.visibleReads = readLedgerModule.visibleRanges(observations);
-    for (const message of history.getMessagesArray()) for (const result of message.getToolCallResults()) {
-      const page = readLedgerModule.archivePageFacts(toolMemory.decodeToolResultRecord(result.content).value);
+    for (const result of observationRecords(history.getMessagesArray(), this.tools, { confirmedPairsOnly: true })) {
+      const page = result.trustedRead ? readLedgerModule.archivePageFacts(result.value) : null;
       if (page?.bodyVerified) this.rememberVisibleRead(page);
+      const source = result.trustedRead ? readLedgerModule.verifiedReadFacts(result.value) : null;
+      if (source) this.rememberVisibleRead(source);
     }
   }
 
+  private rawObservations(history: Chat) {
+    const records = observationRecords(history.getMessagesArray(), this.tools, { confirmedPairsOnly: true });
+    return inputAvailability.currentRawObservations([{ toolResults: records.filter(r => r.trustedRead && r.value)
+      .map(r => ({ content: JSON.stringify(r.value) })) }] as unknown as Parameters<typeof inputAvailability.currentRawObservations>[0]);
+  }
+
+  private resolveProjection = (value: Record<string, unknown>, request: ToolCallRequest) =>
+    this.store?.resolveProjection?.(value, request) || null;
+
   private visibleRead(facts: ReadFacts) {
-    const shown = this.visibleReads.get(`${facts.key}\u0000${facts.sourceVersion}`);
+    const shown = this.visibleReads.get(`${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`);
     const covered = (ranges: Array<[number, number]> | undefined, target: [number, number] | null) =>
       Boolean(target && ranges?.some(([s, e]) => s <= target[0] && e >= target[1]));
     return covered(shown?.line, facts.lines) || covered(shown?.utf8_byte, facts.bytes);
   }
 
   private rememberVisibleRead(facts: ReadFacts) {
-    const id = `${facts.key}\u0000${facts.sourceVersion}`;
+    const id = `${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`;
     const shown = this.visibleReads.get(id) || { line: [], utf8_byte: [] };
     if (facts.lines) shown.line = inputAvailability.normalizeRanges([...shown.line, facts.lines]) as Array<[number, number]>;
     if (facts.bytes) shown.utf8_byte = inputAvailability.normalizeRanges([...shown.utf8_byte, facts.bytes]) as Array<[number, number]>;
@@ -238,11 +269,19 @@ export class EvidenceManager {
             screening.readResults++;
             const repage = this.ledger.notePage(page, round);
             if (repage) { screening.repages++; this.repagedPages.add(archivePageKey(value!)); }
+            if (page.bodyVerified && this.visibleRead(page)) {
+              const entry = this.ledger.get(page.path, page.sourceVersion, page.sourceKey);
+              if (entry) {
+                changed = true; screening.replaced++; screening.redundant++;
+                screening.suppressedCallIds.push(String(result.toolCallId));
+                return { ...result, content: JSON.stringify(this.unchangedFact(entry, page, value!, null, true)) };
+              }
+            }
             const returned = value?.returnedRange;
             const span = Array.isArray(returned) && Number.isSafeInteger(returned[0]) && returned[1] > returned[0]
               ? [returned[0], returned[1] - 1] as [number, number] : null;
             const totalChars = Number(value?.totalChars);
-            if (this.noteRestore(`${page.key}\u0000${page.sourceVersion}`, `archive:${String(value?.evidenceId || "")}`, span,
+            if (this.noteRestore(`${page.sourceKey || page.key}\u0000${page.sourceVersion}`, `archive:${String(value?.evidenceId || "")}`, span,
               Number.isSafeInteger(totalChars) && totalChars > 0 ? [0, totalChars - 1] : null))
               screening.repeatRestores++;
             else if (!repage) screening.newDeliveries++;
@@ -253,7 +292,8 @@ export class EvidenceManager {
         if (!readLedgerModule.SOURCE_READ_TOOLS.has(request.name)) { screening.otherResults++; return result; }
         screening.readResults++;
         if (!value || sourceObservationFailed(value)) { screening.failedReads++; return result; }
-        const content = this.screenSourceRead(request, String(result.toolCallId), value, round, screening);
+        const content = this.screenSourceRead(request, String(result.toolCallId),
+          identity.normalizeObservation(value, request, tools[0].pluginIdentifier || "local"), round, screening);
         if (content === null) return result;
         changed = true;
         if (screening.suppressedCallIds.includes(String(result.toolCallId))) screening.replaced++;
@@ -270,11 +310,11 @@ export class EvidenceManager {
     const ledger = this.ledger;
     // The server's own repeat cache answered: the identical read against unchanged state.
     if (value.duplicate === true && value.status === "no_new_information") {
-      const path = request.arguments?.path, receipt = request.arguments?.repeatReceipt;
-      const receiptPath = typeof receipt === "string" ? this.receiptPaths.get(receipt) : undefined;
-      const entry = (receiptPath && ledger.latestFor(receiptPath)) || (typeof path === "string" ? ledger.latestFor(path) : null);
+      const receipt = request.arguments?.repeatReceipt;
+      const facts = readLedgerModule.readFacts(value) || (typeof receipt === "string" ? this.receiptPaths.get(receipt) : undefined);
+      const entry = facts ? ledger.get(facts.path, facts.sourceVersion, facts.sourceKey) : null;
       if (!entry) return null;
-      const bodyVisible = this.visibleReads.has(`${entry.key}\u0000${entry.sourceVersion}`);
+      const bodyVisible = this.visibleRead(facts!);
       // The receipt stands for a body this input no longer shows: answer the
       // read with the archived body of that version, so restoring it does not
       // take a second round through the archive (2026-10-25 run, r32 and r34).
@@ -282,9 +322,9 @@ export class EvidenceManager {
       if (archived) return this.screenSourceRead(request, toolCallId, archived, round, screening) ?? JSON.stringify(archived);
       ledger.noteRedundant(entry, round, 0, { source: "server_repeat_receipt" });
       screening.redundant++; screening.suppressedCallIds.push(toolCallId);
-      return JSON.stringify(this.unchangedFact(entry, null, value, this.store?.archiveLocator(entry.archiveRef, true) || null, bodyVisible));
+      return JSON.stringify(this.unchangedFact(entry, facts!, value, this.store?.archiveLocator(entry.archiveRef, true) || null, bodyVisible));
     }
-    const facts = readLedgerModule.readFacts(value);
+    const facts = readLedgerModule.verifiedReadFacts(value);
     if (!facts) { screening.otherResults++; screening.readResults--; return null; }
     const verdict = ledger.classify(facts);
     const pending = (content: string | null) => {
@@ -295,24 +335,6 @@ export class EvidenceManager {
     // input; once projection or compaction removed it, the read is how the
     // model restores it, whole file or focused range alike.
     const restoringHidden = verdict.status === "redundant" && !this.visibleRead(facts);
-    // A whole re-read of a file whose every judgment has its evidence in the
-    // review register restores nothing the review still needs: answer it with
-    // those judgments once. A line range, a changed sha or a repeated request
-    // still gets the body (conversation 1792929236226, r7-r12).
-    const closedKey = `${facts.key}\u0000${facts.sourceVersion}`;
-    const closed = restoringHidden && facts.complete && verdict.entry && !this.closedSubstitutions.has(closedKey)
-      ? this.closedFileFacts?.(facts.key, facts.sourceVersion) : null;
-    if (closed && verdict.entry) {
-      this.closedSubstitutions.add(closedKey);
-      const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
-      ledger.noteRedundant(verdict.entry, round, facts.chars, { source: "closed_review_file" });
-      screening.repeatRestores++; screening.suppressedCallIds.push(toolCallId);
-      return JSON.stringify({ ...this.unchangedFact(verdict.entry, facts, value, locator, false),
-        status: "closed_by_review_register", reviewItems: closed,
-        notice: `CLOSED: ${verdict.entry.path} sha ${facts.sourceVersion.slice(0, 8)} is unchanged and its ${closed.length} judgment(s) `
-          + "already carry their evidence (reviewItems; the review register). Report from them. Read a specific line range for "
-          + "anything they do not cover, or repeat this read if the whole body is needed." });
-    }
     if (verdict.status === "redundant" && verdict.entry && !restoringHidden) {
       const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
       ledger.noteRedundant(verdict.entry, round, facts.chars, locator ? {} : { bodyKept: "no_archive_locator" });
@@ -334,7 +356,7 @@ export class EvidenceManager {
     // stagnation guard must still see.
     const whole: [number, number] | null = facts.lines ? (facts.totalLines ? [1, facts.totalLines] : null)
       : facts.size ? [0, facts.size - 1] : null;
-    const repeat = restoringHidden && this.noteRestore(`${facts.key}\u0000${facts.sourceVersion}`,
+    const repeat = restoringHidden && this.noteRestore(`${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`,
       facts.lines ? "line" : "byte", facts.lines || facts.bytes, whole);
     if (repeat) screening.repeatRestores++;
     else if (verdict.status === "narrower" || restoringHidden) screening.focusedReads++;
@@ -349,13 +371,13 @@ export class EvidenceManager {
    * whole file, or the same starting window. Another window is not it. */
   private archivedReadFor(entry: LedgerEntry, args: Record<string, unknown>): Record<string, any> | null {
     const value = this.store?.archivedValue?.(entry.archiveRef) as Record<string, any> | null | undefined;
-    const facts = value ? readLedgerModule.readFacts(value) : null;
+    const facts = value ? readLedgerModule.readFacts({ ...value, sourceKey: entry.sourceKey }) : null;
     if (!value || !facts || facts.key !== entry.key || facts.sourceVersion !== entry.sourceVersion) return null;
-    if (facts.complete) return value;
+    if (facts.complete) return { ...value, sourceKey: entry.sourceKey };
     const sameStart = args.startLine !== undefined ? facts.lines?.[0] === Number(args.startLine)
       && (args.endLine === undefined || facts.lines[1] >= Number(args.endLine))
       : facts.bytes?.[0] === Number(args.offsetBytes ?? 0);
-    return sameStart ? value : null;
+    return sameStart ? { ...value, sourceKey: entry.sourceKey } : null;
   }
 
   /** Records a restored span of one file version in one unit; true when
@@ -372,18 +394,18 @@ export class EvidenceManager {
     return repeat;
   }
 
-  private rememberReceipt(receipt: string, path: string) {
-    this.receiptPaths.delete(receipt); this.receiptPaths.set(receipt, path);
+  private rememberReceipt(receipt: string, facts: ReadFacts) {
+    this.receiptPaths.delete(receipt); this.receiptPaths.set(receipt, facts);
     while (this.receiptPaths.size > 256) this.receiptPaths.delete(this.receiptPaths.keys().next().value!);
   }
 
   private unchangedFact(entry: LedgerEntry, facts: ReadFacts | null, value: Record<string, any>, locator: ArchiveLocator | null,
     bodyVisible = true) {
-    if (typeof value.repeatReceipt === "string") this.rememberReceipt(value.repeatReceipt, entry.path);
+    if (facts && typeof value.repeatReceipt === "string") this.rememberReceipt(value.repeatReceipt, facts);
     const identityFields = ["canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath", "activeProject",
       "resolvedRootType", "projectRelativePath"];
     return { kind: "redundant_source_read", ok: true, status: "unchanged_already_delivered",
-      path: entry.path, sha256: entry.sourceVersion,
+      path: entry.path, sha256: entry.sourceVersion, sourceKey: entry.sourceKey,
       ...Object.fromEntries(identityFields.filter(key => value[key] !== undefined).map(key => [key, value[key]])),
       ...(facts?.lines ? { startLine: facts.lines[0], endLine: facts.lines[1] } : {}),
       ...(entry.totalLines ? { totalLines: entry.totalLines } : {}),
@@ -406,7 +428,7 @@ export class EvidenceManager {
       const original = screening.messages.flatMap(message => message.getToolCallResults())
         .find(candidate => String(candidate.toolCallId) === item.toolCallId);
       const locator = this.store?.archiveRefFor(item.request, original || result) || null;
-      if (item.repeatReceipt) this.rememberReceipt(item.repeatReceipt, item.facts.path);
+      if (item.repeatReceipt) this.rememberReceipt(item.repeatReceipt, item.facts);
       if (locator) {
         this.ledger.attachArchiveRef(item.facts, locator);
         this.handleCache.set(locator.evidenceId, locator.readHandle);
@@ -438,21 +460,20 @@ export class EvidenceManager {
     const ledger = this.ledger;
     if (!ledger.size) return null;
     const messages = history.getMessagesArray();
-    const observations = inputAvailability.currentRawObservations(messages.map(message =>
-      ({ toolResults: message.getToolCallResults() })) as unknown as Parameters<typeof inputAvailability.currentRawObservations>[0]);
+    const observations = this.rawObservations(history);
     const excerpts = new Set<string>(), handles = new Map<string, string>();
-    const id = (path: unknown, version: unknown) => `${readLedgerModule.pathKey(path)}\u0000${String(version || "").toLowerCase()}`;
+    const id = (key: unknown, version: unknown) => `${key}\u0000${String(version || "").toLowerCase()}`;
     for (const message of messages) for (const result of message.getToolCallResults()) {
       const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
       const projected = readLedgerModule.projectionFacts(value);
       if (projected) {
-        excerpts.add(id(projected.path, projected.sourceVersion));
-        if (typeof value?.archiveRef?.readHandle === "string") handles.set(id(projected.path, projected.sourceVersion), value.archiveRef.readHandle);
+        excerpts.add(id(projected.sourceKey || projected.key, projected.sourceVersion));
+        if (typeof value?.archiveRef?.readHandle === "string") handles.set(id(projected.sourceKey || projected.key, projected.sourceVersion), value.archiveRef.readHandle);
       } else if (value?.kind === "redundant_source_read" && typeof value.archiveRef?.readHandle === "string")
-        handles.set(id(value.path, value.sha256), value.archiveRef.readHandle);
+        handles.set(id(value.sourceKey || readLedgerModule.pathKey(value.path), value.sha256), value.archiveRef.readHandle);
     }
     for (const entry of ledger.entries()) {
-      const key = id(entry.path, entry.sourceVersion);
+      const key = `${entry.sourceKey || entry.key}\u0000${entry.sourceVersion}`;
       if (handles.has(key) || !entry.archiveRef) continue;
       let handle = this.handleCache.get(entry.archiveRef.evidenceId);
       if (handle === undefined) {
@@ -499,6 +520,12 @@ export type ReadScreening = {
   suppressedCallIds: string[];
 };
 
+/** One immutable round decision for recovery, stagnation and reporting. Actual
+ * regained availability stays measured even when it repeats an earlier restore. */
+export type ReadDelta = RecoveryProgress & {
+  repeatRestoreOnly: boolean; noNewEvidence: boolean; usableSourceEvidence: boolean;
+};
+
 function unchangedSince(entry: LedgerEntry) {
   return entry.firstTurn === "earlier" ? "an earlier turn" : entry.firstRound === null ? "an earlier round" : `round ${entry.firstRound}`;
 }
@@ -524,7 +551,8 @@ export function repeatReceiptCandidates(history: Chat): Map<string, RepeatReceip
       const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
       if (!request || !value || value.ok === false) return;
       const kind = String(value.kind || "");
-      if (["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(kind)
+      if (value.duplicate === true || value.bodyOmitted === true
+        || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(kind)
         || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
       present.set(repeatRequestKey(request.name, request.arguments || {}), { receipt: value.repeatReceipt, arguments: request.arguments || {} });
     });
@@ -637,7 +665,17 @@ export function coverageRange(value: Record<string, unknown>, category: "source"
 
 export function recoveryCoverageDescriptors(value: Record<string, unknown>): Array<RecoveryCoverageDescriptor> {
   const kind = String(value.kind || "");
+  if (value.bodyOmitted === true || value.duplicate === true || kind === "redundant_source_read") return [];
   if (kind === "archived_tool_result_projection") return [];
+  const file = kind === "historical_evidence_range" ? readLedgerModule.archivePageFacts(value) : readLedgerModule.verifiedReadFacts(value);
+  if (kind !== "historical_evidence_range" && readLedgerModule.readFacts(value) && !file) return [];
+  if (file && (kind !== "historical_evidence_range" || file.bodyVerified)) {
+    const range = file.lines || file.bytes;
+    if (range) return [{ category: kind === "historical_evidence_range" ? "archive" : "source",
+      key: telemetryFingerprint({ sourceKey: file.sourceKey || file.key, version: file.sourceVersion,
+        unit: file.lines ? "line" : "utf8_byte" }, true),
+      range, rangeUnit: file.lines ? "line" : "utf8_byte", sourceVersion: file.sourceVersion, sourceIdentity: file.sourceKey || file.key }];
+  }
   if (kind === "historical_evidence_index") {
     const entries = Array.isArray(value.entries) ? value.entries as Array<Record<string, unknown>> : [];
     return entries.filter(e => /^ev_[a-f0-9]{64}$/u.test(String(e.evidenceId))
@@ -744,7 +782,7 @@ export function sourceObservationFailed(value: Record<string, unknown>): boolean
  * provider. A payload cannot grant itself read authority. Pagination/size fields
  * identify a range within the query, rather than a different semantic query. */
 export function observationRecords(messages: Array<ChatMessage>, tools: Array<RemoteToolLike> = [],
-  options: { confirmedPairsOnly?: boolean } = {}) {
+  options: { confirmedPairsOnly?: boolean; resolveProjection?: ProjectionResolver } = {}) {
   const records: Array<{ content: unknown; value: Record<string, unknown> | undefined; trustedRead: boolean }> = [];
   const history = Chat.empty(); for (const message of messages) history.append(message);
   const pairs = workingContextModule.exchangeIndex(history);
@@ -764,20 +802,24 @@ export function observationRecords(messages: Array<ChatMessage>, tools: Array<Re
       const matches = tools.filter(t => t.name === request?.name);
       const trusted = request && matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
       const archived = ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(String(decoded?.kind));
-      records.push({ content: result.content, trustedRead: Boolean(trusted), value: decoded && trusted && !archived ? {
+      const localArchive = trusted && request.name === "evidence_first_read_context" && localObservationTools.has(matches[0]);
+      const projection = decoded && trusted ? options.resolveProjection?.(decoded, request) : null;
+      records.push({ content: result.content, trustedRead: Boolean(trusted), value: projection || (decoded && trusted && !localArchive ? {
         ...identity.normalizeObservation(decoded, request, matches[0].pluginIdentifier || "local"), canonicalReadObservation: true,
-      } : decoded });
+        ...(archived ? { kind: "untrusted_archive_representation" } : {}),
+      } : decoded) });
     }
   }
   return records;
 }
 
-export function seedRecoveryProgress(history: Chat, tools: Array<RemoteToolLike> = []): {
+type ProjectionResolver = (value: Record<string, unknown>, request: ToolCallRequest) => Record<string, unknown> | null;
+export function seedRecoveryProgress(history: Chat, tools: Array<RemoteToolLike> = [], resolveProjection?: ProjectionResolver): {
   fingerprints: Set<string>; coverage: RecoveryCoverageLedger;
 } {
   const fingerprints = new Set<string>();
   const coverage: RecoveryCoverageLedger = new Map();
-  for (const result of observationRecords(history.getMessagesArray(), tools)) {
+  for (const result of observationRecords(history.getMessagesArray(), tools, { resolveProjection })) {
       if (tools.length && !result.trustedRead) continue;
       fingerprints.add(telemetryFingerprint(result.content));
       const value = result.value;

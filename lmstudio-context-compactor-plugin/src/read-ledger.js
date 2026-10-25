@@ -10,6 +10,7 @@
 // A changed source hash is always a new entry; nothing here blocks a read.
 
 const { normalizeRanges } = require("./evidence-ranges.js");
+const { fileSourceKey } = require("./evidence-identity.js");
 
 const SOURCE_READ_TOOLS = new Set(["read_file", "read_file_range", "read_symbol"]);
 const SHA256 = /^[A-Fa-f0-9]{64}$/u;
@@ -62,15 +63,36 @@ function readFacts(value) {
     || Boolean(bytes && offset === 0 && size !== null && next >= size && value.hasMore !== true);
   if (!lines && !bytes && !complete) return null;
   const body = bodyOf(value);
-  return { path, key: pathKey(path), sourceVersion: sourceVersion.toLowerCase(), lines, bytes, complete,
+  return { path, key: pathKey(path), sourceKey: value.sourceKey || fileSourceKey(value), sourceVersion: sourceVersion.toLowerCase(), lines, bytes, complete,
     totalLines, size, chars: body === null ? 0 : body.length };
+}
+
+/** A reported range is not proof that its body was returned. Receipt matching
+ * uses readFacts; visibility and delivery use this stricter contract. */
+function verifiedReadFacts(value) {
+  const facts = readFacts(value), body = bodyOf(value);
+  if (!facts || body === null || value.bodyOmitted || value.duplicate) return null;
+  if (facts.bytes) {
+    if (body.includes("\uFFFD") || Buffer.byteLength(body, "utf8") !== facts.bytes[1] - facts.bytes[0] + 1
+      || facts.size !== null && facts.bytes[1] >= facts.size) return null;
+    // A verified whole UTF-8 body establishes its source line origin and EOF.
+    // Partial byte windows retain only byte coverage; no guessed conversion.
+    if (facts.bytes[0] === 0 && facts.size === facts.bytes[1] + 1) {
+      const totalLines = body.split(/\r\n|\n|\r/u).length;
+      return { ...facts, lines: [1, totalLines], totalLines };
+    }
+    return facts;
+  }
+  const count = body.split(/\r\n|\n|\r/u).length;
+  return facts.lines && count === facts.lines[1] - facts.lines[0] + 1
+    && (facts.totalLines === null || facts.lines[1] <= facts.totalLines) ? facts : null;
 }
 
 /** The source read a body projection stands for. */
 function projectionFacts(value) {
   if (value?.kind !== "archived_tool_result_projection") return null;
   const facts = value.sourceFacts && typeof value.sourceFacts === "object" ? value.sourceFacts : {};
-  const read = readFacts({ ...facts, path: value.sourceIdentity?.path, sha256: value.sourceVersion,
+  const read = readFacts({ ...facts, ...value.sourceIdentity, sourceKey: value.sourceKey, path: value.sourceIdentity?.path, sha256: value.sourceVersion,
     ok: true, errorCode: undefined, content: undefined });
   return read && { ...read, chars: Number(value.bodyTotalChars) || 0 };
 }
@@ -82,8 +104,13 @@ function archivePageFacts(value) {
   if (value?.kind !== "historical_evidence_range" || value.ok === false) return null;
   const facts = value.sourceFacts && typeof value.sourceFacts === "object" ? value.sourceFacts : {};
   const path = value.sourceIdentity?.path;
-  const read = readFacts({ ...facts, path, sha256: value.sourceVersion, ok: true, errorCode: undefined });
+  const read = readFacts({ ...facts, ...value.sourceIdentity, sourceKey: value.sourceKey, path, sha256: value.sourceVersion, ok: true, errorCode: undefined });
   if (!read) return null;
+  if (value.bodyComplete === true && value.representation === "sanitized_body") {
+    const whole = verifiedReadFacts({ ...facts, ...value.sourceIdentity, sourceKey: value.sourceKey,
+      path, sha256: value.sourceVersion, content: bodyOf(value) });
+    if (whole) return { ...whole, bodyVerified: true, partialPage: false };
+  }
   const returned = Array.isArray(value.returnedLines) && Number.isSafeInteger(value.returnedLines[0])
     && value.returnedLines[1] >= value.returnedLines[0] ? [value.returnedLines[0], value.returnedLines[1]] : null;
   const body = bodyOf(value), range = returned || (value.bodyComplete === true ? read.lines : null);
@@ -107,15 +134,21 @@ class ReadLedger {
 
   get size() { return this.items.size; }
 
-  entryKey(facts) { return `${facts.key}\u0000${facts.sourceVersion}`; }
+  entryKey(facts) { return `${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`; }
 
-  get(path, sourceVersion) { return this.items.get(`${pathKey(path)}\u0000${String(sourceVersion || "").toLowerCase()}`) || null; }
+  get(path, sourceVersion, sourceKey) {
+    if (sourceKey) return this.items.get(`${sourceKey}\u0000${String(sourceVersion || "").toLowerCase()}`) || null;
+    const matches = this.entries().filter(entry => entry.key === pathKey(path) && entry.sourceVersion === String(sourceVersion || "").toLowerCase());
+    return matches.length === 1 ? matches[0] : null;
+  }
 
   /** The most recently delivered version of a path. */
-  latestFor(path) {
+  latestFor(path, sourceKey) {
     const key = pathKey(path);
     let latest = null;
-    for (const entry of this.items.values()) if (entry.key === key && (!latest || entry.sequence > latest.sequence)) latest = entry;
+    const candidates = this.entries().filter(entry => entry.key === key && (!sourceKey || entry.sourceKey === sourceKey));
+    if (!sourceKey && new Set(candidates.map(entry => entry.sourceKey || entry.key)).size > 1) return null;
+    for (const entry of candidates) if (!latest || entry.sequence > latest.sequence) latest = entry;
     return latest;
   }
 
@@ -127,7 +160,7 @@ class ReadLedger {
   classify(facts) {
     if (!facts) return { status: "unknown", entry: null };
     const entry = this.items.get(this.entryKey(facts)) || null;
-    const latest = this.latestFor(facts.path);
+    const latest = this.latestFor(facts.path, facts.sourceKey);
     if (!entry) return { status: latest ? "new_version" : "new_file", entry: null, previous: latest };
     if (latest && latest.sourceVersion !== facts.sourceVersion)
       return { status: "new_version", entry, previous: latest };
@@ -149,8 +182,8 @@ class ReadLedger {
   record(facts, { round = null, turn = "current", toolName = "", archiveRef = null } = {}) {
     if (!facts) return null;
     const id = this.entryKey(facts);
-    const changed = this.latestFor(facts.path)?.sourceVersion !== facts.sourceVersion;
-    const entry = this.items.get(id) || { path: facts.path, key: facts.key, sourceVersion: facts.sourceVersion,
+    const changed = this.latestFor(facts.path, facts.sourceKey)?.sourceVersion !== facts.sourceVersion;
+    const entry = this.items.get(id) || { path: facts.path, key: facts.key, sourceKey: facts.sourceKey, sourceVersion: facts.sourceVersion,
       lineRanges: [], byteRanges: [], complete: false, totalLines: null, size: null, chars: 0,
       firstRound: round, firstTurn: turn, lastRound: round, deliveries: 0, redundant: 0, duplicatedChars: 0,
       archivePages: 0, checks: [], sequence: 0 };
@@ -241,7 +274,7 @@ class ReadLedger {
 
   /** Checks done against an older version than the latest delivered one. */
   staleChecks(entry) {
-    return this.entries().filter(other => other.key === entry.key && other.sourceVersion !== entry.sourceVersion)
+    return this.entries().filter(other => (other.sourceKey || other.key) === (entry.sourceKey || entry.key) && other.sourceVersion !== entry.sourceVersion)
       .flatMap(other => other.checks.map(item => item.check)).filter(check => !entry.checks.some(item => item.check === check));
   }
 
@@ -257,7 +290,7 @@ class ReadLedger {
   stats() { return { files: this.items.size, ...this.counters }; }
 
   toJSON() {
-    return { schemaVersion: 1, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
+    return { schemaVersion: 2, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
       resultSizes: [...this.resultSizes].slice(-MAX_RESULT_SIZES) };
   }
@@ -266,10 +299,11 @@ class ReadLedger {
    * restored entries belong to an earlier turn of the conversation. */
   load(value) {
     this.reset();
-    if (!value || value.schemaVersion !== 1 || !Array.isArray(value.entries)) return false;
+    if (!value || ![1, 2].includes(value.schemaVersion) || !Array.isArray(value.entries)) return false;
     for (const item of value.entries.slice(-MAX_ENTRIES)) {
       if (!item || typeof item.path !== "string" || !SHA256.test(String(item.sourceVersion || ""))) continue;
       const entry = { ...item, key: pathKey(item.path), sourceVersion: String(item.sourceVersion).toLowerCase(),
+        sourceKey: value.schemaVersion === 2 && typeof item.sourceKey === "string" ? item.sourceKey : `legacy:${pathKey(item.path)}`,
         lineRanges: normalizeRanges(item.lineRanges || []).slice(-MAX_RANGES),
         byteRanges: normalizeRanges(item.byteRanges || []).slice(-MAX_RANGES),
         // Old manifests called self-declared claims verified. Do not migrate that authority.
@@ -314,7 +348,7 @@ function visibleRanges(observations) {
   const visible = new Map();
   for (const item of observations || []) {
     if (!item?.rawVerified || !item.versionRef) continue;
-    const id = `${pathKey(item.path)}\u0000${String(item.versionRef).toLowerCase()}`;
+    const id = `${item.sourceKey || pathKey(item.path)}\u0000${String(item.versionRef).toLowerCase()}`;
     const current = visible.get(id) || { line: [], utf8_byte: [] };
     if (item.rangeUnit === "line" || item.rangeUnit === "utf8_byte")
       current[item.rangeUnit] = normalizeRanges([...current[item.rangeUnit], ...(item.verifiedRanges || [])]);
@@ -338,12 +372,12 @@ function visibleText(entry, shown, excerpt) {
  * locator to page from. Null when every delivered body is still visible. */
 function ledgerFact(ledger, { observations = [], excerpts = new Set(), handles = new Map(), reportNow = false } = {}) {
   const latest = new Map();
-  for (const entry of ledger.entries()) latest.set(entry.key, entry);
+  for (const entry of ledger.entries()) latest.set(entry.sourceKey || entry.key, entry);
   const shown = visibleRanges(observations);
   const rows = [];
   let hidden = 0;
   for (const entry of [...latest.values()].reverse()) {
-    const id = `${entry.key}\u0000${entry.sourceVersion}`;
+    const id = `${entry.sourceKey || entry.key}\u0000${entry.sourceVersion}`;
     const visible = visibleText(entry, shown.get(id), excerpts.has(id));
     const stale = ledger.staleChecks(entry);
     if (visible === "in full" && !reportNow) continue;
@@ -377,4 +411,4 @@ function ledgerFact(ledger, { observations = [], excerpts = new Set(), handles =
 }
 
 module.exports = { ReadLedger, SOURCE_READ_TOOLS, archivePageFacts, deliveredText, ledgerFact, pathKey, projectionFacts,
-  readFacts, unchangedReadNotice, visibleRanges };
+  readFacts, verifiedReadFacts, unchangedReadNotice, visibleRanges };

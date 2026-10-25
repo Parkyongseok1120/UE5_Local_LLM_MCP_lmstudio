@@ -418,7 +418,7 @@ test("the same path with a new sha returns its full body; a narrower range keeps
   assert.equal(changed.newDeliveries, 1);
   assert.equal(resultOf(changed).content, changedBody);
   const narrow = returnRound(manager, exchangeMessages("c3", "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 },
-    { ok: true, path: SOURCE, sha256: shaOf("4d"), startLine: 200, endLine: 203, totalLines: 420,
+    { ok: true, path: SOURCE, canonicalProject: "C:/Game/Game.uproject", sha256: shaOf("4d"), startLine: 200, endLine: 203, totalLines: 420,
       content: changedBody.split("\n").slice(199, 203).join("\n") }), 4);
   const kept = resultOf(narrow);
   assert.match(kept.content, /Fire\(int Burst\)/, "a focused re-read of delivered lines keeps its body");
@@ -442,34 +442,23 @@ test("a server no-new-information answer and an archive re-page are non-progress
   const page = await archiveTool.implementation({ action: "read", readHandle: handle, view: "body", startLine: 1, endLine: 40, maxChars: 8192 }, environment);
   assert.equal(page.ok, true);
   const repage = returnRound(manager, exchangeMessages("c3", "evidence_first_read_context", { action: "read", readHandle: handle }, page), 3);
-  assert.equal(repage.repages, 1);
+  assert.equal(repage.replaced, 1, "already visible archive body is suppressed");
   assert.equal(repage.newDeliveries, 0);
   const progress = manager.observe(repage.messages);
-  assert.equal(progress.archiveRepageCount, 1);
+  assert.equal(progress.redundantRereadCount, 1);
   assert.equal(progress.newArchiveUnits, 0, "restoring delivered lines is not new archive coverage");
 });
 
 // Conversation 1792929236226, r7-r12: after a projection the model re-read
 // files whose every judgment it had already reached.
-test("a whole re-read of a closed file returns its judgments once, then the body", () => {
+test("review judgments cannot suppress a hidden file body", () => {
   const { manager, history } = ledgerSetup();
-  const key = "source/game/ledgercharacter.cpp";
-  manager.setClosedFileFacts((file, sha) => file === key && sha === shaOf("3c")
-    ? ["[found] ResetForRespawn: never called | ↳ project://Source/Game/LedgerCharacter.cpp:200 @3c3c3c3c"] : null);
-  assert.equal(manager.isClosedFile(key), true);
   const projected = manager.project(history, {}, 512).history;
-  assert.match(projected.toString(), /CLOSED REVIEW: every judgment on this file/);
+  assert.doesNotMatch(projected.toString(), /CLOSED REVIEW/);
   manager.captureExposure(projected, "body-projected", true);
-  const first = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 4);
-  const closed = resultOf(first);
-  assert.equal(closed.status, "closed_by_review_register");
-  assert.equal(closed.content, undefined, "no body");
-  assert.match(closed.reviewItems[0], /ResetForRespawn/);
-  assert.match(closed.notice, /^CLOSED: .* repeat this read if the whole body is needed/);
-  assert.equal(first.repeatRestores, 1);
-  // Asked again, the whole body comes back.
-  const again = returnRound(manager, exchangeMessages("c3", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 5);
-  assert.equal(resultOf(again).content, characterBody);
+  const restored = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 4);
+  assert.equal(resultOf(restored).content, characterBody);
+  assert.equal(restored.focusedReads, 1);
 });
 
 // Conversation 1792916809646 v1, r32 and r34: the server's repeat cache
@@ -480,7 +469,8 @@ test("a server repeat receipt for a hidden body returns the archived body", () =
   const projected = manager.project(history, {}, 512).history;
   manager.captureExposure(projected, "body-projected", true);
   const server = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE },
-    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abc" }), 4);
+    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abc",
+      path: SOURCE, canonicalProject: "C:/Game/Game.uproject", sha256: shaOf("3c"), startLine: 1, endLine: 420, totalLines: 420, bodyOmitted: true }), 4);
   const restored = resultOf(server);
   assert.equal(restored.content, characterBody, "the body is back without an archive round");
   assert.match(restored.unchangedNotice, /Same sha 3c3c3c3c/);
@@ -488,7 +478,8 @@ test("a server repeat receipt for a hidden body returns the archived body", () =
   assert.equal(server.focusedReads, 1, "counted as a restore");
   // The restored body is visible again, so the next receipt is a locator.
   const other = returnRound(manager, exchangeMessages("c3", "read_file", { path: SOURCE },
-    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abd" }), 5);
+    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abd",
+      path: SOURCE, canonicalProject: "C:/Game/Game.uproject", sha256: shaOf("3c"), startLine: 1, endLine: 420, totalLines: 420, bodyOmitted: true }), 5);
   assert.equal(resultOf(other).kind, "redundant_source_read");
   assert.equal(other.redundant, 1);
 });
@@ -647,8 +638,8 @@ test("a focused range already visible through the archive is not counted as anot
   const history = Chat.from([{ role: "user", content: "Check this function." }]);
   for (const message of restored) history.append(message);
   manager.captureExposure(history, "archive-range-visible", true);
-  assert.equal(manager.ledger.classify(require('../src/read-ledger.js').readFacts(value)).status, 'redundant');
-  assert.equal(manager.visibleRead(require('../src/read-ledger.js').readFacts(value)), true);
+  assert.equal(manager.ledger.classify(require('../src/read-ledger.js').readFacts({ ...value, provider: readTool.pluginIdentifier })).status, 'redundant');
+  assert.equal(manager.visibleRead(require('../src/read-ledger.js').readFacts({ ...value, provider: readTool.pluginIdentifier })), true);
   const repeat = returnRound(manager, exchangeMessages("focus2", "read_file_range", { path: SOURCE, startLine: 200, endLine: 203 }, value), 3);
   assert.equal(repeat.replaced, 1);
   assert.equal(repeat.focusedReads, 0);

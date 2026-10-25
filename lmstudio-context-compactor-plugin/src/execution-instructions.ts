@@ -16,6 +16,13 @@ export const REPORT_REVIEW_INSTRUCTION = [
   "Cleared rows are rejected working judgments: do not re-verify or revive them. No tool calls.",
 ].join(" ");
 
+export const REPETITION_RECOVERY_INSTRUCTION = [
+  "The previous generation was stopped because its reasoning repeated the same block; that reasoning is discarded.",
+  "Do not reconstruct engine or library source from memory. Settle the question it circled with one structured tool request "
+    + "(engine symbol lookup, or a line-range read of engine:// source), or use the engine contract in this input, or report it as unverified.",
+  "Do not restate the repeated block. Keep reasoning brief: name the next tool request or the conclusion first.",
+].join(" ");
+
 export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",

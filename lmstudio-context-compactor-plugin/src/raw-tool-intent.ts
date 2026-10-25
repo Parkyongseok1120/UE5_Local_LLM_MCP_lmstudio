@@ -112,6 +112,47 @@ export function hasRawToolIntent(text: string, messages: Array<ChatMessage>): bo
   return containsUnresolvedToolIntent(text, messages) || hasUnexecutedRawToolSyntax(text);
 }
 
+/** Presentation only. The original text still drives intent classification and
+ * recovery; hiding a wrapper never executes it or makes a report complete. */
+export function stripUnexecutedToolProtocol(text: string): string {
+  const wrappers = RAW_TOOL_WRAPPER_PATTERNS.flatMap(pattern => [...text.matchAll(pattern)]
+    .map(match => ({ start: match.index!, end: match.index! + match[0].length })));
+  const literal = wrappers.filter(span => isLiteralRawToolWrapper(text, span.start, span.end));
+  const hidden = wrappers.filter(span => !literal.some(outer => outer.start <= span.start && outer.end >= span.end));
+  for (const match of text.matchAll(/<(?:tool_call|function=)|<\|(?:tool_call|python_tag)\|/giu)) {
+    const start = match.index!;
+    if (wrappers.some(span => span.start <= start && span.end > start)) continue;
+    const end = text.indexOf("\n", start);
+    if (!isLiteralRawToolWrapper(text, start, end < 0 ? text.length : end)) hidden.push({ start, end: text.length });
+  }
+  let cursor = 0, visible = "";
+  for (const span of hidden.sort((a, b) => a.start - b.start)) {
+    if (span.start > cursor) visible += text.slice(cursor, span.start);
+    cursor = Math.max(cursor, span.end);
+  }
+  return visible + text.slice(cursor);
+}
+
+/** Hold a line containing '<' until its quotation/wrapper boundary is known.
+ * Ordinary prose streams immediately. Split markers cannot leak first bytes. */
+export class ToolProtocolOutputFilter {
+  private raw = "";
+  private emitted = 0;
+  push(text: string): string {
+    this.raw += text;
+    const lineStart = this.raw.lastIndexOf("\n") + 1;
+    const safeEnd = this.raw.slice(lineStart).includes("<") ? lineStart : this.raw.length;
+    return this.take(stripUnexecutedToolProtocol(this.raw.slice(0, safeEnd)));
+  }
+  finish(): string { return this.take(stripUnexecutedToolProtocol(this.raw)); }
+  private take(visible: string): string {
+    if (visible.length < this.emitted) return "";
+    const result = visible.slice(this.emitted);
+    this.emitted = visible.length;
+    return result;
+  }
+}
+
 export function visibleTextFromMessages(messages: Array<ChatMessage>, internalDataParts: readonly string[] = []): string {
   return messages
     .filter(message => message.isAssistantMessage())

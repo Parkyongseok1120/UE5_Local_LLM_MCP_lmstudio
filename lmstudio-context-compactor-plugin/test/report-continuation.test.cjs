@@ -98,7 +98,7 @@ test("one automatic continuation receives the prefix and appends without a secon
   await makeHandler()(ctl);
   assert.equal(calls, 2);
   const visible = ctl.blocks.filter(b => b.options.includeInContext !== false);
-  assert.deepEqual(visible.map(b => b.text), [prefix + suffix]);
+  assert.deepEqual(visible.map(b => b.text), [prefix, suffix]);
   assert.equal(ctl.blocks.filter(b => b.options.style?.type === "thinking").length, 1);
   assert.equal(ctl.events.find(e => e.event === "execution_outcome").executionOutcome, "completed");
 });

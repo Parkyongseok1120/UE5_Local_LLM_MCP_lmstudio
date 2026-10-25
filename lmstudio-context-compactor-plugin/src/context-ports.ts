@@ -55,6 +55,7 @@ export const workingContextModule = require("./working-context.js") as {
     lastSummaryInput: string;
     summaryAttempts?: string[];
     lastCommitReason: string | null;
+    lastRetentionReason?: string | null;
     persistable(history: Chat): Chat;
     project(history: Chat, observation: (request: ToolCallRequest) => boolean,
       metadata?: Record<string, unknown>, maxChars?: number): {
@@ -79,6 +80,7 @@ export const workingContextModule = require("./working-context.js") as {
     archiveRefFor(request: ToolCallRequest, result: unknown): ArchiveLocator | null;
     archiveLocator(ref: { evidenceId: string; version: string } | undefined, withOutline?: boolean, expected?: ReadFacts | null): ArchiveLocator | null;
     archivedValue?(ref: { evidenceId: string; version: string } | undefined): Record<string, unknown> | null;
+    resolveProjection?(value: Record<string, unknown>, request: ToolCallRequest): Record<string, unknown> | null;
     archiveResponseBytes?(args: Record<string, unknown>): number | undefined;
   };
   serialize(history: Chat): Array<unknown>;
@@ -95,18 +97,18 @@ export const toolMemory = require("./compaction-tool-memory.js") as {
 
 export type ArchiveLocator = { evidenceId: string; version: string; readHandle: string; outline?: string[] };
 /** What one source read, projection or archive page covers of one path+version. */
-export type ReadFacts = { path: string; key: string; sourceVersion: string; lines: [number, number] | null;
+export type ReadFacts = { path: string; key: string; sourceKey?: string; sourceVersion: string; lines: [number, number] | null;
   bytes: [number, number] | null; complete: boolean; totalLines: number | null; size: number | null; chars: number;
   partialPage?: boolean; bodyVerified?: boolean };
-export type LedgerEntry = { path: string; key: string; sourceVersion: string; lineRanges: Array<[number, number]>;
+export type LedgerEntry = { path: string; key: string; sourceKey?: string; sourceVersion: string; lineRanges: Array<[number, number]>;
   byteRanges: Array<[number, number]>; complete: boolean; totalLines: number | null; size: number | null; chars: number;
   firstRound: number | null; firstTurn: string; lastRound: number | null; deliveries: number; redundant: number;
   duplicatedChars: number; archivePages: number; checks: Array<{ check: string; round: number | null; claim?: string }>;
   archiveRef?: { evidenceId: string; version: string } };
 export type ReadLedgerLike = {
   readonly size: number;
-  get(path: string, sourceVersion: string): LedgerEntry | null;
-  latestFor(path: string): LedgerEntry | null;
+  get(path: string, sourceVersion: string, sourceKey?: string): LedgerEntry | null;
+  latestFor(path: string, sourceKey?: string): LedgerEntry | null;
   entries(): LedgerEntry[];
   classify(facts: ReadFacts | null): { status: "unknown" | "new_file" | "new_version" | "new_range" | "redundant" | "narrower";
     entry: LedgerEntry | null; previous?: LedgerEntry | null };
@@ -125,6 +127,7 @@ export type ReadLedgerLike = {
 };
 export const readLedgerModule = require("./read-ledger.js") as {
   ReadLedger: new () => ReadLedgerLike;
+  verifiedReadFacts(value: unknown): ReadFacts | null;
   SOURCE_READ_TOOLS: Set<string>;
   readFacts(value: unknown): ReadFacts | null;
   projectionFacts(value: unknown): ReadFacts | null;

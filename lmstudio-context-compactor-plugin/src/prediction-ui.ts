@@ -21,25 +21,30 @@ type ContentController = Pick<PredictionLoopHandlerController, "createContentBlo
  * owns which completed planning/evidence is safe to carry to the next turn. */
 export class VisibleHistoryRecorder {
   private readonly blocks: Array<{ role: ChatMessageRoleData; text: string; parts: ChatMessagePartData[] }> = [];
-  private lastAnswer: { block: ReturnType<ContentController["createContentBlock"]>; entry: { text: string } } | null = null;
+  private lastAnswer: { entry: { text: string; answerPrefix: string } } | null = null;
+  private closed = false;
+  private readonly createBlock: (options: Parameters<ContentController["createContentBlock"]>[0], answerPrefix?: string) => ReturnType<ContentController["createContentBlock"]>;
   private readonly initial: Chat;
   readonly controller: ContentController;
 
   constructor(ctl: ContentController, initial: Chat) {
     this.initial = Chat.from(initial);
-    this.controller = { createContentBlock: options => {
+    this.createBlock = (options, answerPrefix = "") => {
+      if (this.closed) throw new Error("Visible transcript is closed");
       const block = ctl.createContentBlock(options);
       if (options?.includeInContext === false) return block;
-      const entry = { role: options?.roleOverride || "assistant", text: "", parts: [] as ChatMessagePartData[] };
+      const entry = { role: options?.roleOverride || "assistant", text: "", answerPrefix, parts: [] as ChatMessagePartData[] };
       this.blocks.push(entry);
       const recorder = this;
       const recorded = new Proxy(block, { get(target, key) {
         if (key === "appendText") return (...args: Parameters<typeof block.appendText>) => {
+          if (recorder.closed) return;
           const result = target.appendText(...args); entry.text += args[0];
-          if (entry.role === "assistant" && entry.parts.length === 0) recorder.lastAnswer = { block: recorded, entry };
+          if (entry.role === "assistant" && entry.parts.length === 0) recorder.lastAnswer = { entry };
           return result;
         };
         if (key === "appendToolRequest") return (...args: Parameters<typeof block.appendToolRequest>) => {
+          if (recorder.closed) return;
           recorder.lastAnswer = null;
           const result = target.appendToolRequest(...args), request = args[0];
           // Same shape as LM Studio's rehydrated function requests.
@@ -50,6 +55,7 @@ export class VisibleHistoryRecorder {
           return result;
         };
         if (key === "replaceToolRequest") return (...args: Parameters<typeof block.replaceToolRequest>) => {
+          if (recorder.closed) return;
           const result = target.replaceToolRequest(...args), request = args[0];
           const part = entry.parts.find(part => part.type === "toolCallRequest"
             && part.toolCallRequest.id === request.toolCallRequestId);
@@ -57,6 +63,7 @@ export class VisibleHistoryRecorder {
           return result;
         };
         if (key === "appendToolResult") return (...args: Parameters<typeof block.appendToolResult>) => {
+          if (recorder.closed) return;
           recorder.lastAnswer = null;
           const result = target.appendToolResult(...args), value = args[0];
           entry.parts.push({ type: "toolCallResult", toolCallId: value.toolCallRequestId, content: value.content });
@@ -66,17 +73,20 @@ export class VisibleHistoryRecorder {
         return typeof value === "function" ? value.bind(target) : value;
       } });
       return recorded;
-    } };
+    };
+    this.controller = { createContentBlock: options => this.createBlock(options) };
   }
 
-  get lastAnswerText(): string { return this.lastAnswer?.entry.text || ""; }
+  get lastAnswerText(): string { return this.lastAnswer ? this.lastAnswer.entry.answerPrefix + this.lastAnswer.entry.text : ""; }
 
-  /** Only a tool-free continuation may reuse the existing answer block. */
+  /** The logical answer continues, but a committed host block is immutable. */
   continuationController(): ContentController {
-    return { createContentBlock: options => options?.includeInContext !== false
-      && (!options?.roleOverride || options.roleOverride === "assistant") && this.lastAnswer
-      ? this.lastAnswer.block : this.controller.createContentBlock(options) };
+    return { createContentBlock: options => this.createBlock(options,
+      options?.includeInContext !== false && (!options?.roleOverride || options.roleOverride === "assistant")
+        ? this.lastAnswerText : "") };
   }
+
+  freeze(): Chat { this.closed = true; return this.snapshot(); }
 
   snapshot(): Chat {
     const history = Chat.from(this.initial);

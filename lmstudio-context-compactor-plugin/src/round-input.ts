@@ -143,6 +143,13 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     return { assembled, budget: finalBudget, desiredMaxTokens, history: low.history,
       fit: finalBudget.fit && assembled.measurement.remainingTokens >= 0 && low.canRun };
   };
+  const measureOriginalProfile = async (history: Chat) => {
+    ctl.guardAbort();
+    const candidate = await assembleModelInput(history, { tools: modelTools, instructions: scopeInstructions,
+      outputReserve: config.maxOutputReserve, modelInputId: `${modelInputId}:resume-original` });
+    return candidate.measurement.exact && candidate.measurement.remainingTokens >= minimumReadBudget(modelTools)
+      && !contextManager.shouldProjectEvidence(candidate.measurement, modelTools.some(hasReadCapability), minimumReadBudget(modelTools));
+  };
   let assembledInput = await assembleModelInput(workingHistory);
   if ((options.reasoningRecovery || options.headroomOutputCap) && !config.observeOnly && roundOutputReserve > config.maxOutputReserve) {
     const measured = assembledInput.measurement;
@@ -486,7 +493,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   return { kind: "ready" as const, ...baseResult(), before, workingHistory, modelHistory: workingHistory,
     modelComposition: assembledInput.composition, modelInput: assembledInput.history, finalMeasurement, assembledInput,
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
-    lowWater, projectionApplied, projectionExhausted, roundOutputReserve, outputCapSource, assembleRecoveryCandidate,
+    lowWater, projectionApplied, projectionExhausted, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
     mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
       && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };

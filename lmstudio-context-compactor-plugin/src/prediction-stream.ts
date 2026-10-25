@@ -4,6 +4,7 @@ import type {
   PredictionLoopHandlerController,
 } from "@lmstudio/sdk";
 import { InternalDataOutputFilter, stripInternalDataEcho } from "./internal-data-output";
+import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol } from "./raw-tool-intent";
 
 type SplitVisibleAnswer = (text: string) => {
   visibleText: string;
@@ -21,6 +22,7 @@ type StreamState = {
   finished: boolean;
   consumed: boolean;
   dataFilter: InternalDataOutputFilter;
+  protocolFilter: ToolProtocolOutputFilter;
 };
 
 export type StreamedAssistant = {
@@ -35,6 +37,9 @@ export class GenerationRepetitionDetector {
   private detected = false;
   private totalChars = 0;
   private lastCheckedAt = 0;
+  private block = "";
+  /** The block that repeated, once detected. */
+  get repeatedBlock() { return this.block; }
 
   constructor(private readonly repeatCount = 3, private readonly minimumBlockChars = 80) {}
 
@@ -58,6 +63,7 @@ export class GenerationRepetitionDetector {
       }
       if (repeated) {
         this.detected = true;
+        this.block = suffix;
         return true;
       }
     }
@@ -83,6 +89,7 @@ export class PredictionStreamRenderer {
         rawVisible: "", pendingVisible: "", footerSeen: false,
         sawFragment: false, finished: false, consumed: false,
         dataFilter: new InternalDataOutputFilter(this.internalDataParts),
+        protocolFilter: new ToolProtocolOutputFilter(),
       };
       this.states.set(roundIndex, state);
     }
@@ -104,7 +111,7 @@ export class PredictionStreamRenderer {
   }
 
   private appendVisible(state: StreamState, text: string, fragment: LLMPredictionFragmentWithRoundIndex): void {
-    text = state.dataFilter.push(text);
+    text = state.dataFilter.push(state.protocolFilter.push(text));
     if (!text) return;
     this.answerBlock(state).appendText(text, {
       tokensCount: fragment.tokensCount,
@@ -157,11 +164,11 @@ export class PredictionStreamRenderer {
     if (state.finished) return;
     state.finished = true;
     if (!state.footerSeen && state.pendingVisible) {
-      const visible = state.dataFilter.push(state.pendingVisible);
+      const visible = state.dataFilter.push(state.protocolFilter.push(state.pendingVisible));
       if (visible) this.answerBlock(state).appendText(visible);
       state.pendingVisible = "";
     }
-    const remaining = state.dataFilter.finish();
+    const remaining = state.dataFilter.push(state.protocolFilter.finish()) + state.dataFilter.finish();
     if (remaining) this.answerBlock(state).appendText(remaining);
     if (state.thinkingBlock) {
       state.thinkingBlock.setStyle({ type: "thinking", ended: true, title: "생각" });
@@ -174,13 +181,13 @@ export class PredictionStreamRenderer {
     const entry = [...this.states.entries()]
       .sort(([left], [right]) => left - right)
       .find(([, state]) => state.sawFragment && !state.consumed);
-    if (!entry) return { streamed: false, visibleText: stripInternalDataEcho(this.splitVisibleAnswer(rawText).visibleText, this.internalDataParts) };
+    if (!entry) return { streamed: false, visibleText: stripUnexecutedToolProtocol(stripInternalDataEcho(this.splitVisibleAnswer(rawText).visibleText, this.internalDataParts)) };
     const [roundIndex, state] = entry;
     this.finish(roundIndex);
     state.consumed = true;
     return {
       streamed: true,
-      visibleText: stripInternalDataEcho(this.splitVisibleAnswer(state.rawVisible).visibleText, this.internalDataParts),
+      visibleText: stripUnexecutedToolProtocol(stripInternalDataEcho(this.splitVisibleAnswer(state.rawVisible).visibleText, this.internalDataParts)),
     };
   }
 }

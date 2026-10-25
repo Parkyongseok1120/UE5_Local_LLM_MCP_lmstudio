@@ -43,6 +43,9 @@ function relativeSlash(root, target) {
 
 function errorFromException(error) {
   const message = String(error?.message || error || "Unknown tool error");
+  if (error?.code === "REQUEST_CANCELLED") return failure("REQUEST_CANCELLED", message, {
+    details: error.details || { cancelled: true }, retryAllowed: false, retryMode: "none",
+  });
   // Path-policy errors carry their own stable code and observed details.
   if (typeof error?.directErrorCode === "string" && error.directErrorCode) {
     return failure(error.directErrorCode, message, {

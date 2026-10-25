@@ -134,13 +134,14 @@ export const directConfigSchematics = createConfigSchematics()
   .field("noNewEvidenceRounds", "numeric", { displayName: "No-new-evidence rounds", subtitle: "Consecutive duplicate-read rounds without needed source recovery before a report reminder; a second reminder in the same stalled episode ends research. New progress or a failed read resets the episode." }, NUMERIC_FIELDS.noNewEvidenceRounds.default)
   .field("generationRepetitionAction", "select", {
     displayName: "Within-generation repetition",
-    subtitle: "Warn or pause when a substantial generated text block repeats consecutively.",
+    subtitle: "Recover stops a research round whose reasoning repeats and retries it once with the matching engine facts; warn or pause otherwise.",
     options: [
+      { value: "recover", displayName: "Recover" },
       { value: "warn", displayName: "Warn" },
       { value: "pause", displayName: "Pause" },
       { value: "off", displayName: "Off" },
     ],
-  }, "warn")
+  }, "recover")
   .field("generationRepeatCount", "numeric", { displayName: "Text repetition threshold", subtitle: "Consecutive copies required; each repeated block must be at least 80 characters." }, NUMERIC_FIELDS.generationRepeatCount.default)
   .field("inputAvailabilityMode", "select", {
     displayName: "Current input availability",

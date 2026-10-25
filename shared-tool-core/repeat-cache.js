@@ -43,11 +43,12 @@ class DirectRepeatCache {
     this.entries.delete(key);
     this.entries.set(key, entry);
     return {
+      ...entry.observation,
       ok: entry.ok,
       duplicate: true,
       status: "no_new_information",
       message: entry.ok
-        ? "This receipt identifies an identical successful observation against unchanged state; no new information was produced."
+        ? "Unchanged observation; body omitted for the echoed receipt."
         : `This identical call already failed against the same observable state; no new information was produced. ${entry.message}`.trim(),
       originalOutcome: entry.ok ? "success" : "failure",
       ...(!entry.ok && entry.errorCode ? { originalErrorCode: entry.errorCode } : {}),
@@ -56,6 +57,8 @@ class DirectRepeatCache {
         retry: { allowed: false, mode: "none" },
       } : {}),
       resultDigest: entry.resultDigest,
+      repeatOfDigest: entry.resultDigest,
+      ...(entry.ok ? { bodyOmitted: true, repeatReceipt: entry.repeatReceipt } : {}),
     };
   }
 
@@ -69,6 +72,13 @@ class DirectRepeatCache {
       message: String(payload?.message || "").slice(0, 600),
       repeatReceipt,
       resultDigest: digest(payload || {}).slice(0, 24),
+      // Observation identity is portable; mutation capabilities never are.
+      observation: payload?.ok !== false && /^[a-f0-9]{64}$/iu.test(String(payload?.sha256 || ""))
+        ? { ...Object.fromEntries(["path", "sha256", "canonicalProject", "resolvedRootType",
+          "engineIdentity", "workspaceIdentity", "startLine", "endLine", "totalLines", "offsetBytes", "nextOffsetBytes", "size",
+          "rangeSha256", "requestedEndLine", "requestedRangeComplete", "rangeComplete", "coverage", "range"]
+          .filter(key => payload[key] !== undefined).map(key => [key, payload[key]])),
+          canonicalProject: payload.canonicalProject || payload.activeProject } : {},
     };
     this.entries.set(key, entry);
     while (this.entries.size > this.maxEntries) {

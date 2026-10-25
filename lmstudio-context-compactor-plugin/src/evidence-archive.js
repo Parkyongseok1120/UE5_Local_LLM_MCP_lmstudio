@@ -564,7 +564,7 @@ class EvidenceArchive {
       .filter(e => e.ok && e.record.metadata?.sourceKind !== "conversation_message").map(e => e.record)
       .filter(r => { const own = key(r.metadata?.sourceIdentity?.path); return Boolean(own) && (own === wanted || own.endsWith(`/${wanted}`)); })
       .sort((a, b) => b.createdAt - a.createdAt || a.evidenceId.localeCompare(b.evidenceId));
-    const paths = new Set(matches.map(r => key(r.metadata?.sourceIdentity?.path)));
+    const paths = new Set(matches.map(r => r.metadata?.sourceKey || require("./evidence-identity.js").fileSourceKey({ ...r.metadata?.sourceIdentity, provider: r.metadata?.provider })));
     if (!matches.length || paths.size > 1) {
       const validHandles = matches.length ? matches.slice(0, 8).map(r => ({ readHandle: this.readHandleFor(r),
         path: r.metadata?.sourceIdentity?.path, sourceVersion: r.metadata?.sourceVersion })) : this.validHandles(undefined);
@@ -790,6 +790,7 @@ class EvidenceArchive {
     const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
       originalCallId: r.metadata?.providerRequestId,
       sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
+      sourceKey: r.metadata?.sourceKey || (decodedValue ? require("./evidence-identity.js").fileSourceKey({ ...decodedValue, provider: r.metadata?.provider }) : undefined),
       sourceIdentity: start > 0 && !lineView && identity.path ? { path: identity.path } : identity, sourceIdentityDigest: r.metadata?.sourceIdentityDigest || "unknown-source",
       toolName: r.metadata?.toolName, resultStatus: r.metadata?.resultStatus,
       errorCode: r.metadata?.errorCode ?? null,
@@ -860,7 +861,7 @@ class EvidenceArchive {
       const kept = end;
       end = limit;
       const extended = response(), extendedChars = JSON.stringify(extended).length;
-      if (extendedChars <= Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars, totalBudget + 2 * ARCHIVE_TAIL_CHARS)) {
+      if (extendedChars <= Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars, totalBudget)) {
         result = extended; serialized = JSON.stringify(extended);
       } else end = kept;
     }

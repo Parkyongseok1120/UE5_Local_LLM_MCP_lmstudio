@@ -9,6 +9,17 @@ export function reasoningRecoveryOutputCap(maxOutputReserve: number): number {
   return Math.min(REASONING_RECOVERY_TOKEN_CEILING, maxOutputReserve * 2);
 }
 
+/** What the retry after a repeated reasoning block is told: the block's
+ * opening (to name what it circled, not to resume it) and the engine contract
+ * facts its wording touches. */
+export function repetitionFact(block: string, engineFact: string | null): string {
+  const opening = block.replace(/\s+/gu, " ").trim().slice(0, 200);
+  return [`Runtime evidence observation: the previous generation repeated this reasoning block and was stopped: "${opening}…"`,
+    "It was reconstructing source from memory. Settle that question with a tool request or the engine contract below, "
+      + "or report it as unverified; do not reason through it again.",
+    ...(engineFact ? [engineFact] : [])].join("\n");
+}
+
 /** Admission only. The execution owns attempts; input preparation owns fit;
  * the existing guard still owns every tool authorization. */
 export function decideReasoningRecovery(options: {

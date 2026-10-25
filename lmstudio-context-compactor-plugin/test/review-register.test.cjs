@@ -107,7 +107,7 @@ test("a judgment carries its evidence bundle: location, sha, search scope and co
   const [row, evidence] = register.lines();
   assert.match(row, /^- \[found\] ResetForRespawn/);
   assert.match(evidence, /^ {2}↳ project:\/\/Source\/Game\/Private\/GamePlayerState\.cpp:79 @abababab · search /);
-  assert.ok(register.closedFileFacts("source/game/private/gameplayerstate.cpp", sha)[0].includes("ResetForRespawn"));
+  assert.equal(register.closedFileFacts("source/game/private/gameplayerstate.cpp", sha), null, "a judgment never closes a file");
   assert.equal(register.closedFileFacts("source/game/private/gameplayerstate.cpp", "cd".repeat(32)), null, "a changed sha reopens the file");
   // Echoed bundle lines are not new judgments.
   register.observe([assistant(evidence)], 8);

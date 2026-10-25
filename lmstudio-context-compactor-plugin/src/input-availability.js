@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
+const { fileSourceKey } = require("./evidence-identity.js");
 
 const { normalizeRanges, sourceCoverage } = require("./evidence-ranges.js");
 
@@ -138,6 +139,7 @@ function rawObservation(payload) {
   else bodyState = rangeUnit === "utf8_byte" ? "byte_body_mismatch" : "range_body_mismatch";
   return {
     sourceType,
+    sourceKey: payload.sourceKey || fileSourceKey(payload),
     provider: String(payload.provider || ""),
     sourceQueryKey: String(payload.sourceQueryKey || ""),
     representation: String(payload.representation || "source"),

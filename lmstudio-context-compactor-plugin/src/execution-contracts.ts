@@ -101,7 +101,7 @@ export type DirectConfig = {
   /** Tool rounds of reads with no new path, version or range before report_now. */
   noNewEvidenceRounds: number;
   maxResearchRounds: number;
-  generationRepetitionAction: StagnationAction;
+  generationRepetitionAction: GenerationRepetitionAction;
   generationRepeatCount: number;
   inputAvailabilityMode: InputAvailabilityMode;
   auditCompletionMode: AuditCompletionMode;
@@ -112,6 +112,8 @@ export type DirectConfig = {
 };
 
 export type StagnationAction = "off" | "warn" | "pause";
+/** recover: a research round whose reasoning repeats is stopped and retried once. */
+export type GenerationRepetitionAction = StagnationAction | "recover";
 
 export type InputAvailabilityMode = "off" | "observe" | "inject";
 
@@ -154,7 +156,7 @@ export const PINNED_WORKING_SET_MIN_CHARS = 6144;
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery" | "report_review"
   | "research_round_limit" | "context_budget" | "research_recovery_complete"
-  | "research_recovery_exhausted" | "research_no_new_evidence";
+  | "research_recovery_exhausted" | "research_no_new_evidence" | "research_repetition";
 
 export type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
 

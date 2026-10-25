@@ -30,6 +30,18 @@ def plant_compactor_sdk_fixture(plugin_dir: Path) -> None:
     (sdk / "dist").mkdir(parents=True, exist_ok=True)
     (sdk / "package.json").write_text('{"version":"1.5.0"}', encoding="utf-8")
     source = "handlePredictionEnd: endPacket => {\n                const predictionResult = makePredictionResult({"
+    source += '\nawait baseOpts.guardToolCall(predictionsPerformed, callId, new GuardToolCallController(request, tool, resultContainer));\n'
+    source += '''// Now we need to call RequestFinalized
+                    safeCallCallback(logger, "onToolCallRequestFinalized", baseOpts.onToolCallRequestFinalized, [
+                        predictionsPerformed,
+                        callId,
+                        {
+                            toolCallRequest: request,
+const toolCallResults = [];
+// Append and emit the assistant message.
+safeCallCallback(logger, "onMessage", baseOpts.onMessage, [assistantMessage]);
+await finalPromise;
+'''
     for name in ["index.cjs", "index.mjs"]:
         (sdk / "dist" / name).write_bytes(source.encode("utf-8"))
 

@@ -4,7 +4,7 @@ import {
 import { directConfigSchematics } from "./direct-config";
 import { NUMERIC_FIELDS, REPORT_REVIEW_DEFAULT, type NumericField } from "./config-defaults";
 import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
-import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction, type WorkingInputScaling } from "./execution-contracts";
+import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction, type GenerationRepetitionAction, type WorkingInputScaling } from "./execution-contracts";
 import {
   type ProjectEngineSetting
 } from "./tool-scope";
@@ -18,6 +18,11 @@ export function numeric(value: unknown, fallback: number, min: number, max: numb
 
 export function stagnationAction(value: unknown): StagnationAction {
   return value === "off" || value === "pause" ? value : "warn";
+}
+
+/** Within-generation repetition defaults to recover: stop and retry a looping research round. */
+export function generationRepetitionAction(value: unknown): GenerationRepetitionAction {
+  return value === "off" || value === "pause" || value === "warn" ? value : "recover";
 }
 
 export function inputAvailabilityMode(value: unknown): InputAvailabilityMode {
@@ -91,7 +96,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     toolStagnationRounds: read("toolStagnationRounds"),
     noNewEvidenceRounds: read("noNewEvidenceRounds"),
     maxResearchRounds: read("maxResearchRounds"),
-    generationRepetitionAction: stagnationAction(config.get("generationRepetitionAction")),
+    generationRepetitionAction: generationRepetitionAction(config.get("generationRepetitionAction")),
     generationRepeatCount: read("generationRepeatCount"),
     inputAvailabilityMode: inputAvailabilityMode(config.get("inputAvailabilityMode")),
     auditCompletionMode: auditCompletionMode(config.get("auditCompletionMode")),

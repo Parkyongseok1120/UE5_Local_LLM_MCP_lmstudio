@@ -161,7 +161,7 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
   // under investigation: it yields its pin to the files that are.
   const candidates = [...reads.values()]
     .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file))
-      && !(edited.size === 0 && metadata.closedFile?.(read.file)))
+)
     .map(read => ({ ...read, cited: isCited(read.file), use: useOf(read.file) }))
     .sort((a, b) => Number(b.cited) - Number(a.cited) || b.use - a.use || b.sequence - a.sequence);
   const pinnedFiles = new Set();
@@ -381,7 +381,7 @@ class WorkingContext {
     const saved = this.archive.put(envelope, { ...metadata, callKey,
       providerRequestId: result.toolCallId, toolName: request.name,
       sourceKind: value.kind || "observation", sourceIdentity: sourceIdentity(value),
-      sourceVersion: canonical.sourceVersion, sourceIdentityDigest: canonical.sourceIdentityDigest,
+      sourceVersion: canonical.sourceVersion, sourceIdentityDigest: canonical.sourceIdentityDigest, sourceKey: canonical.sourceKey,
       sourceQueryKey: canonical.sourceQueryKey, provider: canonical.provider,
       semanticQueryDigest: canonical.semanticQueryDigest, semanticFacts: semanticFacts(value),
       resultStatus: value.ok === false || (value.error !== undefined && value.error !== null && value.error !== false)
@@ -607,6 +607,42 @@ class WorkingContext {
     return value && typeof value === "object" && !Array.isArray(value) ? value : null;
   }
 
+  /** A projection is owned by the archive, not by a remote result's kind tag.
+   * Rebuild its source facts from the authenticated record instead of trusting
+   * identity/range fields copied into the projected envelope. */
+  resolveProjection(value, request) {
+    if (value?.kind !== "archived_tool_result_projection" || !value.archiveRef) return null;
+    const loaded = this.archive.load(value.archiveRef.evidenceId);
+    if (!loaded.ok) return null;
+    const record = loaded.record;
+    if (record.archivedBodyHash !== value.archiveRef.version || record.metadata?.providerRequestId !== request.id
+      || record.metadata?.toolName !== request.name || !record.metadata?.sourceKey) return null;
+    const source = decodeToolResultRecord(record.body).value;
+    const selected = source && evidenceBodyView(source);
+    const verifiedRanges = (ranges, body) => {
+      if (!Array.isArray(ranges) || typeof value.excerpt !== "string" || typeof body !== "string") return [];
+      let chars = 0;
+      return ranges.filter(range => {
+        if (!Array.isArray(range) || range.length !== 2) return false;
+        const [start, end] = range;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > body.length) return false;
+        if (!value.excerpt.includes(body.slice(start, end)) || chars + end - start > value.excerpt.length) return false;
+        chars += end - start; return true;
+      });
+    };
+    return { kind: "archived_tool_result_projection", archiveRef: { evidenceId: record.evidenceId, version: record.archivedBodyHash },
+      sourceKey: record.metadata.sourceKey, sourceVersion: record.metadata.sourceVersion,
+      sourceIdentity: record.metadata.sourceIdentity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
+      provider: record.metadata.provider, sourceQueryKey: record.metadata.sourceQueryKey,
+      resultStatus: record.metadata.resultStatus, errorCode: record.metadata.errorCode,
+      ok: source?.ok, status: source?.status, error: source?.error,
+      sourcePageStart: source?.pageStart, sourcePageEnd: source?.pageEnd,
+      bodyField: selected?.field, rangeUnit: record.rangeUnit, bodyRangeUnit: "utf16_code_units",
+      projectedBodyRanges: verifiedRanges(value.projectedBodyRanges, selected?.body),
+      projectedSanitizedRanges: verifiedRanges(value.projectedSanitizedRanges, record.body),
+      sourceFacts: source ? semanticFacts(source) : {} };
+  }
+
   summaryRefs() {
     return new Set(this.summaryEvidence().map(item => item.ref));
   }
@@ -716,7 +752,7 @@ class WorkingContext {
           originalEnvelopeChars: originalEnvelope.length,
           originalEnvelopeBytes: Buffer.byteLength(originalEnvelope),
           resultStatus: record.metadata.resultStatus, errorCode: record.metadata.errorCode,
-          sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest,
+          sourceIdentity: identity, sourceIdentityDigest: record.metadata.sourceIdentityDigest, sourceKey: record.metadata.sourceKey,
           sourceVersion: record.metadata.sourceVersion, sourceQueryKey: record.metadata.sourceQueryKey,
           provider: record.metadata.provider, semanticQueryDigest: record.metadata.semanticQueryDigest,
           // The coverage inside sourceFacts described the source at the time it was read; it
@@ -756,10 +792,6 @@ class WorkingContext {
           fullRawProvided: false, currentFile: false, grantsMutation: false,
           ...(outline ? { sourceOutline: outline } : {}),
           excerpt: "" };
-        // A closed file points at its judgments, not at paging the body back.
-        const closedNotice = bodyFirst && metadata.closedFile?.(pathKey(identity.path ?? parsed.path ?? ""))
-          ? `CLOSED REVIEW: every judgment on this file is in the review register with its evidence; re-read it only if its sha `
-            + `changes or for a line range those judgments do not cover (readHandle=${projection.archiveRef.readHandle})` : "";
         if (bodyFirst) {
           compactBodyProjection(projection);
           // Lines the model cited later are the ones it will quote again.
@@ -769,7 +801,7 @@ class WorkingContext {
               omittedBodyRanges: complementRanges(cited.ranges, boundedBody.length),
               bodyOmittedChars: boundedBody.length - cited.shown, bodyComplete: false, excerpt: cited.excerpt,
               projectionCoverage: "partial",
-              notice: closedNotice || `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
+              notice: `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
             const citedContent = JSON.stringify(projection);
             if (citedContent.length < originalEnvelope.length) { changed = true; return { ...result, content: citedContent }; }
           }
@@ -794,7 +826,7 @@ class WorkingContext {
           const shown = Math.min(projectedEnd, total);
           projection.projectionCoverage = shown < total ? "partial" : "complete";
           if (shown < total) {
-            projection.notice = closedNotice || `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
+            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
               + (outline ? "; sourceOutline lists declaration line spans to re-read with a line-range source read" : "");
           } else delete projection.notice;
         };
@@ -973,7 +1005,6 @@ class WorkingContext {
       || retainInterruptedCalls(candidate.getMessagesArray()).some(item => !this.restoredInterruptionKeys.has(item.callKey)));
     if ((!this.committedInExecution || !this.manifest) && !firstInterruption) {
       this.lastCommitReason = "no_committed_window_in_execution";
-      try { this.archive.close(); } catch { /* The inherited durable window still protects pending refs. */ }
       return false;
     }
     try {
@@ -983,14 +1014,15 @@ class WorkingContext {
       }
       const delivered = deserialize(retainVisibleResponse(prefix, serialize(candidate)));
       const saved = this.#writeWindow(source, delivered, null, hash(prefix), this.manifest?.modelFingerprint || "terminal_observation_only");
-      if (saved) { this.closed = true; try { this.archive.close(); } catch { /* Window remains pinned; diagnostics retain the lease. */ } }
+      if (saved) this.closed = true;
       return saved;
     } catch (error) { this.lastCommitReason = error.message || "window_write_failed"; return false; }
   }
 
   close() {
     this.closed = true;
-    try { this.archive.close(); return true; }
+    if (this.leaseReleased) return true;
+    try { this.archive.close(); this.leaseReleased = true; this.lastRetentionReason = null; return true; }
     catch (error) {
       this.lastRetentionReason = error.message || "archive_close_unavailable";
       return false;
@@ -1094,6 +1126,13 @@ class WorkingContext {
   }
 
   restore(source) {
+    const result = this.restoreWindow(source);
+    const restored = result.reason === "restored_remeasure_required";
+    return { ...result, windowStatus: restored ? "restored" : ["no_manifest", "no_window_file"].includes(result.reason) ? "absent" : "rejected",
+      ledgerStatus: restored ? "restored" : "not_restored", accessInherited: restored };
+  }
+
+  restoreWindow(source) {
     if (this.archive.directory && !this.archive.lockDepth) {
       try { return this.archive.withStorageLock(() => this.restore(source)); }
       catch { return { history: source, reason: "archive_lock_unavailable" }; }

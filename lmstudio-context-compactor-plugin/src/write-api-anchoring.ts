@@ -59,6 +59,10 @@ export function unverifiedWriteApis(messages: ChatMessage[]): UnverifiedApi[] {
       else if (LOOKUP_TOOLS.has(request.name)) lookups.push(JSON.stringify(value));
     }
   }
+  return unverifiedAddedApis(messages, added, lookups);
+}
+
+function unverifiedAddedApis(messages: ChatMessage[], added: Array<{path: string; text: string}>, lookups: string[], strictMembers = false): UnverifiedApi[] {
   if (!added.length) return [];
   // Files this execution creates or edits are project files, not engine names.
   const editedFiles = added.map(({ path }) => path.replace(/\\/g, "/").split("/").pop() || "").filter(Boolean);
@@ -87,7 +91,10 @@ export function unverifiedWriteApis(messages: ChatMessage[]): UnverifiedApi[] {
     for (const match of text.matchAll(QUALIFIED)) {
       const [, type, member] = match;
       if (declared.has(type) || CORE_TYPES.has(type) || member.endsWith("_Implementation") || member.endsWith("_Validate")) continue;
-      if (known(type) && known(member)) continue;
+      const qualified = `${type}::${member}`;
+      // Suggested code has no compiler result. Independent occurrences of a
+      // type and a same-named member on another type cannot establish its owner.
+      if (strictMembers ? known(qualified) : known(type) && known(member)) continue;
       found.set(`member:${type}::${member}`, { kind: "member", name: `${type}::${member}`, path });
     }
   }
@@ -105,4 +112,28 @@ export function writeApiFact(unverified: UnverifiedApi[]): string | null {
     "This compares names only; it is not a verdict that they are wrong. Check each declaration with unreal_symbol_lookup "
       + "(sourceMode=engine_local, view=signature) or the engine header before building: a failed build reports the first error, not all of them.",
   ].join("\n");
+}
+
+/** Proposed snippets are not edits and inherit no successful-build claim.
+ * Reuse API name checks, but require an owner-qualified declaration/reference. */
+export function suggestedCodeNotice(messages: ChatMessage[], answer: string, engine: string): string | null {
+  if (engine !== "unreal") return null;
+  const added: Array<{path: string; text: string}> = [];
+  for (const match of answer.matchAll(/```(?:cpp|c\+\+|cxx|h)\s*\n([\s\S]*?)```/giu)) {
+    const before = answer.slice(Math.max(0, match.index! - 600), match.index);
+    if (!/(?:제안|수정|대안|대체|권장|propos|suggest|fix|replace|recommend)/iu.test(before)) continue;
+    let code = match[1];
+    // Check explicitly typed receivers too. Unknown/auto receivers remain
+    // uncompiled, never promoted to a checked engine API by this heuristic.
+    for (const declaration of code.matchAll(/\b([AUF][A-Z]\w*)\s*[*&]\s*(\w+)/gu)) {
+      const [, type, receiver] = declaration;
+      for (const call of code.matchAll(new RegExp(`\\b${receiver}\\s*->\\s*(\\w+)\\s*\\(`, "gu")))
+        code += `\n${type}::${call[1]}`;
+    }
+    added.push({path:`suggestion ${added.length + 1}`,text:code});
+  }
+  if (!added.length) return null;
+  const apis = unverifiedAddedApis(messages, added, [], true);
+  return ["", "", `[제안 코드 검증 범위] C++ 예시 ${added.length}개는 별도 컴파일하지 않은 제안입니다. 선언 이름의 대조는 타입·수신 객체·단위·수명 및 실제 동작 검증을 대신하지 않습니다.`,
+    ...apis.slice(0, MAX_REPORTED).map(api => `- ${api.path}: ${api.name} — 반환된 소스에서 이 소유 타입의 선언을 확인하지 못했습니다.`)].join("\n");
 }

@@ -6,9 +6,9 @@ const path = require("node:path");
 const { assertReadChildContained, displayPath, isWithin, pathMetadata } = require("./read-path-resolver.js");
 const { ENGINE_URI_PREFIX, isAllowedEngineRelative } = require("./engine-source-access.js");
 const { createSearchCapability } = require("./direct-search-capability.js");
-const { readStableFileWindow, readStableTextFile } = require("./direct-file-snapshot.js");
+const { readStableFileWindow, readStableTextFile, checkReadCancellation } = require("./direct-file-snapshot.js");
 const { success, failure } = require("./direct-response.js");
-const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
+const { prepareReadSnapshot, readMessage, sourceReadState, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 const { isSourceLikeExt } = require("./write-guards.js");
 const { lineRangeSha256 } = require("./line-range-hash.js");
@@ -61,15 +61,6 @@ function createReadCapabilities(context) {
       }
     }
     return undefined;
-  }
-
-  // Reader messages name the caller's URI, never the resolved host path.
-  function readMessage(read, args, resolution) {
-    if (read.errorCode === "NOT_FOUND") return `File not found: ${args.path}`;
-    const absolute = String(resolution.absolutePath || "");
-    let message = String(read.message || "");
-    if (absolute) for (const form of new Set([absolute, absolute.split(path.sep).join("/")])) message = message.split(form).join(String(args.path));
-    return message;
   }
 
   // byteBudget bounds the whole serialized response (metadata included), not
@@ -152,6 +143,7 @@ function createReadCapabilities(context) {
   async function readFile(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
     try {
+    checkReadCancellation(requestContext.signal);
     const maxBytes = clamp(args.maxBytes, limits.maxReadBytes, 1024, 2 * 1024 * 1024);
     const offset = clamp(args.offsetBytes, 0, 0, Number.MAX_SAFE_INTEGER);
     const initialStat = await statOrNull(resolution.absolutePath);
@@ -172,7 +164,8 @@ function createReadCapabilities(context) {
         : sourceFile ? `source files are located first, not read whole, above ${limits.wholeSourceReadMaxBytes} bytes`
           : initialStat.size > limits.wholeReadMaxBytes ? `files over ${limits.wholeReadMaxBytes} bytes require a targeted read` : null;
     if (wholeReadRefusal) {
-      const counted = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes), totalLines = counted.ok ? counted.content.split(/\r?\n/).length : undefined;
+      const counted = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes, requestContext.signal), totalLines = counted.ok ? counted.content.split(/\r?\n/).length : undefined;
+      checkReadCancellation(requestContext.signal);
       return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
         `${args.path} is ${initialStat.size} bytes${totalLines ? ` (${totalLines} lines)` : ""}; ${wholeReadRefusal}. `
         + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
@@ -180,12 +173,15 @@ function createReadCapabilities(context) {
           details: { size: initialStat.size, ...(totalLines ? { totalLines } : {}), alternatives: [...locateAlternatives(args),
             { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) }] } });
     }
-    const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
+    const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes, requestContext.signal);
     if (!stableRead.ok) {
-      return unavailable(resolution, stableRead.errorCode, readMessage(stableRead, args, resolution), { retryAllowed: true, retryMode: "after_state_change" });
+      return unavailable(resolution, stableRead.errorCode, readMessage(stableRead, args, resolution),
+        stableRead.errorCode === "REQUEST_CANCELLED" ? { retryAllowed: false, retryMode: "none" }
+          : { retryAllowed: true, retryMode: "after_state_change" });
     }
     if (isBinary(stableRead.buffer)) return unavailable(resolution, "BINARY_FILE", `File appears binary: ${args.path}`);
-    const version = registerReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
+    const snapshot = prepareReadSnapshot(fileSnapshots, resolution, stableRead, requestContext);
+    const version = snapshot.fields;
     const makePayload = (slice, byteLength, decoded) => {
       const nextOffsetBytes = offset + byteLength;
       return success({
@@ -211,17 +207,18 @@ function createReadCapabilities(context) {
     return dedupe(
       "read_file",
       args,
-      `${resolution.activeProject || ""}|${statSignature(stableRead.stat)}`,
+      sourceReadState(resolution, stableRead),
       fitted.payload,
+      snapshot.commit,
     );
     } catch (error) {
-      return unavailable(resolution, ["EACCES", "EPERM"].includes(error.code) ? "ACCESS_DENIED" : "READ_FAILED", String(error.message || error));
+      return unavailable(resolution, error.code === "REQUEST_CANCELLED" ? error.code : ["EACCES", "EPERM"].includes(error.code) ? "ACCESS_DENIED" : "READ_FAILED", String(error.message || error));
     }
   }
 
   async function readFileRange(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
-    const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+    const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes, requestContext.signal);
     if (!read.ok) {
       return unavailable(resolution, read.errorCode, readMessage(read, args, resolution), {
         suggestion: read.errorCode === "NOT_FOUND" ? await notFoundSuggestion(args, resolution) : undefined,
@@ -231,7 +228,8 @@ function createReadCapabilities(context) {
     const start = clamp(args.startLine, 1, 1, Math.max(1, lines.length));
     const requestedEnd = clamp(args.endLine, start, start, Math.max(start, lines.length));
     const maximumEnd = Math.min(requestedEnd, start + 3999, lines.length);
-    const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const snapshot = prepareReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const version = snapshot.fields;
     const numbered = args.lineNumbers !== false;
     const sourceFile = isSourceLikeExt(path.extname(resolution.absolutePath));
     const makePayload = (end) => success({
@@ -293,12 +291,12 @@ function createReadCapabilities(context) {
         },
       });
     }
-    return dedupe("read_file_range", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
+    return dedupe("read_file_range", args, sourceReadState(resolution, read), payload, snapshot.commit);
   }
 
   async function readSymbol(args, requestContext = {}) {
     const resolution = await resolveToolPath(args.path, args.project);
-    const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+    const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes, requestContext.signal);
     if (!read.ok) {
       return unavailable(resolution, read.errorCode, readMessage(read, args, resolution),
         read.errorCode === "NOT_FOUND" ? { suggestion: await notFoundSuggestion(args, resolution) } : {});
@@ -313,7 +311,8 @@ function createReadCapabilities(context) {
     const window = (declaration ? lexicalDeclarationWindow : lexicalSymbolWindow)(read.content, args.symbol, args.contextLines);
     if (!window.ok) return window;
     const { symbol, allLines, start, end, candidateCount } = window;
-    const version = registerReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const snapshot = prepareReadSnapshot(fileSnapshots, resolution, read, requestContext);
+    const version = snapshot.fields;
     const numbered = args.lineNumbers !== false;
     const makePayload = returnedEnd => success({
       path: displayPath(resolution),
@@ -344,7 +343,7 @@ function createReadCapabilities(context) {
       else high = middle - 1;
     }
     if (!payload) return failure("LINE_TOO_LARGE", "The first candidate line or metadata exceeds the response budget; use read_file byte windows or increase byteBudget.", { retryAllowed: true });
-    return dedupe("read_symbol", args, `${resolution.activeProject || ""}|${statSignature(read.stat)}`, payload);
+    return dedupe("read_symbol", args, sourceReadState(resolution, read), payload, snapshot.commit);
   }
 
   return {

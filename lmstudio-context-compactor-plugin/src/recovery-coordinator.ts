@@ -1,5 +1,5 @@
 import {
-  Chat
+  Chat, type ChatMessage
 } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
 import type { RecoveryProgress } from "./evidence-manager";
@@ -17,6 +17,7 @@ export class RecoveryCoordinator {
   private pages = 0;
   private stagnant = 0;
   private started = false;
+  private fallbackUsed = false;
   private replans = 0;
   private plan: RecoveryPlan = { reason: "", toolNames: [], outputReserve: 0 };
   get toolRounds() { return this.rounds; }
@@ -35,26 +36,46 @@ export class RecoveryCoordinator {
     if (replanning) this.replans++;
     this.reset();
   }
-  reset() { this.rounds = 0; this.pages = 0; this.stagnant = 0; }
+  reset() { this.rounds = 0; this.pages = 0; this.stagnant = 0; this.fallbackUsed = false; }
   advance(progress: RecoveryProgress | null, maximum: number, continued: boolean,
-    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true) {
+    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true, readiness: { originalProfileFits?: boolean; fallbackInstruction?: string } = {}) {
     this.rounds++;
     const progressed = progress?.progressed === true;
     if (progressed) { this.pages++; this.stagnant = 0; } else this.stagnant++;
-    const noProgress = this.noProgressRounds >= 1;
+    const resumeOriginal = continued && progressed && readiness.originalProfileFits;
+    const fallback = !progressed && !rawIntent && !this.fallbackUsed && Boolean(readiness.fallbackInstruction);
+    const noProgress = !progressed && !fallback;
+    if (fallback) {
+      this.fallbackUsed = true;
+      this.plan = { ...this.plan, instruction: `${this.instruction} ${readiness.fallbackInstruction}` };
+    }
     const paginationBound = bounded && this.paginationRounds >= Math.max(1, maximum);
     const evidence = Boolean(requestCount || resultCount || progress?.newSuccessfulObservationCount || progress?.errorCount);
     const needsFinal = Boolean(rawIntent || progress?.errorCount || (evidence && !progressed));
     // A budget denial/failure belongs to its request, not to successful peers
     // in the batch. Consume useful results before declaring recovery exhausted.
-    const trigger = (noProgress && needsFinal) || (!continued && !reportText)
+    const trigger = resumeOriginal ? null : (noProgress && needsFinal) || (noProgress && !continued && !reportText)
       ? "research_recovery_exhausted" as const
       : paginationBound && continued ? "research_recovery_complete" as const : null;
     return {
-trigger, endRecovery: paginationBound || (noProgress && !needsFinal),
-      continue: continued, maxPaginationRounds: bounded ? Math.max(1, maximum) : null, noProgress
+trigger, resumeOriginal, endRecovery: resumeOriginal || paginationBound || (noProgress && !needsFinal),
+      continue: continued || fallback, maxPaginationRounds: bounded ? Math.max(1, maximum) : null, noProgress
 };
   }
+}
+
+/** Only a typed, actionable control miss allows one alternative. An ordinary
+ * duplicate, guard denial or unknown failure is not another recovery budget. */
+export function recoveryFallbackInstruction(messages: readonly ChatMessage[]): string | undefined {
+  for (const message of messages) for (const result of message.getToolCallResults()) {
+    const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
+    if (value?.kind === "historical_evidence_index" && value.ok === true && Array.isArray(value.entries) && value.entries.length === 0)
+      return "The archive catalog is empty. Do not repeat it. Use a source path already provided in the task or a registered source search; if none is available, report the missing scope. This is the single alternative attempt.";
+    if (["read_handle_unavailable", "version_mismatch", "path_ambiguous"].includes(String(value?.errorCode))
+      && (Array.isArray(value?.validHandles) && value.validHandles.length > 0 || typeof value?.readHandle === "string"))
+      return "The archive locator was rejected. Use an exact validHandle/readHandle returned by that response once; never guess or reuse the rejected locator. This is the single alternative attempt.";
+  }
+  return undefined;
 }
 
 export type ReadOnlyRecoveryProfile = {

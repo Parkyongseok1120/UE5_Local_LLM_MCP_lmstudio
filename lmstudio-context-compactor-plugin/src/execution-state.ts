@@ -8,7 +8,7 @@ export type ExecutionPhase = "RESEARCH" | "READ_RECOVERY" | "TOOL_REPLAN"
   | "REASONING_RECOVERY" | "FINAL_DELIVERY" | "OUTPUT_RECOVERY" | "TERMINATED";
 export const ALLOWED_TRANSITIONS: Readonly<Record<ExecutionPhase, readonly ExecutionPhase[]>> = {
   RESEARCH: ["READ_RECOVERY", "TOOL_REPLAN", "REASONING_RECOVERY", "FINAL_DELIVERY", "OUTPUT_RECOVERY", "TERMINATED"],
-  REASONING_RECOVERY: ["RESEARCH", "TERMINATED"],
+  REASONING_RECOVERY: ["RESEARCH", "FINAL_DELIVERY", "TERMINATED"],
   READ_RECOVERY: ["RESEARCH", "TOOL_REPLAN", "FINAL_DELIVERY", "OUTPUT_RECOVERY", "TERMINATED"],
   TOOL_REPLAN: ["READ_RECOVERY", "FINAL_DELIVERY", "TERMINATED"],
   FINAL_DELIVERY: ["TOOL_REPLAN", "TERMINATED"],
@@ -59,7 +59,7 @@ from: this.current, to, reason,
     this.transition("READ_RECOVERY", reason); this.trigger = null;
     if (plan) this.recovery.begin({ ...plan, reason });
   }
-  startReasoningRecovery() { this.transition("REASONING_RECOVERY", "reasoning_output_limit"); }
+  startReasoningRecovery(reason = "reasoning_output_limit") { this.transition("REASONING_RECOVERY", reason); }
   finishReasoningRecovery() {
     if (this.reasoningRecovery) this.transition("RESEARCH", "reasoning_retry_tools_returned");
   }

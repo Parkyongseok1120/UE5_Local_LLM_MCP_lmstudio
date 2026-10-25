@@ -268,6 +268,7 @@ test("terminal fallback does not retain a finished execution's pending pins fore
   // A result arrived, but cancellation prevented its first model consumer.
   // The original visible transcript still owns that raw result at shutdown.
   first.seal(pending.history, pending.history);
+  assert.equal(first.close(), true);
   now += 100;
 
   assert.equal(second.captureReturned(historyWithRead("after-terminal-retention-expired"), () => true), 1);
@@ -437,6 +438,7 @@ test("a successful terminal window does not leak its lease when another writer c
   first.archive.close = () => second.archive.withStorageLock(close);
   try {
     assert.equal(first.seal(record.history, record.history), true, first.lastCommitReason);
+    assert.equal(first.close(), true);
   } finally {
     first.archive.close = close;
   }

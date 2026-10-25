@@ -11,7 +11,7 @@ const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text
   REASONING_SEPARATOR: string; visibleAssistantText(text: string): string;
 };
 
-export type ReviewRow = { identifier: string; status: "found" | "cleared"; source: "reasoning" | "visible";
+export type ReviewRow = { identifier: string; status: "found" | "cleared" | "needs_recheck"; source: "reasoning" | "visible";
   round: number; evidence: string; bundle?: EvidenceBundle };
 
 /** Excerpt chars the rendered register carries in all. */
@@ -115,25 +115,34 @@ export class ReviewRegister {
     }
   }
 
+  private claimKey(row: ReviewRow): string {
+    const path = /([\w./\\-]+\.(?:h|hpp|cpp|cc|cs|ini))\s*[:(]\s*\d+/u.exec(row.evidence)?.[1];
+    return `${row.identifier}\u0000${path ? pathKey(path) : "unqualified"}`;
+  }
+
   private record(row: ReviewRow) {
     // Reinsertion keeps the bounded register ordered by latest observation.
-    this.entries.delete(row.identifier); this.retired.delete(row.identifier);
-    this.entries.set(row.identifier, row);
+    const key = this.claimKey(row);
+    this.entries.delete(key); this.retired.delete(key);
+    this.entries.set(key, row);
     for (const [status, limit] of [["found", MAX_FOUND_ROWS], ["cleared", MAX_CLEARED_ROWS]] as const) {
-      const rows = this.rows.filter(entry => entry.status === status);
+      const rows = this.rows.filter(entry => status === "found" ? entry.status !== "cleared" : entry.status === status);
       for (const oldest of rows.slice(0, Math.max(0, rows.length - limit))) {
-        this.entries.delete(oldest.identifier);
-        if (oldest.status === "found") this.retired.set(oldest.identifier, oldest);
+        this.entries.delete(this.claimKey(oldest));
+        if (oldest.status !== "cleared") this.retired.set(this.claimKey(oldest), oldest);
       }
     }
     while (this.retired.size > MAX_RETIRED_ROWS) this.retired.delete(this.retired.keys().next().value!);
   }
-  /** Attaches each row's evidence bundle from the returned reads and searches;
-   * a row whose file changed version gets a new one. */
+  /** Judgments keep their observed version. New source is a recheck obligation,
+   * never fresh support for an old found/cleared judgment. */
   attach(index: ReviewEvidenceIndex) {
-    for (const row of this.entries.values()) {
-      const current = row.bundle?.path ? index.shaOf(pathKey(row.bundle.path)) : null;
-      if (row.bundle && (!current || current === row.bundle.sha)) continue;
+    for (const row of [...this.entries.values(), ...this.retired.values()]) {
+      const current = row.bundle?.path ? index.shaOf(pathKey(row.bundle.path), row.bundle.sourceKey) : null;
+      if (row.bundle) {
+        if (current && current !== row.bundle.sha) row.status = "needs_recheck";
+        continue;
+      }
       row.bundle = index.bundleFor(row.identifier, row.evidence) ?? undefined;
     }
   }
@@ -151,13 +160,8 @@ export class ReviewRegister {
       ...(row.bundle ? [bundleLine(row.bundle, withExcerpt.has(row))] : [])]);
   }
 
-  /** Bundled judgments located in a file, when that file is closed: every
-   * judgment there has its evidence, so a whole re-read adds nothing. */
-  closedFileFacts(key: string, sha: string | null): string[] | null {
-    const rows = this.rows.filter(row => row.bundle?.path && pathKey(row.bundle.path) === key);
-    if (!rows.length || rows.some(row => !row.bundle?.lines || (sha && row.bundle.sha && row.bundle.sha !== sha))) return null;
-    return rows.map(row => `[${row.status}] ${row.identifier}: ${row.evidence.slice(0, 160)} | ${bundleLine(row.bundle!, true).trim()}`);
-  }
+  /** Working notes cannot certify that every subject in a file was reviewed. */
+  closedFileFacts(_key: string, _sha: string | null): string[] | null { return null; }
   fact(): string | null {
     return this.entries.size ? [REVIEW_REGISTER_HEADER, ...this.lines(), REVIEW_REGISTER_GUIDANCE].join("\n") : null;
   }
@@ -168,7 +172,12 @@ export class ReviewRegister {
   /** Found rows the answer does not name, including ones the bounded register
    * already pushed out of the model input. */
   missing(answer: string): ReviewRow[] {
-    return [...this.retired.values(), ...this.rows].filter(row => row.status === "found" && !answer.includes(row.identifier));
+    return [...this.retired.values(), ...this.rows].filter(row => {
+      if (row.status === "cleared") return false;
+      if (row.status === "needs_recheck") return !answer.split(/\r?\n/u).some(line => line.includes(row.identifier)
+        && /미확인|미검증|재검토|needs_recheck|unverified|not verified|recheck|withdraw/iu.test(line));
+      return !answer.includes(row.identifier);
+    });
   }
 }
 
@@ -183,7 +192,9 @@ ${answer.trim()}
 
 export function reportReviewFact(missing: readonly ReviewRow[], contracts: readonly { factId: string; statement: string }[]): string {
   return ["Runtime evidence observation: report review obligations (working notes, not verified facts)",
-    ...missing.flatMap(row => [`- Missing ${row.identifier}: ${row.evidence}`, ...(row.bundle ? [bundleLine(row.bundle, true)] : [])]),
+    ...missing.flatMap(row => [`- Missing ${row.identifier}: ${row.evidence}${row.status === "needs_recheck"
+      ? ` [needs_recheck; observed sha ${row.bundle?.sha || "unknown"}; newer source cannot validate this old judgment]` : ""}`,
+      ...(row.bundle ? [bundleLine(row.bundle, true)] : [])]),
     ...contracts.map(gap => `- Engine contract ${gap.factId}: ${gap.statement}`)].join("\n");
 }
 

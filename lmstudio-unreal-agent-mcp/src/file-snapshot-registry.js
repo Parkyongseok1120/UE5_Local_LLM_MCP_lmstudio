@@ -83,14 +83,16 @@ class FileSnapshotRegistry {
   }
 
   register({ projectPath, filePath, hash, stat, requestContext = {} }) {
+    return this.commitPrepared(this.prepare({ projectPath, filePath, hash, stat, requestContext }));
+  }
+
+  // Preparing response metadata does not evict or publish any capability.
+  // Only a body selected for delivery commits the prepared receipt.
+  prepare({ projectPath, filePath, hash, stat, requestContext = {} }) {
     if (!validSha256(hash)) throw new Error("File snapshot hash must be a 64-character SHA-256");
     const identity = this.canonicalIdentity(projectPath, filePath);
     const owner = requestOwner(requestContext);
     const now = this.now();
-    this.prune(now);
-    while (this.entries.size >= this.maxEntries) {
-      this.deleteReceipt(this.entries.keys().next().value);
-    }
     const receipt = `fvr1_${this.randomBytes(16).toString("base64url")}`;
     const entry = {
       receipt,
@@ -109,8 +111,16 @@ class FileSnapshotRegistry {
       lastAccessedAt: now,
       owner,
     };
-    this.entries.set(receipt, entry);
     return { entry: { ...entry }, ...this.publicSnapshot(entry) };
+  }
+
+  commitPrepared(snapshot) {
+    const entry = snapshot.entry;
+    if (this.entries.has(entry.receipt)) return snapshot;
+    this.prune();
+    while (this.entries.size >= this.maxEntries) this.deleteReceipt(this.entries.keys().next().value);
+    this.entries.set(entry.receipt, entry);
+    return snapshot;
   }
 
   entryForReceipt(receipt, identity, owner) {

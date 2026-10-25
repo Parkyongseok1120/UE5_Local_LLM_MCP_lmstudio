@@ -198,9 +198,10 @@ function createDirectRuntimeContext(options = {}) {
     return payload;
   }
 
-  function dedupe(toolName, args, state, payload) {
+  function dedupe(toolName, args, state, payload, commitObservation) {
     const duplicate = repeatCache.lookup(toolName, args, state);
     if (duplicate) return duplicate;
+    commitObservation?.();
     const receipt = repeatCache.remember(toolName, args, state, payload);
     return payload?.ok === false ? payload : { ...payload, ...receipt };
   }

@@ -58,11 +58,11 @@ test("over budget the newest reads stay and older ones project", () => {
   assert.equal(gameMode.kind, undefined, "a smaller older read still fits the remaining budget");
 });
 
-test("a closed file yields its pin to the files still under investigation", () => {
+test("a review judgment cannot remove a visible source body from the working set", () => {
   const [gameMode, character, playerState] = projected(reviewHistory(),
     { pinnedWorkingSetMaxChars: 40000, closedFile: key => key === "source/character.cpp" });
-  assert.equal(character.kind, "archived_tool_result_projection");
-  assert.match(character.notice, /^CLOSED REVIEW: every judgment on this file is in the review register/);
+  assert.equal(character.kind, undefined);
+  assert.equal(character.notice, undefined);
   assert.equal(gameMode.kind, undefined);
   assert.equal(playerState.kind, undefined);
 });

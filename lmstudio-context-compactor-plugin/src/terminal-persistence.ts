@@ -12,13 +12,22 @@ export function sealAndRelease(workingContext: WorkingContextStore, visible: Cha
   let sealed = false;
   let released = false;
   let sealError: unknown;
+  let releaseReason: string | null = null;
   try { sealed = workingContext.seal(visible, workingHistory); }
   catch (error) { sealError = error; }
-  try { released = workingContext.close(); }
+  try {
+    released = workingContext.close();
+    if (!released) {
+      releaseReason = workingContext.lastRetentionReason || "archive_close_unavailable";
+      if (sealError !== undefined) cleanupFailures.push(releaseReason);
+    }
+  }
   catch (error) {
     if (sealError === undefined) throw error;
     cleanupFailures.push(String(error));
   }
   if (sealError !== undefined) throw sealError;
-  return { sealed, released, reason: sealed ? "terminal_remeasure_required" : workingContext.lastCommitReason };
+  return { sealed, released, reason: sealed ? "terminal_remeasure_required" : workingContext.lastCommitReason,
+    seal: { status: sealed ? "saved" as const : "not_saved" as const, reason: workingContext.lastCommitReason },
+    release: { status: released ? "released" as const : "failed" as const, reason: releaseReason } };
 }

@@ -10,6 +10,21 @@ const scopeFields = ["provider", "repositoryIdentity", "workspaceIdentity", "pro
   "canonicalProjectRoot", "canonicalProject", "workspaceRoot"];
 const rangeFields = new Set(["cursor", "nextCursor", "startLine", "endLine", "lineCount", "offsetBytes", "startOffset",
   "offset", "limit", "maxBytes", "maxChars", "byteBudget"]);
+function canonicalPath(value) {
+  const text = String(value || "").replace(/\\/g, "/").replace(/^project:\/\//i, "").replace(/^\.\//, "");
+  return process.platform === "win32" || /^[a-z]:\//i.test(text) ? text.toLowerCase() : text;
+}
+/** Content identity is independent of read tool, display numbering and page size. */
+function fileSourceKey(value) {
+  const project = value.canonicalProject || value.activeProject || value.canonicalProjectRoot
+    || value.projectIdentity || value.workspaceIdentity || value.workspaceRoot || "";
+  const path = canonicalPath(value.path || value.sourcePath);
+  const provider = value.provider || "";
+  if (!project && !provider && !value.engineIdentity) return path;
+  return `source:${digest({ provider, project: canonicalPath(project), path,
+    root: value.engineIdentity || (String(value.path || "").startsWith("engine://") ? "installed_engine" : "project"),
+    revision: value.revision || value.blobOid || "" })}`;
+}
 function sourceIdentity(value) {
   if (value.sourceIdentityDigest) return String(value.sourceIdentityDigest);
   if (value.sourceIdentity && typeof value.sourceIdentity === "object") return digest(value.sourceIdentity);
@@ -43,7 +58,11 @@ function normalizeObservation(value, request, provider) {
   // Caller verifies the paired request/provider authority. Payload identity
   // remains evidence, never a capability or proof of mutation permission.
   delete normalized.sourceQueryKey;
+  delete normalized.sourceKey;
+  delete normalized.sourceIdentityDigest;
+  delete normalized.sourceIdentity;
   return { ...normalized, sourceIdentityDigest:sourceIdentity(normalized),
+    sourceKey: fileSourceKey(normalized),
     sourceVersion:sourceVersion(normalized), sourceQueryKey:queryKey(normalized) };
 }
-module.exports = { sourceIdentity, sourceVersion, queryKey, normalizeObservation };
+module.exports = { sourceIdentity, sourceVersion, queryKey, normalizeObservation, fileSourceKey };

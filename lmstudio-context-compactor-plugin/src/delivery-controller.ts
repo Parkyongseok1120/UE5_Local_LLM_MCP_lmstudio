@@ -1,3 +1,8 @@
+import { fileCoverageNotice, quoteAnchoringNotice, type QuoteMismatch } from "./quote-anchoring";
+import { confirmedProgressStatements, engineClaimNotice, reportEngineClaimNotice, returnedEngineEvidence,
+  textEngineClaimGaps, unresolvedEngineClaimGaps, unresolvedReportEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
+import { reportReviewNotice, type ReviewRow } from "./review-register";
+import { suggestedCodeNotice } from "./write-api-anchoring";
 import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
@@ -107,7 +112,7 @@ export class DeliveryController {
     this.observe(captured, timedOut);
     this.observation = { ...this.observation, delivery, objectiveSatisfied };
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
-      || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence"].includes(trigger || ""));
+      || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence", "research_repetition"].includes(trigger || ""));
     const partial = needsPartial ? evidenceBackedPartialReport(history, captured.messages,
       delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null;
     const outcome = classifyExecutionOutcome({ ...this.observation, partialReportDelivered: needsPartial });
@@ -462,4 +467,31 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
   const taskProgress = renderTaskProgress(history.getMessagesArray());
   if (taskProgress) lines.push("", "보존된 요청·미확인 실행 상태:", taskProgress);
   return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
+}
+
+/** Pure terminal presentation. Evidence/claim owners determine the notices;
+ * the prediction loop only appends them before its immutable terminal snapshot. */
+export function terminalReportNotices(history: Chat, answer: string, options: {
+  packetQuoteGaps: QuoteMismatch[]; packetEngineGaps: EngineClaimGap[]; engine: string; observeOnly: boolean;
+  reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reviewMissing: ReviewRow[];
+}) {
+  const notices: Array<{event: string; text: string; details?: Record<string, unknown>}> = [];
+  const add = (event: string, text: string | null, details?: Record<string, unknown>) => { if (text) notices.push({event,text,details}); };
+  add("verification_scope_notice", verificationScopeNotice(history, answer));
+  add("partial_search_scope_notice", partialSearchScopeNotice(history, answer));
+  add("quote_anchoring_notice", answer ? quoteAnchoringNotice(options.packetQuoteGaps) : null, {mismatches:options.packetQuoteGaps.length});
+  const remaining = options.reviewedReport ? unresolvedEngineClaimGaps(options.packetEngineGaps, answer) : options.packetEngineGaps;
+  if (answer && !options.reviewedReport) add("engine_claim_notice", engineClaimNotice(options.packetEngineGaps), {gaps:options.packetEngineGaps.length});
+  if (answer && !options.observeOnly) {
+    const visible = history.getMessagesArray(), evidence = returnedEngineEvidence(visible);
+    const gaps = unresolvedReportEngineClaimGaps(answer, evidence, options.engine).filter(gap => !remaining.some(item => item.factId === gap.factId));
+    if (options.reviewedReport) gaps.push(...remaining);
+    add("report_engine_claim_notice", reportEngineClaimNotice(gaps,
+      unresolvedEngineClaimGaps(textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, options.engine, "progress"), answer)), {gaps:gaps.length});
+    add("suggested_code_scope_notice", suggestedCodeNotice(visible, answer, options.engine));
+    add("file_coverage_notice", fileCoverageNotice(visible, answer));
+    if (options.reportReviewBlocked || options.reportReviewEmpty)
+      add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewEmpty ? "empty" : "budget"));
+  }
+  return notices;
 }

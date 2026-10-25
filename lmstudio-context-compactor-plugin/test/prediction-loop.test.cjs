@@ -181,7 +181,7 @@ test("production handler narrows before archive starvation and restores an early
   const ctl = fakeController(history, model, { contextManagementMode: "hybrid", maxOutputReserve: 12288,
     safetyMarginTokens: 2048, workingInputTargetTokens: 18000, workingInputTriggerTokens: 22000 }, [read, write]);
   await handlePredictionLoop(ctl);
-  assert.equal(rounds, 4); assert.match(content, /EARLY_FACT_729/);
+  assert.equal(rounds, 4, JSON.stringify(ctl.debugValues.filter(e=>/recovery|outcome|progress|stagnation/.test(e.event)))); assert.match(content, /EARLY_FACT_729/);
   assert.ok(ctl.debugValues.some(e => e.event === "direct_context_budget_rescue" && e.candidateFit));
   assert.ok(!ctl.debugValues.some(e => e.event === "direct_context_measurement"
     && e.workingContext?.windowCommitSkippedReason === "pending_evidence_omitted"));
@@ -1811,7 +1811,7 @@ test("normal visible output limit continues once with the delivered prefix in co
 
   assert.equal(actCount, 2);
   assert.ok(recoveryHistory);
-  assert.equal(ctl.blocks.at(-1).text, "PARTIAL-REPORT-MUST-NOT-BE-REPEATEDCOMPLETE-FINAL-REPORT");
+  assert.equal(ctl.blocks.filter(block => block.options?.includeInContext !== false).map(block => block.text).join(""), "PARTIAL-REPORT-MUST-NOT-BE-REPEATEDCOMPLETE-FINAL-REPORT");
   assert.equal(ctl.blocks.some(block => block.text.includes("PARTIAL-REPORT-MUST-NOT-BE-REPEATED")), true);
   const scheduled = ctl.debugValues.find(value => value.event === "output_recovery_scheduled");
   assert.equal(scheduled.outputLimitStage, "visible_report");
@@ -2482,6 +2482,37 @@ function gitRecoveryTestTools(extraTools = []) {
 function measuredCataloguePrompt(chat, options = {}) {
   return JSON.stringify({ text: chat.toString(), tools: (options.toolDefinitions || []).map(tool => tool.function.name) });
 }
+
+test('recovered source and measured headroom restore the original mutation-capable profile', async () => {
+  let calls=0;
+  const read={name:'read_file',pluginIdentifier:'mcp/unreal-agent',description:'Read source',parametersJsonSchema:{type:'object',properties:{path:{type:'string'}}}};
+  const write={name:'write_file',pluginIdentifier:'mcp/unreal-agent',description:'Write source',parametersJsonSchema:{type:'object',properties:{path:{type:'string'},content:{type:'string'}}}};
+  const model={identifier:'resume-original-profile',async getContextLength(){return 65536;},applyPromptTemplate:measuredCataloguePrompt,
+    async countTokens(text){return text.startsWith('[')?100:text.includes('FRESH_SOURCE')?1000:text.includes('write_file')?62000:1000;},
+    async act(chat,tools,opts){
+      calls++;
+      if(calls===2){
+        assert.ok(tools.some(tool=>tool.name==='write_file'),'original authorized profile is available again');
+        assert.match(chat.toString(),/FRESH_SOURCE/);
+        opts.onPredictionCompleted({stats:{stopReason:'eosFound'}});
+        opts.onMessage(ChatMessage.create('assistant','The source is available for the requested change.'));return;
+      }
+      assert.equal(calls,1);assert.ok(!tools.some(tool=>tool.name==='write_file'));
+      const request={type:'function',id:'resume-read',name:'read_file',arguments:{path:'project://Source/Test.cpp'}};
+      let effective;
+      await opts.guardToolCall(0,1,{toolCallRequest:request,allow(){effective=request.arguments;},allowAndOverrideParameters(args){effective=args;},deny(reason){assert.fail(reason);}});
+      opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
+      opts.onMessage(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{...request,arguments:effective}}]}));
+      opts.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:request.id,content:JSON.stringify({ok:true,kind:'workspace_file_observation',path:request.arguments.path,
+        canonicalProject:'C:/Game/Game.uproject',sha256:'a'.repeat(64),startLine:1,endLine:1,totalLines:1,content:'FRESH_SOURCE'})}]}));
+      opts.onRoundEnd();throw opts.signal.reason;
+    }};
+  const ctl=fakeController(Chat.from([{role:'user',content:'Read the source and implement the requested fix.'}]),model,
+    {contextManagementMode:'deterministic',workingInputTargetTokens:40000,workingInputTriggerTokens:56000},[read,write]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls,2);
+  assert.ok(ctl.debugValues.some(value=>value.event==='read_recovery_resumed_original'));
+});
 
 test("context budget measures a narrowed registered Git catalogue before tools-disabled finalization", async () => {
   const history = Chat.from([{ role: "user", content: "Git 커밋과 변경 파일을 조회해서 근거를 정리해줘" }]);
@@ -4604,6 +4635,81 @@ function completeRecoveryReply(options, text = 'Which input binding constraint s
   options.onMessage(ChatMessage.create('assistant', text));
 }
 
+// Conversation 1792934995823, r7: the research reasoning repeated one block
+// about recalled engine source 13 times in 162 s; the guard only warned.
+const LOOP_BLOCK = 'Let me think about ProcessInternal again. For Client RPCs: if you call `ClientConfirmHit()` directly on the server, '
+  + 'it executes ClientConfirmHit_Implementation on the server and is not sent to clients. ';
+async function loopingRound(options) {
+  for (let copy = 0; copy < 6 && !options.signal.aborted; copy++)
+    for (let at = 0; at < LOOP_BLOCK.length && !options.signal.aborted; at += 40)
+      options.onPredictionFragment({ content: LOOP_BLOCK.slice(at, at + 40), roundIndex: 0, reasoningType: 'reasoning',
+        isStructural: false, tokensCount: 10, containsDrafted: false });
+  assert.equal(options.signal.aborted, true, 'the repeated reasoning stops the round');
+  throw options.signal.reason;
+}
+
+test('a research round looping in reasoning is stopped and retried once with the engine contract it circled', async () => {
+  const { REPETITION_RECOVERY_INSTRUCTION } = require('../dist/execution-instructions');
+  const inputs = [], caps = [];
+  const model = reasoningModel(async (chat, _tools, options) => {
+    inputs.push(chat.toString()); caps.push(options.maxTokens);
+    if (inputs.length === 1) return loopingRound(options);
+    completeRecoveryReply(options, 'ClientConfirmHit is sent to the owning client (engine contract); no defect.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the RPC contracts.' }]), model, { projectEngine: 'unreal' });
+  await handlePredictionLoop(ctl);
+  assert.equal(inputs.length, 2);
+  const recovery = ctl.debugValues.find(event => event.event === 'repetition_recovery');
+  assert.equal(recovery.decision, 'retry');
+  assert.deepEqual(recovery.contracts, ['ue.net.client-rpc-callspace']);
+  assert.ok(inputs[1].includes(REPETITION_RECOVERY_INSTRUCTION), 'the retry is told not to reconstruct source from memory');
+  // The quoted opening is wherever the detector's period starts, a rotation of the block.
+  assert.match(inputs[1], /the previous generation repeated this reasoning block and was stopped: "[^"]*ClientConfirmHit/);
+  assert.match(inputs[1], /ue\.net\.client-rpc-callspace/);
+  assert.equal(caps[1], caps[0], 'a repetition retry keeps the normal output cap');
+  assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').executionOutcome, 'completed');
+});
+
+test('repeated visible text is only warned about, not stopped', async () => {
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++;
+    for (let copy = 0; copy < 4; copy++) for (let at = 0; at < LOOP_BLOCK.length; at += 40)
+      options.onPredictionFragment({ content: LOOP_BLOCK.slice(at, at + 40), roundIndex: 0, reasoningType: 'none',
+        isStructural: false, tokensCount: 10, containsDrafted: false });
+    assert.equal(options.signal.aborted, false);
+    completeRecoveryReply(options, LOOP_BLOCK.repeat(4));
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the RPC contracts.' }]), model, { projectEngine: 'unreal' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.equal(ctl.debugValues.find(event => event.event === 'within_generation_repetition').action, 'warn');
+  assert.equal(ctl.debugValues.some(event => event.event === 'repetition_recovery'), false);
+});
+
+test('a retry that repeats again ends research with a tool-free report from returned evidence', async () => {
+  const { RESEARCH_RECOVERY_FINAL_INSTRUCTION } = require('../dist/execution-instructions');
+  const inputs = [], toolCounts = [];
+  const model = reasoningModel(async (chat, tools, options) => {
+    inputs.push(chat.toString()); toolCounts.push(tools.length);
+    if (inputs.length <= 2) return loopingRound(options);
+    completeRecoveryReply(options, '## Audit\nClientConfirmHit routing is unverified in this run.');
+  });
+  const tool = { name: 'unreal_symbol_lookup', description: 'Look up an engine symbol', parametersJsonSchema: { type: 'object' },
+    pluginIdentifier: 'mcp/unreal-agent' };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the RPC contracts.' }]), model, { projectEngine: 'unreal' }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(inputs.length, 3);
+  assert.deepEqual(ctl.debugValues.filter(event => event.event === 'repetition_recovery').map(event => event.decision), ['retry', 'report']);
+  assert.equal(toolCounts[2], 0, 'the report round has no tools');
+  assert.ok(inputs[2].includes(RESEARCH_RECOVERY_FINAL_INSTRUCTION));
+  // The data block already shown stays in place: the report keeps the engine contract it needs.
+  assert.match(inputs[2], /ue\.net\.client-rpc-callspace/);
+  const transitions = ctl.debugValues.find(event => event.event === 'execution_transitions').transitions.map(item => item.reason);
+  assert.deepEqual(transitions.slice(0, 2), ['reasoning_repetition', 'research_repetition']);
+  assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').reportDelivered, true);
+});
+
 test('report review includes reasoning-only omissions, uses no tools, and appends once', async () => {
   const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
   const { REPORT_REVIEW_INSTRUCTION } = require('../dist/execution-instructions');
@@ -4632,7 +4738,7 @@ test('report review includes reasoning-only omissions, uses no tools, and append
   assert.match(reviewInput, /The observed input path is consistent\./);
   assert.match(reviewInput, /\[Delivered report — already shown to the user; write only what follows it\]\n\s*## Audit/);
   assert.ok(!(reviewLast.role === 'assistant' && reviewLast.text.trim() === prefix), `the review input does not end with the answer: ${JSON.stringify(reviewLast)}`);
-  assert.ok(ctl.blocks.some(block => block.text === prefix + '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.'), JSON.stringify(ctl.blocks.map(block => block.text)));
+  assert.equal(ctl.blocks.filter(block => block.options?.includeInContext !== false).map(block => block.text).join(''), prefix + '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.');
   assert.equal(ctl.debugValues.filter(event => event.event === 'report_review_scheduled').length, 1);
   assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').reportCompleted, true);
 });

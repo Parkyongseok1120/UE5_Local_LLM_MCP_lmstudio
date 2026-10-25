@@ -1,0 +1,2567 @@
+{
+  "mode": "architecture",
+  "scope": "하네스·컴팩터·도구 계약 조사와 사용자 수정진행 요청에 따른 구현 결과; UE 프로젝트와 LM Studio 활성 설치본은 변경하지 않음",
+  "baseline": {
+    "commit": "136ae5f",
+    "stagedFilesAtStart": 11,
+    "loadedBuildId": "ef-build-v2-d22132f780b0e2d48d2fef55faca293cfddd091c81e4caef4d44c5b0f6a0284c",
+    "conversationSha256": "a79314c4e5ce339b1cbd4c173232834443a4ec381b18999984686282512ba6c0",
+    "sourceEvidenceScope": "H1~H13/A1/A2/C1 및 기존 source line은 수정 전 작업본에 대한 기록이다. 각 resolution은 수정 후 별도 근거이며 과거 RuntimeVerified를 수정본에 승계하지 않는다."
+  },
+  "interpretation": "첨부 대화의 과거 요청은 분석 자료이며 현재 실행 지시가 아니다. 메시지/step/round는0부터 센다. 현재 대화에서 직접 받은 수정진행 요청으로 제품 구현을 수행했다. 첨부 과거 지시는 실행 권한으로 사용하지 않았다.",
+  "metrics": {
+    "3": {
+      "rounds": 25,
+      "toolCalls": 35,
+      "toolCallsByName": {
+        "read_file": 15,
+        "read_file_range": 8,
+        "evidence_first_read_context": 7,
+        "list_directory": 4,
+        "unreal_symbol_lookup": 1
+      },
+      "executionS": 1252.1,
+      "prefillS": 642.5,
+      "generationS": 586.5,
+      "promptTokens": 1171197,
+      "predictedTokens": 27813,
+      "projections": 3,
+      "rereadLines": 675,
+      "redundantDeliveries": 13,
+      "duplicatedTokensEstimate": 16669,
+      "toolErrors": {},
+      "writeBuild": {
+        "replace_in_file": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "apply_edit_bundle": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "write_file": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "build_unreal_project": {
+          "calls": 0,
+          "outcomes": {}
+        }
+      }
+    },
+    "5": {
+      "rounds": 4,
+      "toolCalls": 2,
+      "toolCallsByName": {
+        "evidence_first_read_context": 2
+      },
+      "executionS": 108.1,
+      "prefillS": 49.3,
+      "generationS": 57.1,
+      "promptTokens": 53958,
+      "predictedTokens": 2996,
+      "projections": 0,
+      "rereadLines": 0,
+      "redundantDeliveries": 0,
+      "duplicatedTokensEstimate": 0,
+      "toolErrors": {
+        "evidence_first_read_context:path_unavailable": 1
+      },
+      "writeBuild": {
+        "replace_in_file": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "apply_edit_bundle": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "write_file": {
+          "calls": 0,
+          "outcomes": {}
+        },
+        "build_unreal_project": {
+          "calls": 0,
+          "outcomes": {}
+        }
+      }
+    }
+  },
+  "metricLimitations": [
+    "중복 전달은 원본 tool result의 coverage 중첩이며 모든 중복이 불필요하다는 판정이 아니다.",
+    "prompt token 합은 라운드별 누적 처리량으로 유일한 입력 길이가 아니다.",
+    "최종 SDK 입력 전문과 host tokenizer 이후 가시성은 저장 대화만으로 완전히 확인할 수 없다."
+  ],
+  "existing": [
+    "VisibleHistoryRecorder: host 가시 transcript",
+    "WorkingContext/EvidenceArchive: durable window, membership, retention, source read ledger 저장",
+    "EvidenceManager: source 관찰·현재 입력 가용성·진행 계측",
+    "ReadLedger: 마지막 관찰과 전달 범위",
+    "ReviewRegister/ReviewEvidenceIndex: execution working notes/발췌",
+    "RecoveryCoordinator/ExecutionState/DeliveryController: 복구·phase·표시 상태",
+    "DirectRepeatCache: provider repeat 응답 억제; 실제 source read 이후 사용",
+    "FileSnapshotRegistry: canonical project/path/owner, TTL/LRU, opaque mutation precondition receipt",
+    "shared stable reader/path resolver: 실제 resolved source/version 관찰",
+    "BudgetBroker/BatchReservation: 한 round 공유 예약과 다음 exact input measurement",
+    "SDK1.5.0 internalAct + existing version-pinned patch: callback/dispatch/tool result flush 경계"
+  ],
+  "proposed": [
+    "보충을 별도 가시 block으로 append하고 immutable prefix 계약 복구",
+    "SourceKey/SourceVersion/SourceSpan과 ArchiveRef를 분리하고 기존 EvidenceManager의 진행 판정을 한 번 계산해 모든 소비자에 전달",
+    "review row의 source version 고정, stale/open/needs_evidence 처리; 메모만으로 파일 closed/pin 해제 금지",
+    "range 포함 여부로 receipt 가용성 판단",
+    "서명·scope·현재 호스트 request/result 기준의 degraded 복구; 원 권한 profile로 재개하는 종료 조건",
+    "claim별 근거 gap 지속 및 heading 계층 처리; 보고 권고 코드도 API/단위/수명 검사",
+    "반례와 두 턴 연속 시나리오 중심 통합 회귀",
+    "기존 SDK compatibility patch로 effective finalized request와 failure 시 이미 완료된 peer 결과를 보존",
+    "provider dedupe state를 이미 계산된 canonical source+content SHA+selector로 연결",
+    "repeat/response-fit 판정 후 필요한 mutation snapshot 발행; 미전달 snapshot 회수/유효 receipt 재사용",
+    "기존 stable reader에 cooperative cancellation 전달; 취소 이후 신규 capability 발행 금지",
+    "seal 결과와 release 결과의 typed 분리; 기존 terminal owner에서 해제 단일화",
+    "실제 SDK source/provider result를 소비하는 cross-boundary regression 추가"
+  ],
+  "doNotDuplicate": [
+    "새 evidence DB/두 번째 read ledger/독립 전역 cache를 만들지 않는다.",
+    "evidence-ranges.js, input-availability.js의 범위/현재 입력 확인을 재사용한다.",
+    "기존 EvidenceArchive membership, hash, TTL, lease와 BudgetBroker 실측을 유지한다.",
+    "새 RecoveryManager/ReviewManager 계층을 만들지 않고 기존 소유자의 계약을 좁힌다.",
+    "raw tool XML을 파싱해 실행하는 우회 경로를 만들지 않는다.",
+    "기존 shared-tool-core repeat cache와 stable reader; thin delegate 파일은 중복 구현 아님",
+    "FileSnapshotRegistry 및 mutation CAS/owner/TTL 경계",
+    "BudgetBroker와 existing tool capability manifest/registry",
+    "기존 SDK patch entrypoint; 새 generic SDK/tool workflow engine은 만들지 않음"
+  ],
+  "invariants": [
+    "호출 성공≠모델 입력 노출≠검토 완료≠사용자 목표 완료",
+    "source key에 프로젝트/provider/engine 구분; source SHA와 archive body version은 별도 타입",
+    "같은 소스 범위는 읽기 도구/표현이 바뀌어도 신규 근거가 아니다.",
+    "현재 입력에서 제거된 필수 본문은 복구 허용; 정상 집중 읽기를 일괄 금지하지 않는다.",
+    "판정은 관찰 당시 SHA에 고정되며 소스 변경 후 needs_recheck로 돌아간다.",
+    "검토 보충의 생성 성공은 근거 gap 해소가 아니다.",
+    "restore 실패가 임의 archive membership 승격으로 해결되면 안 된다.",
+    "기존 user/assistant/tool payload 변경은 여전히 prefix 거부한다.",
+    "effective request가 dispatch/UI/ledger/archive에서 동일해야 한다.",
+    "provider가 계산한 새 SHA를 stat-only duplicate 판정으로 숨기면 안 된다.",
+    "repeatReceipt, fileVersionReceipt, archive handle, source SHA, rangeSha256, snapshotVersion은 교환 불가다.",
+    "동일 repeat/취소/budget 실패에서 미전달 mutation snapshot이 누적되면 안 된다.",
+    "이미 완료된 peer의 성공 관찰은 다른 peer exception으로 사라지면 안 된다.",
+    "미응답 mutation은 unknown outcome이며 자동 재실행 금지; 주 실패는 cleanup 실패보다 우선한다.",
+    "취소 뒤 새 source read/capability 발행 금지, 이미 완성된 관찰은 명시적 정책으로 보존한다.",
+    "owner=null의 동일성은 같은 사용자 증거가 아니다. 신뢰된 owner 또는 검증된 기존 receipt 연결 없이는 snapshot token 재사용 금지다.",
+    "byteBudget은 provider text envelope 계약이며 MCP/SDK wrapper와 model template/token 비용까지 같은 상한으로 보장하지 않는다.",
+    "pending peer에는 취소 요청과 유한 시간 종료 확인을 적용한다. 취소 요청만으로 완료/미실행을 확정하지 않는다.",
+    "관찰된 실패 결과의 errorCode/retry/suggestion과 원 실패 원인도 보존하되 source coverage는 성공만 반영한다."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+    "lmstudio-context-compactor-plugin/src/terminal-persistence.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-identity.js",
+    "lmstudio-context-compactor-plugin/src/read-ledger.js",
+    "lmstudio-context-compactor-plugin/src/context-ports.ts",
+    "lmstudio-context-compactor-plugin/src/review-register.ts",
+    "lmstudio-context-compactor-plugin/src/review-evidence.ts",
+    "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts",
+    "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+    "lmstudio-context-compactor-plugin/src/execution-state.ts",
+    "lmstudio-context-compactor-plugin/src/round-input.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+    "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts",
+    "plugin tests and generated contracts/portable package allowlist if changed",
+    "scripts/analyze_lmstudio_run.py; scripts/trace_lmstudio_run.py",
+    "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
+    "lmstudio-context-compactor-plugin/src/round-loop.ts",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+    "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js",
+    "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js",
+    "lmstudio-unreal-agent-mcp/src/direct-server.js",
+    "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js",
+    "lmstudio-unreal-agent-mcp/src/direct-file-version-policy.js",
+    "shared-tool-core/repeat-cache.js",
+    "shared-tool-core/direct-file-snapshot.js",
+    "config/stable_tool_manifest.json",
+    "lmstudio-unreal-agent-mcp/src/direct-tool-catalog.js",
+    "lmstudio-unreal-agent-mcp/src/direct-response.js"
+  ],
+  "validationPlan": [
+    "현 working tree isolated TypeScript compile 성공",
+    "관련 기존4개 test file 103/103 통과; 새6개 counterexample은 결함을 관찰하는 probe로 재현",
+    "H1/H6 독립 대조군 probe 확인",
+    "구현마다 음성 대조군 포함 contract tests; 두 턴 감사→보충→수정 요청 end-to-end mock",
+    "저장 스키마 migration, scope/fork/TTL/cancel/concurrent lease, package/generated contract 검사",
+    "오프라인 통합 성공 후 같은 snapshot/model/config 실모델 최소3회; 정확도와 호출/재전달/latency를 함께 측정; 현재 미실행",
+    "provider focused existing tests19/19; new provider counterexamples3; SDK actual-source counterexamples2 plus guard-denial control",
+    "toolcontract/unitycontract readonly --check passed; no generated writes",
+    "H9~H13 real-provider-to-harness and actual SDK lifecycle contract tests required before implementation completion",
+    "same metadata different SHA; same repeat100x bounded snapshots; abort at resolution/read/hash; completed peer+throw/deny/cancel permutations"
+  ],
+  "claims": [
+    {
+      "id": "H1",
+      "claim": "보고서 보충의 기존 가시 블록 변경이 commit된 source prefix를 바꾸어 seal과 다음 턴 restore를 연쇄 실패시킨다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:74",
+          "observation": "continuationController가 기존 lastAnswer.block을 재사용하고 appendText는 같은 entry.text를 변경한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:981",
+          "observation": "seal은 commit 당시 sourceLength까지 완전 동일한 hash를 요구한다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/289",
+          "observation": "sealed:false, source_prefix_changed. 다음 message5 step3 source_prefix_mismatch, firstDifferentIndex49."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/continuation-prefix-probe-result.json",
+          "observation": "기존 마지막 assistant 수정은 실패, 별도 assistant append는 seal/restore 성공, 과거 user 수정 거부 유지."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1514",
+          "symbol": "report review 예약"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:660",
+          "symbol": "continuationController 선택"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:38",
+          "symbol": "이미 commit된 answer entry.text 변경"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:981",
+          "symbol": "source_prefix_changed"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1126",
+          "symbol": "다음 턴 source_prefix_mismatch"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1120",
+          "observation": "scope/lineage/integrity/prefix 검사는 다른 이력의 접근을 막는 정당한 경계이므로 삭제하면 안 된다."
+        }
+      ],
+      "unknowns": [
+        "실모델 재실행은 하지 않았다. 다른 host 이력 정규화 문제의 동시 존재까지 배제하지 않는다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "보충은 새 host block에 append하고 terminal freeze 뒤 callback은 이력을 변경하지 않는다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+          "lmstudio-context-compactor-plugin/src/working-context.js"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "supplements append immutable host blocks and survive the next user turn",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H2",
+      "claim": "복원 실패 후 빈 archive catalog와 첫 읽기 실패가 즉시 최종화로 이어지며, 후속 수정·빌드 작업을 재개하지 못한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1125",
+          "observation": "prefix 실패는 membership/readLedger 복원 전에 반환한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:37",
+          "observation": "noProgressRounds>=1과 needsFinal이면 종료. 성공한 unlimited 복구 읽기에는 복구 목표 달성에 따른 endRecovery가 없다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
+          "observation": "94265 tokens, catalog entries=[], path_unavailable, read ledger files0, raw tool text 후 unresolved_tool_intent. 수정/빌드 호출0."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/recovery-policy-probe-result.json",
+          "observation": "empty catalog/첫 실패는 research_recovery_exhausted; unlimited 성공 읽기는 endRecovery:false."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1125",
+          "symbol": "restore 실패"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:471",
+          "symbol": "read-only recovery 진입"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:42",
+          "symbol": "첫 무진전 종료"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1488",
+          "symbol": "finishResearch"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "symbol": "failed/unresolved_tool_intent"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts:68",
+          "observation": "readExecutionScope는 호출 capability 분류이며 사용자 목표/권한 판정이 아님을 명시한다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "observation": "taskCompleted:false로 정직하게 실패를 표시했다. 잘못된 수정/빌드는 실행되지 않았다."
+        }
+      ],
+      "unknowns": [
+        "복원 실패 시 현재 host 원본 도구 이력에서 어느 범위까지 안전하게 재구성할지 schema/provenance 설계가 필요하다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "window/ledger/access 상태를 분리하고 historical hint에 권한을 승계하지 않는다. typed failure에 한 번 fallback하며 유효 source와 원 profile 예산 재측정 뒤 원 도구 집합으로 복귀한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/working-context.js",
+          "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+          "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "lmstudio-context-compactor-plugin/src/prediction-loop.ts"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+        "testName": "recovered source and measured headroom restore the original mutation-capable profile",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H3",
+      "claim": "같은 소스·SHA·범위가 읽기 도구와 archive 표현을 바꾸면 신규 근거나 현재 입력 복구로 잘못 집계될 수 있다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-identity.js:33",
+          "observation": "queryKey는 toolName/action 및 요청 digest에 의존한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:649",
+          "observation": "archive coverage는 evidenceId/record version/문자 범위를 사용하여 source line coverage와 분리된다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:233",
+          "observation": "archive 재조회는 notePage/noteRestore 후 원래 result를 그대로 반환한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "observation": "같은 전체 파일 read_file→read_file_range가 newSourceUnits1. 원본이 입력에 있어도 archive 읽기가 restoredWorkingEvidenceUnits1, bodiesReplaced0."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/203",
+          "observation": "round16부터 archive7회 모두 restoredWorkingEvidenceUnits1; source screening과 서로 다른 진행 단위 사용."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:217",
+          "symbol": "screenReturnedReads"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:638",
+          "symbol": "recoveryCoverageDescriptors"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:861",
+          "symbol": "별도 currentCoverage key 증가"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:883",
+          "symbol": "progressed=true"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1224",
+          "observation": "repeatRestores만 있는 라운드는 별도 무진전 정책이 보정한다. 모든 archive 복구를 신규 근거로 취급하는 것은 아니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:127",
+          "observation": "ReadLedger는 동일 path/SHA coverage를 이미 구분한다. 새 원장을 만들 필요가 없다."
+        }
+      ],
+      "unknowns": [
+        "로그의 전체 최종 SDK 입력 전문은 없으므로 archive7회 모두 불필요했다고 단정할 수 없다. 일부는 압축으로 없어진 본문의 필요한 복구다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "provider/project/path/SHA와 입증된 source span을 기준으로 ReadDelta를 한 번 계산하여 recovery/stagnation에 공유한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "lmstudio-context-compactor-plugin/src/evidence-identity.js"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "real provider byte/range observations share whole-file coverage and duplicate capabilities stay separate",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H4",
+      "claim": "서버 repeat receipt 처리에서는 일부 줄만 보여도 파일 버전이 Map에 존재한다는 이유로 전체 본문이 현재 입력에 있다고 응답한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:277",
+          "observation": "visibleReads.has만 검사한다. 일반 source 경로는 visibleRead의 범위 포함 검사를 쓴다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "observation": "1~2줄만 보이고 요청은1~6줄인 receipt 응답이 bodyInCurrentInput:true/bodyOmitted:true."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:272",
+          "symbol": "duplicate/no_new_information"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:277",
+          "symbol": "범위 대신 Map.has"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:285",
+          "symbol": "UNCHANGED 본문 생략"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:196",
+          "observation": "일반 읽기는 요청 범위가 모두 보이는지 검사한다."
+        }
+      ],
+      "unknowns": [
+        "이 receipt 반례가 첨부 실행에서 직접 발생했다는 근거는 없다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "receipt에 대응하는 정확한 범위와 현재 body coverage 전체를 확인한다. 부분 범위나 bodyless receipt는 전체 body 생략 근거가 아니다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "lmstudio-context-compactor-plugin/src/read-ledger.js"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "partial visible ranges cannot certify a whole duplicate receipt body",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H5",
+      "claim": "모델의 일부 검토 메모가 파일 전체 closed 판단과 pin 해제에 쓰이고, SHA가 바뀌면 재검토 없이 기존 판정을 새 SHA에 다시 묶는다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:156",
+          "observation": "closedFileFacts는 알려진 row의 위치/SHA만 확인하며 파일/검토 주제 전체의 미해결 의무를 검사하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:133",
+          "observation": "attach는 SHA 변경 시 row.status/statement를 유지한 채 새 bundle을 붙인다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:164",
+          "observation": "closedFile이면 pin 후보에서 제외한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:303",
+          "observation": "closed 메모로 숨겨진 전체 소스 재읽기를 한 번 대체한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "observation": "Foo 한 건의 found 메모만으로 Bar까지 있는 파일이 closed. 이후 SHA B에서도 새 판정 없이 found 상태와 closed 결과 유지."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1191",
+          "symbol": "모델 reasoning/visible 판단 수집"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:133",
+          "symbol": "bundle 자동 결합 및 SHA 재결합"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:156",
+          "symbol": "파일 closed 계산"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:164",
+          "symbol": "pin 제외"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:311",
+          "symbol": "closed_by_review_register"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:100",
+          "observation": "주석은 proof authority가 아닌 execution working notes라고 명시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:300",
+          "observation": "집중 읽기 및 두 번째 전체 요청은 허용하여 영구 차단하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "첨부 실행에서는 파일 변경이 없으므로 SHA 재결합 문제는 추가 반례다. closure가 각 실제 재조회의 직접 원인인지 최종 입력 추적이 더 필요하다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "regex 메모의 whole-file closed/pin 권위를 제거하고 claim은 관찰 SHA에 고정하며 변경 시 needs_recheck로 남긴다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/review-register.ts",
+          "lmstudio-context-compactor-plugin/src/review-evidence.ts",
+          "lmstudio-context-compactor-plugin/src/working-context.js"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "judgments do not close an entire file or become supported by a different version",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H6",
+      "claim": "부모 제목에만 심각도가 있는 보고서는 엔진 의존 주장 본문을 놓치며, 보충 생성 뒤 기존 progress gap까지 표시하지 않을 수 있다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts:105",
+          "observation": "모든 heading에서 section을 나누고 해당 heading 자체의 P0~P3만 검사한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1652",
+          "observation": "reviewedReport이면 progress gap 입력을 빈 배열로 바꾼다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "observation": "동일 DrawDebugLine 문장이 직접 검사에서는 gap1, ##P2/###항목에서는 gap0."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/278",
+          "observation": "progress 엔진 gap이 있었지만 report_review contracts=[]; 최종 engine notice 없음."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1511",
+          "symbol": "완성 답변 검사"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts:105",
+          "symbol": "gradedSections의 severity 분리"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1528",
+          "symbol": "contracts 없는 report review"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1652",
+          "symbol": "progress gap 생략"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "symbol": "근거 추가 읽기 없이 엔진 계약 확인 문구 보충"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts:134",
+          "observation": "직접 finding 전달과 severity를 같은 heading에 둔 보고서는 정상 탐지한다."
+        }
+      ],
+      "unknowns": [
+        "이 검사는 엔진 명제의 사실 여부를 자동 판정하지 않는다. 실제 보고의 API/수명 오류는 별도 소스로 대조했다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "heading 계층과 표/list/bold severity를 처리하고 보충의 자기확신만으로 기존 engine gap을 제거하지 않는다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/engine-claim-anchoring.ts",
+          "lmstudio-context-compactor-plugin/src/delivery-controller.ts"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "nested priority headings retain engine evidence obligations",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H7",
+      "claim": "ReadLedger의 path+SHA identity는 프로젝트 소유자를 포함하지 않아 서로 다른 프로젝트의 동일 상대 경로·SHA를 같은 전달 이력으로 취급한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:28",
+          "observation": "pathKey는 project:// 제거와 case folding만 수행한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:65",
+          "observation": "ReadFacts에 canonicalProject/provider가 없고 entryKey도 key+SHA뿐이다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "observation": "ProjectA 전달 후 ProjectB 같은 path/SHA를 redundant로 분류한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:52",
+          "symbol": "readFacts"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:110",
+          "symbol": "entryKey"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:143",
+          "symbol": "redundant"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1122",
+          "observation": "WorkingContext 바깥 scope 검사로 많은 cross-scope 접근은 차단한다. 원장의 키 결함이 곧 archive 권한 유출을 의미하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "첨부는 동일 프로젝트 실행이므로 실제 cross-project 발생은 관찰하지 않았다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "ledger identity에 등록된 provider와 canonical project/root/path를 포함하며 모호한 path-only fallback을 금지한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/evidence-identity.js",
+          "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "lmstudio-context-compactor-plugin/src/evidence-manager.ts"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "same relative path and hash in another project is a different ledger source",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H8",
+      "claim": "도구 없는 finalization에서 생성된 실행되지 않은 tool XML이 일반 답변에 먼저 표시되고 나중에 부분 보고가 추가된다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/22",
+          "observation": "evidence_first_read_context 호출 XML이 text block에 표시된다."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/43",
+          "observation": "read_file6개 XML이 text block에 표시되고 step46 부분 보고가 뒤따른다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1591",
+          "observation": "출력 뒤 raw syntax 확인 후 deliverPartial을 수행한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:660",
+          "symbol": "final report stream"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:815",
+          "symbol": "visible captured 후 완료/복구 평가"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1591",
+          "symbol": "raw tool intent 검출"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/46",
+          "symbol": "이미 표시된 XML 이후 미완료 보고"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "observation": "raw XML을 실제 실행하지 않았고 taskCompleted:false로 실패를 기록한다."
+        }
+      ],
+      "unknowns": [
+        "사용자가 tool XML 설명을 요청하거나 코드 블록으로 인용한 경우까지 숨기면 안 된다. provenance-aware 출력 처리가 필요하다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "raw intent는 분류에 유지하고 표시 단계에서 실행되지 않은 protocol을 걸러낸다. 인용과 code 예시는 보존한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+          "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+          "lmstudio-context-compactor-plugin/src/prediction-loop.ts"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "raw tool protocol is hidden at every fragment boundary while quotes and code examples remain literal",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "A1",
+      "claim": "첨부 보고서의 AimRotation 수정 예시는 degrees 필드를 radians 함수에 전달한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "observation": "권고 코드가 FindDeltaAngleRadians(ControlRot.Yaw, AimRotation.Yaw)를 사용한다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/Rotator.h:24",
+          "observation": "회전값은 degrees임을 명시한다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
+          "observation": "FindDeltaAngleRadians는 [-PI,PI] 범위로 wrap하고 degrees 버전은 별도 함수다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "symbol": "권고 코드의 yaw 입력"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
+          "symbol": "radian wrapping"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "symbol": "0.1 기준 거부 코드 제안"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
+          "observation": "실제 write/build는0회여서 이 잘못된 예시는 적용되지 않았다."
+        }
+      ],
+      "unknowns": [
+        "제안 보정의 정확한 지연 허용·치트 탐지 기준은 플레이 및 네트워크 검증이 필요하다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "report_guardrails_partial",
+        "change": "권고 코드 API 소유 타입 대조와 미컴파일 범위 안내를 추가했다. 단위와 상태 전이 의미를 자동으로 검증하거나 UE 예시를 수정한 것은 아니다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts"
+        ],
+        "semanticVerification": "not_implemented",
+        "ueEdits": false
+      }
+    },
+    {
+      "id": "A2",
+      "claim": "첨부 보고서의 client bIsReloading=true만 추가하는 수정은 client 상태를 되돌리는 경로를 제공하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "observation": "StartReload client 분기에 bIsReloading=true만 추가하도록 권고한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h:113",
+          "observation": "bIsReloading은 일반 bool이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
+          "observation": "StopReload는 !HasAuthority이면 반환. CanFire는 bIsReloading이 false여야 한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:323",
+          "observation": "OnRep_CombatState에서 bIsReloading을 복구하지 않는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "symbol": "제안 client StartReload"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "symbol": "local bIsReloading=true"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
+          "symbol": "client StopReload 복구 불가"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:184",
+          "symbol": "CanFire bool guard"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:251",
+          "observation": "기존 server 리로드 시작/종료는 정상적으로 bool을 관리한다. 결함은 이번 보고서의 권고에 있다."
+        }
+      ],
+      "unknowns": [
+        "제안 코드 실행/UE 빌드는 하지 않았다. 확인 범위는 주어진 소스 경로의 상태 전이다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "report_guardrails_partial",
+        "change": "권고 코드 API 소유 타입 대조와 미컴파일 범위 안내를 추가했다. 단위와 상태 전이 의미를 자동으로 검증하거나 UE 예시를 수정한 것은 아니다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts"
+        ],
+        "semanticVerification": "not_implemented",
+        "ueEdits": false
+      }
+    },
+    {
+      "id": "PLAN",
+      "claim": "기존 소유자를 유지하면서 이력 불변성·소스 정체성·진행 판정·검토 의무 계약을 순서대로 수정한다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "user request (current chat)",
+          "observation": "불필요 재조회와 추가 문제를 조사하고 SSOT/SOLID/계약/책임/수명 관점의 상세 수정 계획을 요청했다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:45",
+          "observation": "관찰 lifecycle과 progress 소유자는 이미 EvidenceManager이며 storage는 WorkingContext다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:422",
+          "observation": "첫 consumer 보호·scope gate·무결성 검사 등 유지해야 할 기존 기능이 있다."
+        }
+      ],
+      "unknowns": [
+        "변경은 미구현이며, 정확도/지연 개선은 통합 재생과 수정 후 실모델 반복 시험 전에는 확정할 수 없다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_with_explicit_remaining_validation",
+        "details": "W0~W4의 설명된 계약 변경 및 자동 회귀, W5 guardrails, W6 로컬 검사를 수행했다. W5 일반 의미 검증과 W6 활성 설치 확인, W7 실모델 반복은 미완료다."
+      }
+    },
+    {
+      "id": "H9",
+      "claim": "Provider source read의 content SHA가 달라도 stat signature가 같으면 이전 repeatReceipt로 새 본문을 억제한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:224",
+          "observation": "stable read는 현재 hash를 계산하며 line296 dedupe는 project+statSignature만 전달한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-shared.js:30",
+          "observation": "state signature는 dev/ino/size/trunc mtimeMs이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/repeat-cache.js:36",
+          "observation": "cache lookup은 provider가 준 stateSignature와 args/receipt로 동일성을 결정한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:271",
+          "observation": "identity 없는 duplicate 결과는 path의 latest ledger 사실로 연결된다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "observation": "sameStateSignature=true, changedSha=true, responseDuplicate=true, bodyOmitted=true."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js:48",
+          "symbol": "callTool"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:224",
+          "symbol": "현재 stable read"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:296",
+          "symbol": "stat 기반 dedupe"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "shared-tool-core/repeat-cache.js:47",
+          "symbol": "새 body 대신 duplicate 반환"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "symbol": "SHA 다른 내용이 숨겨짐"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js:153",
+          "observation": "valid explicit expectedHash 경로와 mutation CAS는 별개다. stale write 커밋을 입증한 반례가 아니다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe.cjs",
+          "observation": "repeatReceipt 없는 대조군은 새 SHA/body를 받는다."
+        }
+      ],
+      "unknowns": [
+        "첨부 대화의 실제 발생 여부 및 빈도는 확인하지 않았다. 정상 mtime 변화는 cache miss이다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "repeat signature는 stat 대신 stable read에서 이미 계산한 SHA와 canonical source를 사용한다.",
+        "sourceFiles": [
+          "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js",
+          "shared-tool-core/repeat-cache.js"
+        ],
+        "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
+        "testName": "same file metadata with changed SHA returns the new source body",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H10",
+      "claim": "동일 source read가 dedupe 전에 새 mutation snapshot을 발행하여 미전달 snapshot이 기존 유효 receipt를 밀어낸다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:234",
+          "observation": "snapshot 등록은 dedupe296과 payload-fit 실패278 이전이다. byte/symbol 경로도 동일 순서다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js:85",
+          "observation": "register는 매번 새 token 생성 전 capacity를 확보하려고 오래된 entry를 제거한다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "observation": "capacity2에서 첫 read 후 동일 repeat2회로 최초 receipt INVALID; registry2개 모두 미전달."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:222",
+          "symbol": "동일 read_file_range 반복"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js:14",
+          "symbol": "registerReadSnapshot"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js:91",
+          "symbol": "새 receipt 발행과 기존 entry eviction"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:296",
+          "symbol": "duplicate 응답에 snapshot 누락"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "symbol": "최초 receipt FILE_SNAPSHOT_INVALID"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js:32",
+          "observation": "기본 capacity512, TTL30분. 작은 capacity 실험은 기본값 소진의 증거가 아니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js:153",
+          "observation": "원 hash를 보유하면 explicit expectedHash로 편집할 수 있다."
+        }
+      ],
+      "unknowns": [
+        "첨부에서 실제 registry 소진은 확인하지 않았다. TTL/LRU 자체를 제거하는 제안이 아니다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "snapshot은 prepare 뒤 budget fit과 dedupe가 성공하여 body가 선택된 때만 commit한다. duplicate receipt는 mutation receipt를 재발행하지 않는다.",
+        "sourceFiles": [
+          "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js",
+          "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js"
+        ],
+        "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
+        "testName": "duplicate reads preserve source identity without issuing hidden mutation snapshots",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H11",
+      "claim": "Source read는 최초 dispatch 뒤 cancellation을 관찰하지 않아 resolution 중 취소되어도 읽기와 mutation receipt 발행을 진행한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js:67",
+          "observation": "최초 signal 검사는 있으나 source handler 이후 취소 결과와 관찰 생성 상태를 분리하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:223",
+          "observation": "resolveToolPath await 뒤 readStableTextFile로 signal을 넘기지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/direct-file-snapshot.js:101",
+          "observation": "window는 전체 SHA loop를 실행하며 signal 인자/loop 검사가 없다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
+          "observation": "resolution 중 abort 후 ok:true, snapshot receipt 반환, registry1."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js:67",
+          "symbol": "pre-dispatch signal 검사 통과"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:223",
+          "symbol": "resolution await 중 취소"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:224",
+          "symbol": "취소 이후 file read"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js:18",
+          "symbol": "새 snapshot register"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
+          "symbol": "취소 이후 성공+receipt 반환"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "shared-tool-core/direct-file-snapshot.js:54",
+          "observation": "reader handle은 finally에서 close한다. FD leak으로 판정하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-server.js:93",
+          "observation": "server signal listener는 finally에서 해제된다. 다른 검색/process/mutation에는 취소 경로가 있다."
+        }
+      ],
+      "unknowns": [
+        "대형 파일 실제 취소 latency와 I/O량은 측정하지 않았다. 이미 완성된 관찰의 보존과 취소 후 신규 작업을 구별해야 한다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "source reader와 snapshot commit에 cancellation을 전달하며 열린 descriptor를 닫고 REQUEST_CANCELLED의 retry를 금지한다.",
+        "sourceFiles": [
+          "shared-tool-core/direct-file-snapshot.js",
+          "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+          "lmstudio-unreal-agent-mcp/src/direct-runtime-shared.js"
+        ],
+        "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
+        "testName": "cancellation after opening a byte reader closes it once and forbids retry",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H12",
+      "claim": "SDK guard override의 effective 인자와 finalized callback의 proposed 인자가 달라 실제 실행과 host 표시 transcript가 갈라진다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16543",
+          "observation": "SDK1.5.0은 override를 pushedRequest에 반영하지만 finalized16568에는 request를 전달한다. 로컬 prediction-end 호환 패치 적용본이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:764",
+          "observation": "finalized callback request를 바로 표시한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:185",
+          "observation": "이미 표시한 request ID는 이후 실제 SDK history에서 재표시하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "observation": "실제 인자/history:8192+BoundProject; finalized/visible:65536+project 없음."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:122",
+          "symbol": "guard scope/예산 인자 결정"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16543",
+          "symbol": "effective pushedRequest 갱신"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16564",
+          "symbol": "원 request finalized callback"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:185",
+          "symbol": "원 인자를 host 표시"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "symbol": "표시와 실제 실행 인자 불일치"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16574",
+          "observation": "실제 tool implementation과 SDK assistant message의 pushedRequest 인자는 맞다. 실행이 원 인자를 사용한 것은 아니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-boundary.ts:229",
+          "observation": "승인된 mutation에는 별도 replaceRequest 경로가 있어 모든 호출을 같은 문제로 일반화하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio UI/server 연결은 호출하지 않았다. SDK 내부 함수+현재 build의 recorder/emitter를 실행했다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "SDK finalized callback은 guard의 effective request를 사용한다. 버전과 CJS/MJS anchor를 쓰기 전에 검사한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/sdk-contract.test.cjs",
+        "testName": "actual SDK finalized, dispatch, model history and host history share effective arguments",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "H13",
+      "claim": "SDK batch에서 한 tool implementation이 throw하면 이미 성공한 peer의 반환 결과도 onMessage로 방출되지 않아 하네스가 보존하지 못한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16603",
+          "observation": "tool exception은 finalReject로 연결되고 await finalPromise16679가 throw하면 result flush16681에 도달하지 않는다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:234",
+          "observation": "하네스는 onMessage로 받은 결과만 captured messages에 보존한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:831",
+          "observation": "captureReturned는 captured messages를 소비하므로 SDK에서 빠진 성공 결과를 알 수 없다."
+        },
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "observation": "actual SDK internalAct와 current runOneToolRound 연결: providerSuccesses1, capturedResults0, transport failure 유지."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16574",
+          "symbol": "두 tool implementation 실행"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16594",
+          "symbol": "성공 peer 결과가 SDK 내부 array에 등록"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16603",
+          "symbol": "다른 peer throw -> finalReject"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.cjs:16679",
+          "symbol": "onMessage 결과 flush 전에 throw"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "symbol": "이미 완료된 읽기가 captured results에서 유실"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "observation": "동일 성공 peer+guard denial 대조군은 capturedResults2, failure 없음."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:5257",
+          "observation": "unparsed tool request의 성공 peer 보존은 별도 경로이며 현재 회귀가 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:258",
+          "observation": "round finally의 abort/late callback fence는 올바르다. fence를 제거해 결과를 받는 제안이 아니다."
+        }
+      ],
+      "unknowns": [
+        "첨부 대화에서 이 예외가 발생했다는 증거는 없다. 실제 host transport의 실패/취소 시간 순서 및 발생 빈도는 후속 검사 대상이다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "SDK batch 예외 전에 완료된 peer request/result를 한 번 보존하고 원 예외를 유지한다. 닫힌 라운드의 늦은 guard는 새 dispatch를 만들지 않는다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
+          "lmstudio-context-compactor-plugin/src/prediction-loop.ts"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/sdk-contract.test.cjs",
+        "testName": "actual SDK preserves completed peer on exception",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "C1",
+      "claim": "현재 terminal persistence 계약은 seal과 close가 모두 archive 해제를 시도하고 close 실패가 boolean과 예외 두 경로로 표현된다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:986",
+          "observation": "seal 성공 때 archive.close 호출, 예외를 내부에서 흡수한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:991",
+          "observation": "close는 archive 실패를 false와 lastRetentionReason으로 전달한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/terminal-persistence.ts:19",
+          "observation": "sealAndRelease는 close throw만 cleanupFailures 처리하며 sealed=true reason은 terminal_remeasure_required이다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:310",
+          "observation": "archive.close는 ENOENT를 허용하는 idempotent release이다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:310",
+          "observation": "중복 close 호출만으로 resource leak을 확정할 수 없다."
+        }
+      ],
+      "unknowns": [
+        "실제 lease 해제 실패/누수는 관찰하지 않았다. typed terminal result와 단일 release owner는 구조 제안이다."
+      ],
+      "snapshot": "pre_implementation_audit",
+      "resolution": {
+        "status": "implemented_test_verified",
+        "proofLevel": "TestVerified",
+        "change": "terminal owner가 lease를 해제하고 close는 idempotent하다. typed seal/release와 primary failure/cleanup failure를 분리한다.",
+        "sourceFiles": [
+          "lmstudio-context-compactor-plugin/src/terminal-persistence.ts",
+          "lmstudio-context-compactor-plugin/src/working-context.js"
+        ],
+        "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
+        "testName": "terminal persistence releases once and reports a boolean release failure separately",
+        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "runtimeVerification": "not_run",
+        "limits": [
+          "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
+        ]
+      }
+    },
+    {
+      "id": "I1",
+      "snapshot": "post_implementation",
+      "claim": "불변 supplement와 terminal release 분리를 적용한 fixture에서 다음 턴 restore와 한 번 해제가 관찰됐다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:83",
+          "observation": "continuationController"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:17",
+          "observation": "불변 supplement와 terminal release 분리를 적용한 fixture에서 다음 턴 restore와 한 번 해제가 관찰됐다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:38",
+          "observation": "불변 supplement와 terminal release 분리를 적용한 fixture에서 다음 턴 restore와 한 번 해제가 관찰됐다."
+        },
+        {
+          "kind": "test",
+          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "observation": "1059 passed, 0 failed"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:83",
+          "symbol": "continuationController"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-ui.ts:89",
+          "symbol": "freeze"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/terminal-persistence.ts:10",
+          "symbol": "sealAndRelease"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:17",
+          "symbol": "next-turn restore assertions"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "requirement",
+          "location": "implementation remaining W5/W7",
+          "observation": "테스트 receipt는 일반 의미 정확성, 실제 모델 완료 또는 배포 완료를 증명하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio host에서 수정본을 실행하지 않았다."
+      ]
+    },
+    {
+      "id": "I2",
+      "snapshot": "post_implementation",
+      "claim": "실제 provider의 전체 UTF-8 본문과 range 읽기는 같은 source coverage로 집계되며 duplicate 응답은 mutation receipt를 발행하지 않는다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:218",
+          "observation": "actual provider runtime read_file"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:218",
+          "observation": "실제 provider의 전체 UTF-8 본문과 range 읽기는 같은 source coverage로 집계되며 duplicate 응답은 mutation receipt를 발행하지 않는다."
+        },
+        {
+          "kind": "test",
+          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "observation": "1059 passed, 0 failed"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:218",
+          "symbol": "actual provider runtime read_file"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:72",
+          "symbol": "verifiedReadFacts"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:134",
+          "symbol": "ReadDelta"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:218",
+          "symbol": "newSourceUnits=0 and missing fileVersionReceipt"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "requirement",
+          "location": "implementation remaining W5/W7",
+          "observation": "테스트 receipt는 일반 의미 정확성, 실제 모델 완료 또는 배포 완료를 증명하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio host에서 수정본을 실행하지 않았다."
+      ]
+    },
+    {
+      "id": "I3",
+      "snapshot": "post_implementation",
+      "claim": "하네스 통합 fixture에서 복구 source 확보와 원 profile 예산 측정 후 write 도구를 포함한 원 profile이 다시 제공됐다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1490",
+          "observation": "recovery readiness"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:2486",
+          "observation": "하네스 통합 fixture에서 복구 source 확보와 원 profile 예산 측정 후 write 도구를 포함한 원 profile이 다시 제공됐다."
+        },
+        {
+          "kind": "test",
+          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "observation": "1059 passed, 0 failed"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1490",
+          "symbol": "recovery readiness"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:146",
+          "symbol": "measureOriginalProfile"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1503",
+          "symbol": "read_recovery_resumed_original"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:2486",
+          "symbol": "original write profile assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "requirement",
+          "location": "implementation remaining W5/W7",
+          "observation": "테스트 receipt는 일반 의미 정확성, 실제 모델 완료 또는 배포 완료를 증명하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio host에서 수정본을 실행하지 않았다."
+      ]
+    },
+    {
+      "id": "I4",
+      "snapshot": "post_implementation",
+      "claim": "제안 C++ 코드에는 별도 미컴파일 안내와 명시적 receiver API 소유 타입 대조가 제공된다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:474",
+          "observation": "terminalReportNotices"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:155",
+          "observation": "제안 C++ 코드에는 별도 미컴파일 안내와 명시적 receiver API 소유 타입 대조가 제공된다."
+        },
+        {
+          "kind": "test",
+          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "observation": "1059 passed, 0 failed"
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:474",
+          "symbol": "terminalReportNotices"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts:119",
+          "symbol": "suggestedCodeNotice"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs:155",
+          "symbol": "uncompiled and owner-qualified notice assertions"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "requirement",
+          "location": "implementation remaining W5/W7",
+          "observation": "테스트 receipt는 일반 의미 정확성, 실제 모델 완료 또는 배포 완료를 증명하지 않는다."
+        }
+      ],
+      "unknowns": [
+        "실제 LM Studio host에서 수정본을 실행하지 않았다."
+      ]
+    }
+  ],
+  "implementationPhases": [
+    {
+      "id": "W0",
+      "dependsOn": [],
+      "purpose": "반례를 수정 전 기대 동작 테스트로 고정",
+      "files": [
+        "test/prediction-loop.test.cjs",
+        "test/working-context.test.cjs",
+        "test/source-reacquisition.test.cjs",
+        "test/review-register.test.cjs"
+      ],
+      "changes": [
+        "사용자 원문 대신 합성 source/로그 fixture 사용",
+        "기존 정상 대조군과 신규 실패를 함께 고정",
+        "H9~H13 actual provider/SDK source fixtures 추가"
+      ],
+      "exitCriteria": [
+        "H1/H3/H5/H6 기대 동작 실패를 수정 전에 재현"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "수정 전 실패 로그와 정상 대조군, 수정 후 regression suite를 보존했다.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W1",
+      "dependsOn": [
+        "W0"
+      ],
+      "purpose": "보충 출력과 영속 이력의 불변 계약 복구",
+      "files": [
+        "src/prediction-ui.ts",
+        "src/prediction-loop.ts",
+        "src/terminal-persistence.ts",
+        "src/working-context.js"
+      ],
+      "changes": [
+        "보충은 새 visible block으로 append",
+        "terminal snapshot freeze; 기존 prefix hash 검사 유지",
+        "cancel/late callback/lease 해제 확인"
+      ],
+      "exitCriteria": [
+        "두 턴 감사→보충→수정 요청 seal/restore 성공",
+        "과거 user/assistant/tool payload 수정은 거부"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "immutable supplement/freeze 및 단일 release owner와 typed outcome 회귀 통과.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W1b",
+      "dependsOn": [
+        "W0"
+      ],
+      "purpose": "SDK 유효 요청/성공 peer 보존과 round 수명",
+      "files": [
+        "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
+        "lmstudio-context-compactor-plugin/src/round-loop.ts",
+        "lmstudio-context-compactor-plugin/src/prediction-ui.ts",
+        "lmstudio-context-compactor-plugin/src/prediction-loop.ts"
+      ],
+      "changes": [
+        "finalized에 effective request 전달",
+        "SDK batch failure에서 이미 완료된 request/result 한 번 방출, 원 exception 유지",
+        "held reservation finally close"
+      ],
+      "exitCriteria": [
+        "actual SDK override→dispatch/UI/history 동일",
+        "success+throw/deny/cancel/late/serial/parallel permutation의 completed observations 보존"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "실제 SDK 1.5.0 내부 함수로 effective args, completed peer, deny, late guard 검사. 모든 실제 host timing을 재현했다는 뜻은 아니다.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W2a",
+      "dependsOn": [
+        "W0"
+      ],
+      "purpose": "provider source identity와 snapshot/취소 수명",
+      "files": [
+        "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js",
+        "lmstudio-unreal-agent-mcp/src/direct-read-snapshot.js",
+        "lmstudio-unreal-agent-mcp/src/file-snapshot-registry.js",
+        "shared-tool-core/repeat-cache.js",
+        "shared-tool-core/direct-file-snapshot.js"
+      ],
+      "changes": [
+        "이미 계산된 SHA+canonical source+selector로 duplicate 판단",
+        "repeat/fit 이후 필요한 receipt만 발행; 유효 재사용/touch와 미전달 revoke",
+        "signal을 reader/hash loop/snapshot 직전까지 전달"
+      ],
+      "exitCriteria": [
+        "same metadata different SHA 새 body",
+        "capacity2/8 동일 repeat100회 orphan0",
+        "budget failure/cancel orphan0",
+        "owner/project/TTL/CAS 정상 경계 유지"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "SHA freshness, capacity 2 repeat100회, fit failure와 취소의 receipt0 확인. 큰 파일 I/O 절감 실측은 없음.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W2",
+      "dependsOn": [
+        "W1",
+        "W1b",
+        "W2a"
+      ],
+      "purpose": "동일 내용의 identity와 진행 판정 단일화",
+      "files": [
+        "src/evidence-identity.js",
+        "src/read-ledger.js",
+        "src/evidence-manager.ts",
+        "src/context-ports.ts",
+        "src/input-availability.js"
+      ],
+      "changes": [
+        "SourceKey에 provider/project/engine/canonical path 포함",
+        "ArchiveRef와 source version 분리; 검증된 범위만 매핑",
+        "ReadDelta 한 번 계산 후 screening/recovery/stagnation/telemetry 공유",
+        "receipt의 범위 전체 포함 검사"
+      ],
+      "exitCriteria": [
+        "read_file→range→archive 동일 내용 novelty0",
+        "필수 숨은 근거 복구 허용",
+        "unknown mapping은 사실 승격 안 함"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "source identity/span과 immutable ReadDelta. 전체 UTF-8 byte→line만 입증된 범위로 연결.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W2b",
+      "dependsOn": [
+        "W2a",
+        "W2"
+      ],
+      "purpose": "실제 provider 결과와 하네스 소비자 사이 계약 시험",
+      "files": [
+        "lmstudio-unreal-agent-mcp/test",
+        "lmstudio-context-compactor-plugin/test",
+        "shared-tool-core"
+      ],
+      "changes": [
+        "provider raw/duplicate→decoder/ledger/availability/archive→필수 span 재복구 통합",
+        "old/new result schema와 CJK/emoji/escaping/좌표 단위 검사"
+      ],
+      "exitCriteria": [
+        "필요 복구는 허용하고 현재 visible 중복만 억제",
+        "registry receipt/CAS는 archive·summary에서 권한 재생성 안 함"
+      ],
+      "status": "partial_test_verified",
+      "implementationResult": "실제 provider→harness byte/range/repeat bridge 및 개별 archive/CAS 경계 회귀 통과. 전체 수정·UE build 연계는 W7.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W3",
+      "dependsOn": [
+        "W2"
+      ],
+      "purpose": "작업 메모와 근거 제공 정책 분리",
+      "files": [
+        "src/review-register.ts",
+        "src/review-evidence.ts",
+        "src/working-context.js",
+        "src/prediction-loop.ts"
+      ],
+      "changes": [
+        "source+symbol+claim/task identity",
+        "observedVersion 고정; 변경 시 stale/needs_recheck",
+        "정규식 메모만으로 file closed/pin 해제 금지",
+        "미해결 필수 span 중심 pin"
+      ],
+      "exitCriteria": [
+        "Foo 하나의 메모로 Bar까지 완료 처리 안 함",
+        "새 SHA에 이전 found/cleared 자동 재결합 안 함"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "whole-file closed 권위 제거, stale claim의 버전 고정 및 크기 제한.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W4",
+      "dependsOn": [
+        "W2b",
+        "W3"
+      ],
+      "purpose": "복원 실패의 유한 대체 경로와 원 작업 재개",
+      "files": [
+        "src/working-context.js",
+        "src/round-input.ts",
+        "src/recovery-coordinator.ts",
+        "src/execution-state.ts"
+      ],
+      "changes": [
+        "typed RestoreResult와 RecoveryGoal",
+        "신뢰된 host request/result로 관찰만 재구성; inherited membership 자동 승계 금지",
+        "empty_catalog/stale_handle/temporary_budget/duplicate별 전이",
+        "근거 확보 및 원 profile 예산 재측정 후 RESEARCH 복귀",
+        "deliveredResponse를 존재하지 않는 URI 추측 없이 보존"
+      ],
+      "exitCriteria": [
+        "첫 빈 catalog만으로 작업 종료 안 함",
+        "복구 후 원래 허용 profile 사용",
+        "fallback 불가 시 정확한 부분 종료"
+      ],
+      "status": "implemented_test_verified",
+      "implementationResult": "실제 harness fixture에서 recovery 뒤 원 write profile 복귀. 실모델 작업 완료는 미검증.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W5",
+      "dependsOn": [
+        "W1"
+      ],
+      "purpose": "보고 근거·권고 코드·표시 경계 교정",
+      "files": [
+        "src/engine-claim-anchoring.ts",
+        "src/write-api-anchoring.ts",
+        "src/prediction-loop.ts",
+        "src/prediction-stream.ts"
+      ],
+      "changes": [
+        "heading 계층 severity와 table/bold 판독 또는 구조화 claim 기반 검사",
+        "claim/fact별 unresolved gap 지속",
+        "권고 API/단위/authority/취소·복구 경로 확인",
+        "provenance를 확인한 raw tool syntax 표시 처리"
+      ],
+      "exitCriteria": [
+        "동일 내용의 보고 형식이 달라도 같은 gap",
+        "보충 자기확인으로 gap 해결 안 됨",
+        "사용자 인용은 유지; raw XML은 실행 안 함"
+      ],
+      "status": "partial_test_verified",
+      "implementationResult": "형식·gap·protocol·권고 API/미컴파일 안내 구현. 단위/authority/수명/네트워크 의미 검증기 미구현.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W6",
+      "dependsOn": [
+        "W1",
+        "W1b",
+        "W2a",
+        "W2",
+        "W2b",
+        "W3",
+        "W4",
+        "W5"
+      ],
+      "purpose": "통합 회귀·저장 이전·배포 검사",
+      "files": [
+        "test/prediction-loop.test.cjs",
+        "scripts/analyze_lmstudio_run.py",
+        "scripts/trace_lmstudio_run.py",
+        "package/generated contracts/manifest migration"
+      ],
+      "changes": [
+        "두 턴 연속 통합과 scope/TTL/lease/cancel 회귀",
+        "old schema 관찰은 검증된 scope로만 이전; 모호한 claim은 stale",
+        "source/dist/installed/loaded identity를 각각 확인"
+      ],
+      "exitCriteria": [
+        "기존 전체 suite 및 새 계약 회귀",
+        "생성물/포터블 설치 검사",
+        "rollback 가능한 manifest/설치 백업"
+      ],
+      "status": "local_verification_passed_deployment_not_run",
+      "implementationResult": "build, plugin/Unreal/Unity suite, generated checks, package tests 통과. 활성 설치본/loaded identity 확인 미실행.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    },
+    {
+      "id": "W7",
+      "dependsOn": [
+        "W6"
+      ],
+      "purpose": "수정 후 실모델 검증",
+      "files": [
+        "runtime diagnostics; user conversation copies outside repository"
+      ],
+      "changes": [
+        "동일 snapshot/model/config로 감사+후속 수정 요청 최소3회",
+        "요청/dispatch/bytes/가용성/novelty/정확도/시간/완료를 별도 측정"
+      ],
+      "exitCriteria": [
+        "불필요 중복 감소와 필요한 근거 복구·정확도 보존 동시 확인",
+        "보고 전달과 수정/build 완료 분리"
+      ],
+      "status": "not_run",
+      "implementationResult": "동일 snapshot/model/config에서 감사→보충→수정·build 최소3회와 비용·정확도 비교 필요.",
+      "plannedExitCriteriaScope": "위 exitCriteria는 최초 계획이다. 현재 충족 범위는 implementationResult와 실제 test receipt를 기준으로 읽는다."
+    }
+  ],
+  "additionalReportProblems": [
+    {
+      "id": "A3",
+      "status": "unsupported_conclusion",
+      "finding": "AimRotation 검증 부재에서 wallhack/벽 통과 가능성을 곧바로 확정",
+      "evidence": [
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:217",
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:227"
+      ],
+      "correction": "서버 trace의 collision/first hit 반대 근거를 포함하고 실제 악용 경로 또는 미확인으로 판정",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A4",
+      "status": "source_checked",
+      "finding": "리로드 중 client 총성 발생 주장의 호출 경로 불일치",
+      "evidence": [
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:188",
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:336"
+      ],
+      "correction": "client는 RPC 전송, 사운드는 서버 승인 후 multicast 경로임을 반영; 실제 UX 현상은 별도 확인",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A5",
+      "status": "source_checked",
+      "finding": "InitializeForSpawn(FCharacterStats()) 권고가 선택 DataAsset 대신 기본값을 사용",
+      "evidence": [
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:88"
+      ],
+      "correction": "리스폰 계약/현재 선택 통계 유지; dead code 여부만으로 P1 단정 금지",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A6",
+      "status": "declaration_mismatch",
+      "finding": "Niagara 권고 코드의 owner/API/enum이 설치본 선언과 불일치",
+      "evidence": [
+        "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Kismet/GameplayStatics.h",
+        "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/FX/Niagara/Source/Niagara/Public/NiagaraFunctionLibrary.h:42"
+      ],
+      "correction": "UGameplayStatics::SpawnNiagaraActor를 확인된 API로 취급하지 않기; UNiagaraFunctionLibrary::SpawnSystemAtLocation 및 ENCPoolMethod 선언으로 확인; 제안 미컴파일 표시",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A7",
+      "status": "source_checked",
+      "finding": "CreateWeakLambda(this)의 weak owner와 캡처 WeakController의 책임 혼동",
+      "evidence": [
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:36",
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:48",
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:121"
+      ],
+      "correction": "GameMode 수명, WeakController.IsValid, Logout/EndPlay의 명시적 timer 정리를 각각 설명",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A8",
+      "status": "NeedsRuntimeProof",
+      "finding": "초기 탄약 0/0 수프레임 및 PlayerState ForceNetUpdate로 1틱 내 해결 확정",
+      "evidence": [
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:375",
+        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:95"
+      ],
+      "correction": "Actor별 초기 복제/BeginPlay/HUD 시점 확인 없이는 확정하지 않기",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    },
+    {
+      "id": "A9",
+      "status": "design_context_required",
+      "finding": "캐시·공유 OnRep·파생 상태를 현재 버그와 장래 개선 구분 없이 나열",
+      "evidence": [
+        "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274"
+      ],
+      "correction": "SSOT owner/갱신 및 파생 계약/실제 요구를 확인하고 Bug/ByDesign/NeedsRuntimeProof 구분",
+      "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
+    }
+  ],
+  "regressionMatrix": [
+    "report-review/output-recovery/cancel/empty supplement 뒤 next-turn restore",
+    "과거 user/assistant/tool 요청·결과 변경 거부",
+    "동일 source/SHA/span의 read_file/range/archive와 다른 archive record/line-number 옵션",
+    "source A→B→A, claim stale, 같은 이름 다른 파일·프로젝트",
+    "receipt 부분 visibility, archive 일부 body와 전체 source coverage 구분",
+    "필수 함수 복구와 진짜 무진전 반복 대조",
+    "실패 읽기+성공 peer batch, 첫 consumer 전 누락, cancel 후 pending result",
+    "nested/flat/bold/table severity; claim별 철회/미확인/직접 근거",
+    "raw XML 도구 시도와 사용자 XML 인용 설명 구분",
+    "empty catalog/stale handle/TTL/record 삭제의 유한 fallback",
+    "fork/scope/동시 실행 lease/manifest migration/rollback",
+    "same size/mtime different SHA provider body",
+    "repeat100x snapshot churn vs valid new version eviction",
+    "cancel after resolution/during read/hash/before receipt vs completed observation",
+    "actual SDK guard override payload consistency",
+    "actual SDK completed success peer + thrown transport failure vs guard denial",
+    "typed seal/release false/throw and late callback fence"
+  ],
+  "verification": {
+    "scope": "post_implementation_local_checks_20261026",
+    "proofLevel": "TestVerified",
+    "typeScript": "npm run build passed",
+    "pluginSuite": {
+      "total": 1059,
+      "passed": 1059,
+      "failed": 0,
+      "skipped": 0
+    },
+    "unrealProviderSuite": {
+      "total": 365,
+      "passed": 363,
+      "failed": 0,
+      "skipped": 2
+    },
+    "unityProviderSuite": {
+      "total": 137,
+      "passed": 132,
+      "failed": 0,
+      "skipped": 5,
+      "limits": "환경에 의존하는 filesystem 및 실제 외부 Roslyn 검사는 일부 제외됐다."
+    },
+    "packageTests": {
+      "command": "python -m pytest tests/test_integrated_package.py tests/test_package_forbidden_filters.py -q",
+      "passed": 50,
+      "failed": 0
+    },
+    "generatedChecks": [
+      "build-runtime-identity.cjs --check passed",
+      "build-tool-contract.cjs --check passed",
+      "build-unity-tool-contract.cjs --check passed",
+      "build-design-guidance.cjs --check passed"
+    ],
+    "diffCheck": "git diff --check passed",
+    "preexistingIndex": {
+      "unchanged": true,
+      "bytes": 30262,
+      "sha256": "f333111d6983e0b8265c49c60b5ca56c8f352f05b966d0ea262c94762caa9825"
+    },
+    "sourceBuildId": "ef-build-v2-31c4ca82362ca6b1e567e20d9edc7b424a1227d182d2175f9e906ed045256c78",
+    "productEdits": true,
+    "workspaceSdkPatched": true,
+    "sdkVersion": "1.5.0",
+    "ueEdits": false,
+    "ueBuild": false,
+    "liveInstallation": false,
+    "loadedIdentityVerified": false,
+    "newModelRuns": false,
+    "packetValidationMeaning": "structure_valid; facts_not_verified",
+    "logReceipts": {
+      "build.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\build.log",
+        "bytes": 758,
+        "sha256": "44a82f61e455535adbb6ec0537c3de7acb87739f5f228129d740e79e3f74f604"
+      },
+      "plugin-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "bytes": 102349,
+        "sha256": "a5ca175f7ebcbe76c85a4d50647496eaa40e6af541d534156a2342083b487203"
+      },
+      "provider-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "bytes": 32284,
+        "sha256": "40d2e9e095dba3b035bd827d1e91d2332411b1df3b31297bd8569d505914a2fb"
+      },
+      "unity-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\unity-tests.log",
+        "bytes": 12336,
+        "sha256": "07680c8cca44fdcd1b54b2d4fceac1500d2545c2f7031cc2bfca9e0ee1a0196a"
+      },
+      "package-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\package-tests.log",
+        "bytes": 102,
+        "sha256": "0b3807d4a8ccd0264da6807494068679f8657cdc1d07faa46c07f867ff499b78"
+      },
+      "pre-fix-contract-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-contract-tests.log",
+        "bytes": 8892,
+        "sha256": "c61b5f15eba9a12050048f0eb2e9d5b87e17573a2f50bceb3f2940f866fcc683"
+      },
+      "pre-fix-sdk-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-sdk-tests.log",
+        "bytes": 2827,
+        "sha256": "5cd3743605d1461c29bf29903541d07e02107d8e94dcc3492541015141e0bae0"
+      },
+      "pre-fix-provider-tests.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-provider-tests.log",
+        "bytes": 3480,
+        "sha256": "febd1bad3251390c7de005670402dd74ea5984bc0fc541a482e11a24d5ab4de1"
+      },
+      "pre-fix-provider-harness-bridge.log": {
+        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-provider-harness-bridge.log",
+        "bytes": 1006,
+        "sha256": "000b48ae189523ad2d49445fa8c71dacc07ed99e5c40dc95fc723546a17b86d1"
+      }
+    }
+  },
+  "revision": {
+    "date": "2026-10-26",
+    "request": "수정진행 / 잘못 보낸 반사 이미지 제외 후 계속 진행",
+    "productImplementation": true,
+    "liveDeployment": false,
+    "note": "기존 조사 claim은 역사적 근거로 보존하고 현재 구현은 resolution/implementation/current implementation claims로 구분한다."
+  },
+  "contractOwnership": [
+    {
+      "fact": "catalog/effect",
+      "owner": "stable_tool_manifest + generated registry",
+      "forbiddenInference": "description/annotations만으로 authority 승격 금지"
+    },
+    {
+      "fact": "canonical source identity",
+      "owner": "provider resolver",
+      "forbiddenInference": "하네스 상대 path를 실제 canonical path로 확정하지 않음"
+    },
+    {
+      "fact": "source SHA/span",
+      "owner": "stable reader + provider observation",
+      "forbiddenInference": "stat/snapshotVersion/archive hash로 대체 금지"
+    },
+    {
+      "fact": "effective request",
+      "owner": "guard + SDK dispatch",
+      "forbiddenInference": "proposed callback args를 executed args로 표시 금지"
+    },
+    {
+      "fact": "repeatReceipt",
+      "owner": "DirectRepeatCache",
+      "forbiddenInference": "input availability나 mutation authority 아님"
+    },
+    {
+      "fact": "fileVersionReceipt",
+      "owner": "FileSnapshotRegistry + commit CAS",
+      "forbiddenInference": "ledger/summary에서 복원·재발행 금지"
+    },
+    {
+      "fact": "historical coverage",
+      "owner": "ReadLedger",
+      "forbiddenInference": "현재 가용성/검토 완료로 승격 금지"
+    },
+    {
+      "fact": "current availability",
+      "owner": "final modelInput projection",
+      "forbiddenInference": "과거 visible boolean 재사용 금지"
+    },
+    {
+      "fact": "ReadDelta",
+      "owner": "EvidenceManager one calculation",
+      "forbiddenInference": "recovery/stagnation/telemetry가 별도 novelty 재판정 금지"
+    },
+    {
+      "fact": "archive membership/lease",
+      "owner": "EvidenceArchive + WorkingContext window",
+      "forbiddenInference": "source identity나 mutation 권한으로 승격 금지"
+    },
+    {
+      "fact": "review obligation",
+      "owner": "ReviewRegister/ReviewEvidenceIndex",
+      "forbiddenInference": "regex 메모로 전체 파일 suppression/pin 해제 금지"
+    },
+    {
+      "fact": "budget",
+      "owner": "BudgetBroker/BatchReservation + exact tokenizer gate",
+      "forbiddenInference": "byte estimate를 exact model tokens로 취급 금지"
+    },
+    {
+      "fact": "phase and recovery",
+      "owner": "ExecutionState/RecoveryCoordinator",
+      "forbiddenInference": "read capability를 사용자 목표로 해석 금지"
+    },
+    {
+      "fact": "terminal resources",
+      "owner": "execution root finally + terminal persistence",
+      "forbiddenInference": "seal/release 실패를 단일 성공 boolean으로 은폐 금지"
+    }
+  ],
+  "lifetimeContracts": [
+    {
+      "resource": "tool session",
+      "owner": "execution root",
+      "scope": "setup 획득부터 실행 종료",
+      "end": "setup 실패 포함 finally dispose"
+    },
+    {
+      "resource": "call/effective args",
+      "owner": "round boundary",
+      "scope": "execution+round+call IDs",
+      "end": "한 outcome; late callback fence"
+    },
+    {
+      "resource": "budget reservation",
+      "owner": "BatchReservation",
+      "scope": "held→consumed/released",
+      "end": "finally close; returned byte charge 한 번"
+    },
+    {
+      "resource": "repeat entry",
+      "owner": "DirectRepeatCache",
+      "scope": "기본256/TTL10분, 동일 canonical source/version/selector",
+      "end": "만료/변경이면 body 경로"
+    },
+    {
+      "resource": "mutation snapshot",
+      "owner": "FileSnapshotRegistry",
+      "scope": "기본512/TTL30분, project/path/owner/runtime",
+      "end": "prepare는 registry를 변경하지 않음; fit/dedupe 뒤 반환 body에 대해 commit. 이후 TTL/LRU/restart/CAS 수명은 기존 owner가 관리"
+    },
+    {
+      "resource": "pending evidence",
+      "owner": "WorkingContext",
+      "scope": "capture→model consumer 완료",
+      "end": "취소/truncation은 consume 아님"
+    },
+    {
+      "resource": "availability",
+      "owner": "input-availability",
+      "scope": "한 modelInputId",
+      "end": "projection마다 재계산"
+    },
+    {
+      "resource": "claim",
+      "owner": "ReviewRegister",
+      "scope": "execution-local source/file + identifier + observedVersion; 상위 objective 전환 정책은 기존 execution owner 유지",
+      "end": "버전 변경 시 needs_recheck, old SHA 귀속 유지; active/stale/retired 크기 제한; 일반 semantic 검증 아님"
+    },
+    {
+      "resource": "lease/window",
+      "owner": "EvidenceArchive/WorkingContext",
+      "scope": "실행 lease와 durable window 독립",
+      "end": "atomic publish 후 lease release; branch membership 유지"
+    },
+    {
+      "resource": "visible transcript",
+      "owner": "VisibleHistoryRecorder",
+      "scope": "host block append 순서",
+      "end": "committed prefix immutable; terminal 뒤 mutation 금지"
+    }
+  ],
+  "preImplementationVerification": {
+    "typeScript": "isolated_build_succeeded",
+    "existingTargetedTests": {
+      "files": 4,
+      "passed": 103,
+      "failed": 0
+    },
+    "independentCounterexamples": {
+      "mainProbeCases": 6,
+      "allDefectsObserved": true,
+      "otherProbeGroups": [
+        "continuation_prefix",
+        "recovery_policy",
+        "heading_severity"
+      ]
+    },
+    "productEdits": false,
+    "ueEdits": false,
+    "ueBuild": false,
+    "installation": false,
+    "newModelRuns": false,
+    "caution": "반례 성공은 현재 결함 재현이다. 수정 후 회귀 성공이 아니며, evidence packet 형식 검사도 사실 검증이 아니다.",
+    "deepening20261026": {
+      "providerExistingTests": {
+        "files": 2,
+        "passed": 19,
+        "failed": 0
+      },
+      "providerCounterexamples": 3,
+      "sdkActualSourceCounterexamples": 2,
+      "guardDenialControl": {
+        "capturedResults": 2,
+        "failure": null
+      },
+      "generatedContractChecks": [
+        "toolcontract --check passed",
+        "unitycontract --check passed"
+      ],
+      "productEdits": false,
+      "installedSdkEdits": false,
+      "newModelRuns": false,
+      "caution": "실제 SDK source는 진단 메모리에서 export했고 product/SDK 디스크는 수정하지 않았다. 신규 반례는 첨부 runtime에서의 발생 증거가 아니다."
+    }
+  },
+  "priorRevision": {
+    "date": "2026-10-26",
+    "request": "하네스·컴팩터·도구 사이 계약의 SSOT/SOLID/책임/경계/수명 심화 조사 및 계획 갱신",
+    "productImplementation": false,
+    "newFindings": [
+      "H9",
+      "H10",
+      "H11",
+      "H12",
+      "H13"
+    ],
+    "neutralContractObservations": [
+      "C1"
+    ],
+    "runtimeAttribution": "신규 반례는 합성 source 실행이며 첨부 대화의 실제 원인으로 추가 확정하지 않음"
+  },
+  "implementation": {
+    "date": "2026-10-26",
+    "authorization": "현재 대화의 사용자 수정진행 및 계속하면 돼 요청",
+    "ownerDecisions": [
+      "Stable reader는 내용/SHA, FileSnapshotRegistry는 mutation receipt/CAS 소유.",
+      "ReadLedger는 관찰 coverage, EvidenceManager는 input availability/ReadDelta 소유.",
+      "ReviewRegister는 버전 고정 검토 메모만 소유하고 body suppression/pin 권위 없음.",
+      "RecoveryCoordinator는 상태 전이, RoundInput은 원 profile 측정, terminal owner는 release 소유.",
+      "기존 소유자를 재사용하며 새 전역 manager/workflow engine을 도입하지 않음."
+    ],
+    "independentReview": {
+      "scope": "read-only counterexample review of actual source and SDK",
+      "proofLevel": "TestVerified",
+      "diagnostics": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/implementation-*-probe-result.json",
+      "note": "추가 위장 identity/projection, 취소 retry, late SDK guard, secondary cleanup failure 반례를 회귀에 반영. 실환경 검증 아님."
+    },
+    "remaining": [
+      "W5 A1~A9 의미 정확성 평가: 단위/수명/authority/네트워크 타이밍은 별도 소스와 실행 근거 필요.",
+      "W6 LM Studio 활성 plugin 설치/재시작 뒤 source/dist/installed/loaded identity 및 다음 턴 restore 확인.",
+      "W7 동일 모델/설정/프로젝트 사본 최소3회 감사→보충→수정·UE build 실행과 중복/필요 evidence/완료/비용 비교.",
+      "repeat body 억제는 provider dispatch 또는 file I/O 절감의 증거가 아니며 성능 개선률은 미측정."
+    ],
+    "nonChanges": [
+      "원본 대화",
+      "UE 프로젝트",
+      "LM Studio 활성 설치본과 설정",
+      "기존 staged index"
+    ]
+  }
+}
