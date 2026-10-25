@@ -1,7 +1,7 @@
 {
   "name": "Evidence-First Integrated Coding Stack",
-  "productVersion": "1.4.1",
-  "version": "2.1.32",
+  "productVersion": "1.4.2",
+  "version": "2.1.33",
   "requires": {
     "python": "3.10+ for direct install.py invocation; automatic from platform launchers",
     "node": "20+",
@@ -16,9 +16,23 @@
     "skipFlag": "--skip-runtime-bootstrap"
   },
   "profiles": {
-    "safe": ["codex", "lmstudio", "context_compactor"],
-    "standard": ["codex", "lmstudio", "unreal", "context_compactor"],
-    "full": ["codex", "lmstudio", "unreal", "context_compactor"],
+    "safe": [
+      "codex",
+      "lmstudio",
+      "context_compactor"
+    ],
+    "standard": [
+      "codex",
+      "lmstudio",
+      "unreal",
+      "context_compactor"
+    ],
+    "full": [
+      "codex",
+      "lmstudio",
+      "unreal",
+      "context_compactor"
+    ],
     "custom": []
   },
   "components": [
@@ -32,7 +46,10 @@
   ],
   "safety": {
     "defaultReadOnly": true,
-    "agentModeRequires": ["--enable-agent-mode", "--accept-agent-risk"],
+    "agentModeRequires": [
+      "--enable-agent-mode",
+      "--accept-agent-risk"
+    ],
     "interactiveAgentModeSelector": true,
     "indexTierIsIndependent": true,
     "contextCompactorInstalledWithLmStudio": true,
@@ -41,9 +58,17 @@
     "contextCompactionEnabledByDefault": true
   },
   "portablePackage": {
-    "launchers": ["INSTALL.bat", "UPDATE.bat", "install.sh"],
+    "launchers": [
+      "INSTALL.bat",
+      "UPDATE.bat",
+      "install.sh"
+    ],
     "indexIncludedByDefault": false,
-    "supportedHosts": ["windows", "ubuntu-linux", "macos-apple-silicon"],
+    "supportedHosts": [
+      "windows",
+      "ubuntu-linux",
+      "macos-apple-silicon"
+    ],
     "hostNotes": {
       "macos-apple-silicon": "Physical FULL install PASS on darwin-arm64 (runtimes, context compactor 45/45, LM Studio plugin installation/pinning, UE 5.8 auto-detect, full RAG 88829 chunks, evidence-first MCP smoke, ok:true). Chat-level activation was not durably proven. Limitations: headless Unreal asset metadata export FAIL; LM Studio API connectivity UNVERIFIED when server was down; installer signing/notarization not claimed.",
       "macos-intel": "LM Studio GUI unsupported. MCP/Unreal configuration is available through Linux x64 llmster/LM Link with --headless-lmlink; GUI-only context compactor is omitted. Native custom Codex/portable_rule/Cline-only installs remain allowed.",

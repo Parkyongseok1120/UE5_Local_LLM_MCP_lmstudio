@@ -519,11 +519,16 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     }
     assert unexpected == set()
     assert len(inventory) == len(package_manifest["inventory"])
+    product = json.loads((output / "installer/manifest.json").read_text(encoding="utf-8"))
+    release_notes = f"docs/Release_Notes_{product['productVersion'].replace('.', '_')}.md"
+    assert release_notes in inventory
+    assert (output / release_notes).is_file()
     for language_readme, source_template in (
         ("README.md", "README.portable.md"),
     ):
         packaged_readme = (output / language_readme).read_text(encoding="utf-8")
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
+        assert f"]({release_notes})" in packaged_readme
         assert "Enable transparent compaction" not in packaged_readme
         assert "단일 스위치" in packaged_readme
         assert "기본 `ON`" in packaged_readme
