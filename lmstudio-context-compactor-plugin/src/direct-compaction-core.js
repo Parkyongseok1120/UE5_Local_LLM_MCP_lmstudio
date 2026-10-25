@@ -656,7 +656,8 @@ function buildCheckpoint(messagesInput, options = {}) {
   const maxCheckpointChars = Math.max(2000, Number(options.maxCheckpointChars || 22000));
   // Rendered with the assistant evidence, never into the system checkpoint.
   if (latestUserIndex >= 0) memory.currentTurnFindings = currentTurnFindings(semanticMessages, latestUserIndex,
-    userTurnKey(latestUser), previousState?.currentTurnFindings);
+    userTurnKey(latestUser), previousState?.currentTurnFindings,
+    typeof options.reviewRegisterItems === "function" ? options.reviewRegisterItems() : null);
   const { systemMemory, assistantEvidence } = splitAssistantEvidence(memory);
   const changeData = separateChangeData(systemMemory);
   // The mandatory floor keeps only the prior answer; bounded checkpoints add

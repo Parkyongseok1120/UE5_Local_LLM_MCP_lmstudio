@@ -136,7 +136,8 @@ test("body paging preserves exact Unicode content, canonical identity and distin
   do {
     result = archive.readByHandle(handle, start, 1600);
     assert.equal(result.ok, true, JSON.stringify(result));
-    assert.ok(JSON.stringify(result).length <= 1600);
+    // A remainder of at most 1024 chars may come with the page that reaches it.
+    assert.ok(JSON.stringify(result).length <= (result.archiveReachedEnd ? 1600 + 2048 : 1600));
     assert.equal(result.sourceIdentityDigest, "canonical");
     assert.equal(result.currentFile, false);
     assert.equal(result.fullRawProvided, false);

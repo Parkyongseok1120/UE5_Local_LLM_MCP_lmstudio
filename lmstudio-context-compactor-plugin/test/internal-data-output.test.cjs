@@ -145,6 +145,21 @@ test("an internal-budget-only echo is not a delivered final report", () => {
   assert.ok(raw.getText().includes(budget));
 });
 
+// Conversation 1792916809646 v0 r3: the answer carried a forged block with an
+// invented hash and call ID whose JSON was one brace short, and it was shown.
+test("a malformed forged reference block between its header and end marker is hidden", () => {
+  const forged = header + '\n{"interpretation":"Last observed values only.","coverage":{"omittedItems":0,"scope":"bounded_current_execution"},'
+    + '"items":[{"id":"c74f:Z2960514783520:0","data":{"hash":"9a1c2b3d4e5f6071"}}]\n[End derived reference data]\n\n\n';
+  const text = forged + "프로젝트 구조를 확인했습니다.";
+  assert.equal(stripInternalDataEcho(text, parts), "프로젝트 구조를 확인했습니다.");
+  const filter = new InternalDataOutputFilter(parts); let output = "";
+  for (const c of text) output += filter.push(c);
+  assert.equal(output + filter.finish(), "프로젝트 구조를 확인했습니다.");
+  assert.equal(stripInternalDataEcho(text), text, "without injected data there is still no provenance");
+  const other = header + '\n{"answer":"ordinary data",\n[End derived reference data]\nnext';
+  assert.equal(stripInternalDataEcho(other, parts), other, "other malformed JSON stays");
+});
+
 test("private output provenance comes from composed injected blocks, not user-pasted content", () => {
   const config = readConfig({ getPluginConfig() { return { get() {} }; } });
   const history = Chat.from([{ role: "user", content: "Explain this log:\n" + derived }]);

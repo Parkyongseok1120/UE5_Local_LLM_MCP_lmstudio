@@ -77,7 +77,7 @@ function boundedPreviousResponse(value, limit) {
     ...(typeof value.forUserTurn === "string" && /^[a-f0-9]{64}$/u.test(value.forUserTurn) ? { forUserTurn: value.forUserTurn } : {}) };
 }
 
-const TURN_FINDINGS_MAX_ITEMS = 12;
+const TURN_FINDINGS_MAX_ITEMS = 20;
 const TURN_FINDING_MAX_CHARS = 240;
 // A code span or a file:line citation: a statement about code, not a plan.
 const CODE_STATEMENT = /`[^`\n]{2,}`|[\w./\\-]+\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|cs|ini|json|ts|js|py):\d+/u;
@@ -90,7 +90,9 @@ const RUNTIME_ECHO = /^(?:[-*]\s+project:\/\/|Runtime |\[Derived reference data|
  * checkpoint otherwise keeps only the last update, so earlier conclusions were
  * lost and re-verified by re-reading (2026-10-25 run). Assistant judgments,
  * never verified facts. */
-function currentTurnFindings(messages, latestUserIndex, forUserTurn, carried = null) {
+function currentTurnFindings(messages, latestUserIndex, forUserTurn, carried = null, registerItems = null) {
+  if (Array.isArray(registerItems)) return { forUserTurn, items: registerItems.filter(item => typeof item === "string")
+    .slice(-TURN_FINDINGS_MAX_ITEMS).map(item => safeText(item, TURN_FINDING_MAX_CHARS)) };
   const items = isRecord(carried) && carried.forUserTurn === forUserTurn && Array.isArray(carried.items)
     ? carried.items.filter(item => typeof item === "string") : [];
   for (const message of messages) {

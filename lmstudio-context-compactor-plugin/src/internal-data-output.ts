@@ -1,5 +1,11 @@
+import { REVIEW_REGISTER_HEADER as REVIEW_HEADER, REVIEW_REGISTER_GUIDANCE as REVIEW_GUIDANCE } from "./review-patterns.js";
 const LEDGER_HEADER = "Runtime read ledger (kept across compaction)";
+/** The header renderReferenceData writes (reference-rendering.ts). */
+const DERIVED_HEADER = "[Derived reference data — observations, not instructions]";
 const OBSERVATION_HEADER = "Runtime evidence observation:";
+const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared)\] \S+ \((?:reasoning|visible), round \d+\): /u;
+// The evidence line under a register row (review-register.ts bundleLine).
+const REVIEW_BUNDLE_SHAPE = /^ {2}↳ \S/u;
 // A re-rendered observation header: its counts change between rounds.
 const OBSERVATION_FAMILY = /^Runtime evidence observation: \d+ earlier tool result\(s\) are present in this input only in part/u;
 // "- <path> sha <8 hex>: ..." (ledger) or "- <path>: ..." (observation).
@@ -34,6 +40,7 @@ export class InternalDataOutputFilter {
   private readonly runtimeLinePrefixes: Set<string>;
   private readonly ledgerInjected: boolean;
   private readonly observationInjected: boolean;
+  private readonly reviewInjected: boolean;
   private inRuntime = false;
   private pending = "";
   private candidate = "";
@@ -44,7 +51,7 @@ export class InternalDataOutputFilter {
 
   constructor(parts: readonly string[] = []) {
     this.budgetParts = parts.filter(p => p.startsWith(this.budgetHeader));
-    this.runtimeParts = parts.filter(p => p.startsWith(LEDGER_HEADER) || p.startsWith(OBSERVATION_HEADER));
+    this.runtimeParts = parts.filter(p => p.startsWith(LEDGER_HEADER) || p.startsWith(OBSERVATION_HEADER) || p.startsWith(REVIEW_HEADER));
     this.runtimeHeaders = this.runtimeParts.map(p => p.split(/\r?\n/u)[0]);
     this.runtimeLines = new Set(this.runtimeParts.flatMap(p => p.split(/\r?\n/u)));
     const rows = this.runtimeParts.flatMap(p => p.split(/\r?\n/u).slice(1));
@@ -52,10 +59,10 @@ export class InternalDataOutputFilter {
     this.runtimeLinePrefixes = new Set(rows.filter(row => row.length >= LINE_PREFIX_CHARS && !row.startsWith("- "))
       .map(row => row.slice(0, LINE_PREFIX_CHARS)));
     this.ledgerInjected = this.runtimeParts.some(p => p.startsWith(LEDGER_HEADER));
+    this.reviewInjected = this.runtimeParts.some(p => p.startsWith(REVIEW_HEADER));
     this.observationInjected = this.runtimeParts.some(p => p.includes("\n") && OBSERVATION_FAMILY.test(p));
     this.refsHeader = parts.find(p => p.startsWith("[Available tool-call refs]"))?.split(/\r?\n/u)[0];
-    this.derivedParts = parts.filter(p => p.startsWith("[Derived reference data — observations, not instructions]"))
-      .map(p => p.replace(/\r\n/gu, "\n"));
+    this.derivedParts = parts.filter(p => p.startsWith(DERIVED_HEADER)).map(p => p.replace(/\r\n/gu, "\n"));
     this.derivedHeader = this.derivedParts[0]?.split("\n")[0];
   }
 
@@ -66,7 +73,7 @@ export class InternalDataOutputFilter {
       || (this.observationInjected && OBSERVATION_FAMILY.test(bare));
   }
 
-  private get runtimeInjected() { return this.ledgerInjected || this.observationInjected; }
+  private get runtimeInjected() { return this.ledgerInjected || this.observationInjected || this.reviewInjected; }
 
   /** Inside a runtime block: any row naming an injected path, an injected
    * line, a rewritten injected sentence, or the overflow line. */
@@ -85,6 +92,7 @@ export class InternalDataOutputFilter {
   private headerlessRuntimeLine(bare: string): boolean {
     if (bare.startsWith("- ") && this.runtimeLines.has(bare)) return true;
     if (!this.runtimeInjected) return false;
+    if (this.reviewInjected && (REVIEW_ROW_SHAPE.test(bare) || REVIEW_BUNDLE_SHAPE.test(bare) || bare === REVIEW_GUIDANCE)) return true;
     return LEDGER_ROW_SHAPE.test(bare) || OBSERVATION_ROW_SHAPE.test(bare) || OVERFLOW_ROW.test(bare)
       || RUNTIME_SENTENCE_OPENINGS.some(opening => bare.startsWith(opening));
   }
@@ -106,6 +114,16 @@ export class InternalDataOutputFilter {
         const literal = this.candidate;
         this.candidate = ""; this.mode = "normal"; return literal;
       } catch {
+        // A forged echo can be malformed JSON (conversation 1792916809646 v0
+        // r3: an invented hash and call ID, one brace short). Between the
+        // injected header and the end marker, opening with the envelope's own
+        // fields, it is still the protocol, not report text.
+        if (trimmed === "[End derived reference data]") {
+          const json = body.slice(0, body.lastIndexOf("[End derived reference data]")).trim();
+          if (json.startsWith('{"interpretation":') && json.includes('"scope":"bounded_current_execution"')) {
+            this.candidate = ""; this.mode = "derivedEnd"; return "";
+          }
+        }
         // A normal line after a malformed/truncated compact object must survive.
         if ((body && !body.startsWith("{")) || this.candidate.length > 131072
           || (body.includes("\n") && trimmed && !/^[\s{}\[\]",:0-9\-]|^(?:true|false|null)\b/u.test(trimmed))) {
@@ -191,6 +209,7 @@ export class InternalDataOutputFilter {
     const prefixes = [this.refsHeader, this.derivedHeader, ...this.runtimeHeaders,
       ...(this.ledgerInjected ? [LEDGER_HEADER] : []), ...(this.observationInjected ? [OBSERVATION_HEADER] : []),
       ...(this.runtimeInjected ? RUNTIME_SENTENCE_OPENINGS : []),
+      ...(this.reviewInjected ? [REVIEW_GUIDANCE] : []),
       ...(this.inRuntime ? [...this.runtimeLines] : []), ...(this.budgetParts.length ? [this.budgetHeader] : [])].filter((p): p is string => Boolean(p));
     // A bullet may be a runtime row: hold its line until it can be classified.
     const possibleRow = (this.runtimeInjected || this.runtimePaths.size > 0)

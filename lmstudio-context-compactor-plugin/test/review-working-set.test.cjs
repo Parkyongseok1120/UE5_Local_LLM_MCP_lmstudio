@@ -58,6 +58,15 @@ test("over budget the newest reads stay and older ones project", () => {
   assert.equal(gameMode.kind, undefined, "a smaller older read still fits the remaining budget");
 });
 
+test("a closed file yields its pin to the files still under investigation", () => {
+  const [gameMode, character, playerState] = projected(reviewHistory(),
+    { pinnedWorkingSetMaxChars: 40000, closedFile: key => key === "source/character.cpp" });
+  assert.equal(character.kind, "archived_tool_result_projection");
+  assert.match(character.notice, /^CLOSED REVIEW: every judgment on this file is in the review register/);
+  assert.equal(gameMode.kind, undefined);
+  assert.equal(playerState.kind, undefined);
+});
+
 test("a file the assistant cites outranks a newer uncited read", () => {
   const history = reviewHistory();
   history.append(ChatMessage.from({ role: "assistant", content: "DeathCount fires OnRep_KillCount (GameMode.cpp:91)." }));
@@ -76,6 +85,22 @@ test("edits keep the edit-only working set", () => {
   assert.equal(playerState.kind, "archived_tool_result_projection");
 });
 
+// Conversation 1792916809646 v1, r11: two truncated byte windows and a full
+// read of each data asset header were all pinned, and Character.h was cut.
+test("a complete read supersedes earlier partial windows of the same version", () => {
+  const history = Chat.from([{ role: "user", content: "Audit the character RPC contracts" }]);
+  const asset = "x".repeat(900), window = (offset, next) => ({ ok: true, path: "project://Source/Asset.h",
+    content: asset.slice(offset, next), sha256: sha("5"), size: 900, offsetBytes: offset, nextOffsetBytes: next, hasMore: next < 900 });
+  call(history, "a1", "read_file", { path: "project://Source/Asset.h" }, window(0, 125));
+  call(history, "a2", "read_file", { path: "project://Source/Asset.h", offsetBytes: 125 }, window(125, 400));
+  call(history, "a3", "read_file", { path: "project://Source/Asset.h", maxBytes: 900 }, window(0, 900));
+  call(history, "c1", "read_file", { path: "project://Source/Character.cpp" }, fullRead("Character.cpp", 60, "6"));
+  const context = store();
+  const kept = context.pinnedResultIndexes(history, 40000).sort((a, b) => a - b);
+  assert.deepEqual(kept, [6, 8], "only the complete Asset.h read and Character.cpp are pinned");
+  context.close();
+});
+
 test("pinned reads are reported by message index and expire with the turn", () => {
   const history = reviewHistory();
   const context = store();
@@ -89,8 +114,9 @@ test("pinned reads are reported by message index and expire with the turn", () =
 // pages, and the next compaction cut every page because none counted as a read.
 test("an archive page that restored a file is part of the working set", async () => {
   const context = store();
-  const history = reviewHistory();
-  context.project(history, () => true, { executionId: "exec", roundIndex: 2, pinnedWorkingSetMaxChars: 0 }, 512);
+  // The page restores a body the projection removed from the input.
+  const history = context.project(reviewHistory(), () => true,
+    { executionId: "exec", roundIndex: 2, pinnedWorkingSetMaxChars: 0 }, 512).history;
   const handle = context.archive.validHandles("project://Source/Character.cpp")[0].readHandle;
   const page = await context.tool().implementation({ action: "read", readHandle: handle, view: "body", startLine: 1, endLine: 40,
     maxChars: 8192 }, { signal: new AbortController().signal });
@@ -159,4 +185,64 @@ test("without a pin the same compaction drops that read", async () => {
   const result = await manager.enforceLowWater(history, assemble, { hasReadTools: false, force: true });
   assert.equal(result.success, true);
   assert.doesNotMatch(result.history.toString(), /PINNED_BODY/u);
+});
+
+// Conversation 1792916809646 v0 r19: halving the kept exchanges took the
+// input from 55.1K to 35.6K for a 47.7K low water, and the review re-read
+// what the extra cut removed.
+test("compaction keeps the most exchanges that still reach low water", async () => {
+  const history = Chat.from([{ role: "system", content: "invariant" }, { role: "user", content: "Audit the RPC contracts" }]);
+  for (let i = 0; i < 14; i++) call(history, `s${i}`, "search_files", { query: `q${i}` },
+    { ok: true, matches: [`m${i} ${"y".repeat(2400)}`] });
+  const { manager, assemble } = lowWaterFixture(undefined);
+  const result = await manager.enforceLowWater(history, assemble, { hasReadTools: false, force: true });
+  const { candidateMeasurements: measured, effectiveLowWaterTokens: low, finalExactInputTokens: final } = result.telemetry;
+  const coarse = measured.find(m => m.accepted);
+  assert.equal(result.success, true);
+  assert.equal(coarse.candidate, "complete_exchange_cap_8", JSON.stringify(measured));
+  assert.ok(final > coarse.finalExactInputTokens && final <= low, `${coarse.finalExactInputTokens} -> ${final} (low ${low})`);
+  assert.match(result.telemetry.selectedCandidate, /^complete_exchange_cap_1[0-5]$/u);
+});
+
+test("round input halves the pin budget and retains a priority source before releasing all pins", async () => {
+  const { prepareRoundInput } = require('../dist/round-input');
+  const { EvidenceManager } = require('../dist/evidence-manager');
+  const context = store();
+  try {
+    const history = Chat.from([{ role: 'user', content: 'Audit gameplay' }]);
+    for (const [i, name] of ['First.cpp', 'Second.cpp', 'Third.cpp'].entries())
+      call(history, 'r' + i, 'read_file', { path: `project://Source/${name}` },
+        { ...fullRead(name, 10, String(i)), content: name + ' ' + 'x'.repeat(2200) });
+    context.captureExposure(history, 'already-consumed', true);
+    const config = readConfig({ getPluginConfig: () => ({ get: key => ({ contextManagementMode: 'deterministic',
+      workingInputTargetTokens: 4000, workingInputTriggerTokens: 6700, workingInputScaling: 'fixed',
+      maxOutputReserve: 1024, safetyMarginTokens: 128, designGuidanceMode: 'off' })[key] }) });
+    const evidenceManager = new EvidenceManager(context, [{ name: 'read_file', pluginIdentifier: 'mcp/unreal-agent',
+      description: 'Read source', parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } }]);
+    const project = evidenceManager.project.bind(evidenceManager), candidates = [];
+    evidenceManager.project = (chat, metadata, maxChars) => {
+      const result = project(chat, metadata, maxChars);
+      candidates.push({ budget: metadata.pinnedWorkingSetMaxChars, history: result.history }); return result;
+    };
+    const manager = new ContextManager(config, new BudgetBroker(config), {}, undefined,
+      (chat, chars) => context.pinnedResultIndexes(chat, chars));
+    const events = [];
+    const tokenSource = { async getContextLength() { return 32768; },
+      async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return text.length; } };
+    await prepareRoundInput({ ctl: { debug: event => events.push(event), guardAbort() {} }, config, tokenSource,
+      contextManager: manager, evidenceManager, workingContext: context, workingHistory: history, visibleHistory: history,
+      preProjectionHistory: history, postProjectionHistory: history, roundTools: [], modelTools: [],
+      roundScopeInstructions: [], scopeInstructions: [], roundOutputReserve: 1024, activeNote: null, noteEnabled: false,
+      historicalAvailabilityLedger: [], semanticSummaryCooldownUntilRound: -1, objectiveFingerprint: '', finalizing: false,
+      boundedAudit: false, researchRecoveryEpisodeStarted: false, allowReadRecovery: false, finalizationTrigger: null,
+      projectionApplied: false, executionId: 'pin-step', modelInputId: 'pin-step-1', roundIndex: 3 });
+    const projection = events.find(event => event.event === 'working_context_projection');
+    assert.ok(projection, JSON.stringify(events));
+    assert.equal(projection.pinnedWorkingSetFinalChars, Math.floor(projection.pinnedWorkingSetMaxChars / 2), JSON.stringify(projection));
+    assert.equal(projection.pinsReleased, false);
+    const half = candidates.find(candidate => candidate.budget === projection.pinnedWorkingSetFinalChars);
+    const results = half.history.getMessagesArray().flatMap(message => message.getToolCallResults()).map(result => JSON.parse(result.content));
+    assert.equal(results.filter(result => !result.kind).length, 1);
+    assert.ok(results.find(result => !result.kind).content.startsWith('Third.cpp'), 'newest priority source remains');
+  } finally { context.close(); }
 });

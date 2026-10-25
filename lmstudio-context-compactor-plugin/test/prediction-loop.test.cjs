@@ -4604,6 +4604,159 @@ function completeRecoveryReply(options, text = 'Which input binding constraint s
   options.onMessage(ChatMessage.create('assistant', text));
 }
 
+test('report review includes reasoning-only omissions, uses no tools, and appends once', async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  const { REPORT_REVIEW_INSTRUCTION } = require('../dist/execution-instructions');
+  let calls = 0;
+  const prefix = '## Audit\nThe observed input path is consistent.';
+  let reviewInput, reviewTools, reviewLast;
+  const model = reasoningModel(async (chat, tools, options) => {
+    if (++calls === 1) {
+      completeRecoveryReply(options, '`ReloadSound` never played.\n`RunSpeed` unused.' + REASONING_SEPARATOR + prefix);
+      return;
+    }
+    reviewInput = chat.toString(); reviewTools = tools;
+    // Conversation 1792929236226: the delivered answer as the last assistant
+    // message made the review continue a finished answer with one EOS token.
+    const last = chat.getMessagesArray().at(-1);
+    reviewLast = { role: last.getRole(), text: last.getText() };
+    completeRecoveryReply(options, '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.equal(reviewTools.length, 0);
+  assert.ok(reviewInput.includes(REPORT_REVIEW_INSTRUCTION), reviewInput);
+  assert.match(reviewInput, /Missing ReloadSound:.*never played/);
+  assert.match(reviewInput, /Missing RunSpeed:.*unused/);
+  assert.match(reviewInput, /The observed input path is consistent\./);
+  assert.match(reviewInput, /\[Delivered report — already shown to the user; write only what follows it\]\n\s*## Audit/);
+  assert.ok(!(reviewLast.role === 'assistant' && reviewLast.text.trim() === prefix), `the review input does not end with the answer: ${JSON.stringify(reviewLast)}`);
+  assert.ok(ctl.blocks.some(block => block.text === prefix + '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.'), JSON.stringify(ctl.blocks.map(block => block.text)));
+  assert.equal(ctl.debugValues.filter(event => event.event === 'report_review_scheduled').length, 1);
+  assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').reportCompleted, true);
+});
+
+// Conversation 1792929236226: the review returned one EOS token and the run
+// was recorded as failed with reportDelivered:false after a complete report.
+test('an empty report review keeps the delivered report, records the supplement apart and lists what it missed', async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  let calls = 0;
+  const report = '## Audit\nThe observed input path is consistent.';
+  const model = reasoningModel(async (chat, tools, options) => {
+    if (++calls === 1) { completeRecoveryReply(options, '`ResetForRespawn()` is never called.' + REASONING_SEPARATOR + report); return; }
+    options.onPredictionCompleted({ stats: { stopReason: 'eosFound', predictedTokensCount: 1 } });
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  const outcome = ctl.debugValues.find(event => event.event === 'execution_outcome');
+  assert.equal(outcome.reportDelivered, true);
+  assert.equal(outcome.executionOutcome, 'completed');
+  assert.equal(outcome.reason, 'report_review_empty');
+  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty' });
+  const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
+  assert.match(footer, /검토 보완 호출이 내용을 생성하지 않았습니다/);
+  assert.match(footer, /- ResetForRespawn: `ResetForRespawn\(\)` is never called\./);
+});
+
+for (const mode of ['covered', 'off', 'observeOnly']) test(`report review makes no extra call for ${mode}`, async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    assert.equal(++calls, 1);
+    completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR
+      + (mode === 'covered' ? '`RunSpeed` excluded: consumer evidence is incomplete.' : 'Audit complete.'));
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model,
+    mode === 'off' ? { reportReviewMode: 'off' } : mode === 'observeOnly' ? { observeOnly: true } : {});
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.equal(ctl.debugValues.some(event => event.event === 'report_review_scheduled'), false);
+});
+
+test('reasoning register supplies PlayerController engine contract before review; correction removes footer', async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  let calls = 0;
+  const model = reasoningModel(async (chat, tools, options) => {
+    if (++calls === 1) {
+      completeRecoveryReply(options, 'PlayerController has dead code: `bCanEverTick = false`.' + REASONING_SEPARATOR
+        + '## P2 `bCanEverTick`\nPlayerController tick is unused; set bCanEverTick = false.');
+      return;
+    }
+    assert.equal(tools.length, 0);
+    assert.match(chat.toString(), /ue\.controller\.player-tick-input/);
+    assert.match(chat.toString(), /stops player input processing/);
+    completeRecoveryReply(options, '\n\n## 검토 보완\n- `bCanEverTick`: 입력 처리 중단 위험으로 앞 권고 기각.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the PlayerController.' }]), model, { projectEngine: 'unreal' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.ok(ctl.debugValues.some(event => event.event === 'engine_claim_check' && event.roundIndex === 0
+    && event.gaps.some(gap => gap.factId === 'ue.controller.player-tick-input')));
+  assert.equal(ctl.debugValues.some(event => event.event === 'report_engine_claim_notice'), false);
+});
+
+test('report review blocked by context preserves report and adds omission footer', async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    assert.equal(++calls, 1);
+    completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR + 'Original report.');
+  });
+  model.countTokens = async text => text.includes('phase=REPORT_REVIEW') ? 1000000 : 100;
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1);
+  assert.ok(ctl.blocks.some(block => block.text === 'Original report.'));
+  assert.ok(ctl.blocks.some(block => block.text.includes('[보고 검토 · 누락]') && block.text.includes('RunSpeed')));
+  assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').reason, 'continuation_context_budget');
+});
+
+test('report review leaves only an unresolved engine-contract footer after its one attempt', async () => {
+  let calls = 0;
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++;
+    completeRecoveryReply(options, calls === 1
+      ? '## P2 `bCanEverTick`\nPlayerController tick is unused; set bCanEverTick = false.'
+      : '\n\n## 검토 보완\n추가로 확인된 항목은 없습니다.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the PlayerController.' }]), model, { projectEngine: 'unreal' });
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.ok(ctl.blocks.some(block => block.text.includes('[엔진 동작 근거 · 보고서]') && block.text.includes('ue.controller.player-tick-input')));
+  assert.equal(ctl.debugValues.filter(event => event.event === 'report_review_scheduled').length, 1);
+  assert.equal(ctl.debugValues.find(event => event.event === 'report_review').completionAccepted, true);
+});
+
+test('reasoning-only found row injects engine_claim_check into the next research input', async () => {
+  const { REASONING_SEPARATOR } = require('../src/continuity-text.js');
+  let calls = 0, researchInput = '';
+  const tool = { name: 'read_file', pluginIdentifier: 'mcp/unreal-agent', description: 'Read source',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const model = reasoningModel(async (chat, _tools, options) => {
+    if (++calls === 2) {
+      researchInput = chat.toString();
+      completeRecoveryReply(options, '`bCanEverTick` 권고 기각: 입력 처리 계약에 의존합니다.'); return;
+    }
+    options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [
+      { type: 'text', text: 'PlayerController has dead code: `bCanEverTick = false`.' + REASONING_SEPARATOR + 'Reading source.' },
+      { type: 'toolCallRequest', toolCallRequest: { id: 'engine-read', type: 'function', name: 'read_file', arguments: { path: 'PC.cpp' } } },
+    ] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'engine-read',
+      content: JSON.stringify({ ok: true, path: 'PC.cpp', content: 'void Tick() {}' }) }] }));
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit PlayerController' }]), model, { projectEngine: 'unreal' }, [tool]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 2);
+  assert.match(researchInput, /ue\.controller\.player-tick-input/);
+  assert.match(researchInput, /stops player input processing/);
+  assert.match(researchInput, /Runtime review register/);
+  assert.equal(ctl.debugValues.some(event => event.event === 'report_review_scheduled'), false);
+});
+
 for (const streaming of [false, true]) test(`internal metadata echoes stay out of GUI and the next tool round (stream=${streaming})`, async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'metadata-echo-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -6203,12 +6356,13 @@ test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then 
   const tool = { name: "read_file", description: "Read", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" };
   const filePath = "project://Source/Game/LedgerCharacter.cpp";
   const body = Array.from({ length: 60 }, (_, i) => `// line ${i + 1} ${"q".repeat(40)}`).join("\n");
-  let calls = 0; const inputs = [], toolCounts = [];
+  let calls = 0, reportMaxTokens = null; const inputs = [], toolCounts = [];
   const model = { identifier: "ledger-fixture", async getContextLength() { return 65536; },
     async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
     async act(chat, tools, options) {
       inputs.push(chat.toString()); toolCounts.push(tools.length); calls++;
       if (!tools.length) {
+        reportMaxTokens = options.maxTokens;
         options.onMessage(ChatMessage.from({ role: "assistant", content: "Final report from the delivered evidence." }));
         options.onPredictionCompleted({ stats: { stopReason: "eosFound" } }); return;
       }
@@ -6238,6 +6392,10 @@ test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then 
   assert.equal(calls, 8);
   assert.equal(toolCounts.at(-1), 0, "the second trigger ends research with a tool-free report");
   assert.ok(ctl.debugValues.some(value => value.event === "research_recovery_finalization" && value.trigger === "research_no_new_evidence"));
+  // Conversation 1792916809646 v1, r62: reasoning took 7586 of the report's
+  // 8192 tokens. With headroom the report may take twice the configured cap
+  // (this fixture configures 4096).
+  assert.equal(reportMaxTokens, 8192);
 });
 
 // Independent regression fixtures: meaningful work must not be a duplicate-read episode.

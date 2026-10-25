@@ -86,6 +86,7 @@ export type DirectConfig = {
   hardRemainingTokens: number;
   maxOutputReserve: number;
   outputRecoveryMode: OutputRecoveryMode;
+  reportReviewMode: OutputRecoveryMode;
   reasoningRecoveryMode: OutputRecoveryMode;
   outputRecoveryMaxTokens: number;
   outputRecoverySeconds: number;
@@ -151,7 +152,7 @@ export const PINNED_WORKING_SET_SHARE = 0.3;
 export const PINNED_WORKING_SET_MIN_CHARS = 6144;
 
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
-  | "output_recovery"
+  | "output_recovery" | "report_review"
   | "research_round_limit" | "context_budget" | "research_recovery_complete"
   | "research_recovery_exhausted" | "research_no_new_evidence";
 
@@ -172,6 +173,8 @@ export type ExecutionOutcome = Readonly<{
   reportState: FinalReportState;
   objectiveSatisfied: boolean | null;
   taskCompleted: boolean;
+  /** A follow-up round that extended an already delivered report. */
+  supplement?: { kind: "report_review" | "output_recovery"; state: "delivered" | "empty" | "blocked" | "stopped" };
 }>;
 
 export type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";

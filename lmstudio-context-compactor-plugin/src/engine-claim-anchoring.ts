@@ -2,6 +2,7 @@ import type { ChatMessage } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
 import { bundledEngineClaimFacts } from "./generated-design-guidance";
 import { returnedSourceLines } from "./quote-anchoring";
+import { REJECTED, FINDING } from "./review-patterns.js";
 
 // A P0/P1 claim can quote the project correctly and still rest on a wrong
 // engine rule ("a Client RPC reaches every client"). The packet validator
@@ -97,9 +98,7 @@ export function packetEngineClaimGaps(packet: unknown, evidence: ReturnedEngineE
 // facts apply to both; a heading that rejects its finding makes no claim.
 const SEVERITY = /\bP([0-3])\b/;
 const HEADING = /^\s{0,3}#{1,6}\s/;
-const REJECTED = /기각|철회|버그\s*아님|결함\s*아님|\bnot\s+a\s+(?:bug|defect)\b|\brejected\b|\bretract/iu;
 const CONFIRMED = /\b(?:confirmed|verified)\b|확정|확인했|확인된\s*(?:버그|결함)/iu;
-const FINDING = /\bbug\b|\bdefect\b|버그|결함/iu;
 export type TextFinding = { label: string; severity: string; text: string };
 
 /** Graded findings of an answer: each heading section whose heading names a severity. */
@@ -156,6 +155,25 @@ export function reportEngineClaimNotice(report: EngineClaimGap[], progress: Engi
     + "엔진 계약 문장과 표현을 대조한 결과이며 사실 판정이 아닙니다.", ...lines, ...dropped].join("\n");
 }
 
+/** A supplemental correction only resolves the contract/identifier it names. */
+export function unresolvedEngineClaimGaps(gaps: readonly EngineClaimGap[], answer: string, symbol?: string): EngineClaimGap[] {
+  const reviewAt = answer.indexOf("## 검토 보완");
+  const corrections = reviewAt < 0 ? [] : answer.slice(reviewAt).split(/\r?\n/u)
+    .filter(line => REJECTED.test(line) || /미검증|정정|\bunverified\b|\bcorrect(?:ed|ion)\b/iu.test(line));
+  return gaps.filter(gap => !corrections.some(line => line.includes(gap.factId) || (symbol && hasToken(line, symbol))
+    || catalogue.find(entry => entry.fact.id === gap.factId)?.markers.some(marker => marker.test(line))));
+}
+
+export function unresolvedReportEngineClaimGaps(answer: string, evidence: ReturnedEngineEvidence, engine: string): EngineClaimGap[] {
+  const reviewAt = answer.indexOf("## 검토 보완");
+  const original = reviewAt < 0 ? answer : answer.slice(0, reviewAt);
+  const remaining = gradedSections(original).flatMap(finding => {
+    const symbol = /`([^`\n]+)`/u.exec(finding.text)?.[1]?.match(/[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*/u)?.[0];
+    return unresolvedEngineClaimGaps(textEngineClaimGaps([finding], evidence, engine, "report"), answer, symbol);
+  });
+  return [...remaining, ...(reviewAt < 0 ? [] : textEngineClaimGaps(gradedSections(answer.slice(reviewAt)), evidence, engine, "report"))];
+}
+
 /** Runtime fact for the next input, or null when every gated claim is backed. */
 export function engineClaimFact(gaps: EngineClaimGap[]): string | null {
   if (!gaps.length) return null;
@@ -164,7 +182,7 @@ export function engineClaimFact(gaps: EngineClaimGap[]): string | null {
     + `Engine source: ${gap.evidence.join("; ")}`);
   const more = gaps.length > MAX_REPORTED ? [`- ${gaps.length - MAX_REPORTED} more not listed`] : [];
   return [
-    `Runtime evidence observation: the last evidence packet rates ${gaps.length} claim(s) P0/P1 in wording that depends on engine behavior, `
+    `Runtime evidence observation: ${gaps.length} assistant claim(s) use wording that depends on engine behavior, `
       + "and no engine source returned in this execution backs it.",
     ...listed, ...more,
     "This names a catalogued engine fact the claim's wording touches; it is not a verdict on the claim, and a passed packet "

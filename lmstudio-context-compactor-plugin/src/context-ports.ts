@@ -78,6 +78,8 @@ export const workingContextModule = require("./working-context.js") as {
     readLedger: ReadLedgerLike;
     archiveRefFor(request: ToolCallRequest, result: unknown): ArchiveLocator | null;
     archiveLocator(ref: { evidenceId: string; version: string } | undefined, withOutline?: boolean, expected?: ReadFacts | null): ArchiveLocator | null;
+    archivedValue?(ref: { evidenceId: string; version: string } | undefined): Record<string, unknown> | null;
+    archiveResponseBytes?(args: Record<string, unknown>): number | undefined;
   };
   serialize(history: Chat): Array<unknown>;
   validateSemanticNote(text: string, refs: Set<string>, generation: number,

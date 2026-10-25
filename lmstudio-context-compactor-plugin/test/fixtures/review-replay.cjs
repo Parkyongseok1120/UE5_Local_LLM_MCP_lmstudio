@@ -42,6 +42,7 @@ const serialize = chat => chat.getMessagesArray().map(message => [message.getRol
 /** Run the replay against a built dist directory; returns its measurements. */
 async function runReviewReplay(distDir, { searchRounds = 36 } = {}) {
   const { Chat, ChatMessage } = require("@lmstudio/sdk");
+  const { REASONING_SEPARATOR } = require(path.join(distDir, "continuity-text.js"));
   const { createPredictionLoopHandler } = require(path.join(distDir, "prediction-loop.js"));
   const handle = createPredictionLoopHandler(undefined, undefined, undefined, undefined, () => ({}));
   const tools = ["read_file", "search_files"].map(name => ({ name, description: name, pluginIdentifier: "mcp/unreal-agent",
@@ -56,7 +57,7 @@ async function runReviewReplay(distDir, { searchRounds = 36 } = {}) {
       inputs.push(serialize(chat));
       const round = calls++;
       if (round >= readRounds + searchRounds) {
-        options.onMessage(ChatMessage.create("assistant", "최종 보고: `DeathCount`가 `OnRep_KillCount`를 공유합니다."));
+        options.onMessage(ChatMessage.create("assistant", "최종 보고: `DeathCount`가 `OnRep_KillCount`를 공유합니다. `HeadshotMultiplier`는 소비 근거 부족으로 제외합니다."));
         options.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
         return;
       }
@@ -65,7 +66,8 @@ async function runReviewReplay(distDir, { searchRounds = 36 } = {}) {
           name: "read_file", arguments: { path: file.path } }))
         : [{ id: `search-${round}`, type: "function", name: "search_files", arguments: { query: `ReplicatedUsing_${round}` } }];
       const cited = FILES[round % FILES.length];
-      const text = `\`Value${round}\` in ${cited.name}:${10 + round % 7} is set only on the server (finding ${round}).`;
+      const progress = `\`Value${round}\` in ${cited.name}:${10 + round % 7} is set only on the server (finding ${round}).`;
+      const text = round === 0 ? "`HeadshotMultiplier` never used: reasoning-only finding.\n" + REASONING_SEPARATOR + progress : progress;
       options.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
       for (const [i, request] of requests.entries()) {
         await options.guardToolCall(0, 100 * round + i, { toolCallRequest: request, allow() {}, allowAndOverrideParameters() {}, deny() {} });
@@ -115,6 +117,7 @@ async function runReviewReplay(distDir, { searchRounds = 36 } = {}) {
     maxRuntimeDataChars: Math.max(0, ...measurements.map(event => event.workingContext?.runtimeDataChars ?? 0)),
     promptChars: inputs.reduce((sum, input) => sum + input.length, 0),
     findingsInLastInput: (inputs.at(-1).match(/finding \d+/gu) || []).length,
+    reasoningRegisterInLastInput: /Runtime review register[\s\S]*\[found\] HeadshotMultiplier \(reasoning, round 1\)/u.test(inputs.at(-1)),
     debug,
   };
 }

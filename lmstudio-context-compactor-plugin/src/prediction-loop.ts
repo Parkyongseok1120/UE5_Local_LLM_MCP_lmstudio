@@ -27,10 +27,11 @@ import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupte
 import { acceptedValidatePackets, packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines, validatePackets,
   type QuoteMismatch } from "./quote-anchoring";
 import { confirmedProgressStatements, engineClaimFact, engineClaimNotice, gradedSections, packetEngineClaimGaps,
-  reportEngineClaimNotice, returnedEngineEvidence, textEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
+  reportEngineClaimNotice, returnedEngineEvidence, textEngineClaimGaps, unresolvedEngineClaimGaps, unresolvedReportEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
+import { ReviewEvidenceIndex, ReviewRegister, deliveredReportFact, reportReviewFact, reportReviewNotice, type ReviewRow } from "./review-register";
 import { fileCoverageNotice } from "./quote-anchoring";
 import { unverifiedWriteApis, writeApiFact } from "./write-api-anchoring";
-import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
+import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, REPORT_REVIEW_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
@@ -146,6 +147,10 @@ export function createPredictionLoopHandler(
     const capabilityRegistry = new ToolCapabilityRegistry([...scopedRemoteTools, ...localTools] as Array<RemoteToolLike>);
     const allModelTools = capabilityRegistry.tools;
     const evidenceManager = new EvidenceManager(workingContext, allModelTools);
+    const reviewRegister = new ReviewRegister();
+    // Returned bodies and searches the register cites as each judgment's evidence.
+    const reviewEvidence = new ReviewEvidenceIndex();
+    evidenceManager.setClosedFileFacts((key, sha) => reviewRegister.closedFileFacts(key, sha));
     evidenceManager.initializeChangeOrigins(originalHistory);
     // A review-only request withholds the file/project mutation schemas it
     // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
@@ -231,7 +236,8 @@ export function createPredictionLoopHandler(
     const researchDeadlineAt = researchStartedAt + config.auditResearchSeconds * 1000;
     const execution = finalExecution = new ExecutionState();
     const budgetBroker = new BudgetBroker(config);
-    const contextManager = new ContextManager(config, budgetBroker, { changeOrigin: evidenceManager.changeOrigin },
+    const contextManager = new ContextManager(config, budgetBroker, { changeOrigin: evidenceManager.changeOrigin,
+      reviewRegisterItems: () => reviewRegister.rows.length ? reviewRegister.lines() : null },
       history => workingContext?.pendingResultIndexes(history) || [],
       (history, maxChars) => workingContext?.pinnedResultIndexes(history, maxChars) || []);
     const deliveryController = terminalOwner = new DeliveryController(allModelTools);
@@ -250,11 +256,16 @@ export function createPredictionLoopHandler(
     let stagnationWarnings = 0;
     let lastBudgetFeedback = "";
     let reportContinuation = "";
+    let reportReviewAttempted = false;
+    let reportReviewBlocked = false;
+    // The review round ran and returned no supplement.
+    let reportReviewEmpty = false;
+    let reviewMissing: ReviewRow[] = [];
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
     const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
-      | "engine_claim_check" | "write_api_check" | "report_now", string>();
+      | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report", string>();
     // Consecutive tool rounds that returned no new path, version or range,
     // and how many report_now facts this execution has already given.
     let noNewEvidenceRounds = 0;
@@ -306,7 +317,8 @@ export function createPredictionLoopHandler(
           continue;
         }
         const finalizing = execution.finalizing;
-        const continuingReport = execution.finalizationTrigger === "output_recovery";
+        const reviewingReport = execution.finalizationTrigger === "report_review";
+        const continuingReport = execution.finalizationTrigger === "output_recovery" || reviewingReport;
         const reasoningRecoveryRound = execution.reasoningRecovery;
         const researchRecoveryRound = !finalizing && execution.recovering;
         const toolPlanningRetryRound = researchRecoveryRound && execution.replanning;
@@ -334,7 +346,7 @@ export function createPredictionLoopHandler(
         // One input identity covers projection, measurement, exposure and
         // completion. Recovery episode counters must not mint a second ID.
         const modelInputId = reasoningRecoveryRound ? `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}` : finalizing
-          ? execution.finalizationTrigger === "output_recovery"
+          ? reviewingReport ? `${executionId}:report-review-1` : execution.finalizationTrigger === "output_recovery"
             ? `${executionId}:output-recovery-${deliveryController.attempts}`
             : `${executionId}:final-report-${deliveryController.attempts}`
           : toolPlanningRetryRound
@@ -374,14 +386,21 @@ export function createPredictionLoopHandler(
         // The reasoning retry asks for twice the cap that reasoning exhausted;
         // input preparation clamps it to the measured headroom, never below
         // the configured cap.
+        // A final report reasons before it writes, and its input is already
+        // settled: it may take up to twice the cap within the measured
+        // headroom (conversation 1792916809646 v1, r62: 7586 of 8192 tokens
+        // went to reasoning and the report was cut). Bounded audits, output
+        // recovery and a context-budget rescue keep their own caps.
+        const reportHeadroomCap = finalizing && !boundedAudit
+          && !["output_recovery", "context_budget"].includes(execution.finalizationTrigger || "");
         let roundOutputReserve = finalizing
-          ? finalLimits.maxTokens
+          ? reportHeadroomCap ? reasoningRecoveryOutputCap(finalLimits.maxTokens) : finalLimits.maxTokens
           : researchRecoveryRound ? recoveryCoordinator.outputReserve
             : reasoningRecoveryRound ? reasoningRecoveryOutputCap(config.maxOutputReserve) : config.maxOutputReserve;
         const requestedOutputCap = roundOutputReserve;
         let outputCapSource: "configured" | "headroom_clamp" = "configured";
         const roundScopeInstructions = finalizing
-          ? [...scopeInstructions, execution.finalizationTrigger === "output_recovery"
+          ? [...scopeInstructions, reviewingReport ? REPORT_REVIEW_INSTRUCTION : execution.finalizationTrigger === "output_recovery"
             ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
             : execution.finalizationTrigger === "context_budget"
               ? CONTEXT_BUDGET_FINAL_INSTRUCTION
@@ -407,6 +426,8 @@ export function createPredictionLoopHandler(
           objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted: recoveryCoordinator.episodeStarted,
           allowReadRecovery: execution.canStartReadRecovery,
           reasoningRecovery: reasoningRecoveryRound,
+          // The same headroom clamp bounds a final report's enlarged cap.
+          headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
           guidanceIntent,
           guidanceRetention,
@@ -428,6 +449,7 @@ export function createPredictionLoopHandler(
         ({ activeNote, semanticSummaryCooldownUntilRound } = prepared);
         replaceActiveNote(activeNote);
         if (prepared.kind === "continuation_blocked") {
+          reportReviewBlocked = reviewingReport;
           deliveryController.stop("continuation_context_budget");
           ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
           break;
@@ -435,6 +457,7 @@ export function createPredictionLoopHandler(
         if (prepared.kind === "pressure") {
           ctl.guardAbort();
           if (continuingReport) {
+            reportReviewBlocked = reviewingReport;
             deliveryController.stop("continuation_context_budget");
             ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
             break;
@@ -460,6 +483,10 @@ export function createPredictionLoopHandler(
           continue;
         }
         ({ workingHistory, roundOutputReserve, outputCapSource, projectionApplied } = prepared);
+        // Closed judgments carry their evidence: when even the released working
+        // set does not fit, this round's results go to the report, not to
+        // another restore cycle.
+        const workingSetExhausted = prepared.projectionExhausted === true && reviewRegister.rows.some(row => row.bundle);
         const { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
           compactionCheckpoint, compactionRetention, assembledInput, modelComposition, modelInput,
           finalMeasurement, lowWater, mandatoryFloorMeasurement, mandatoryFloorExceedsTarget,
@@ -1016,7 +1043,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             toolRequestFailure: captured.toolRequestFailure,
             predictionUsage: captured.predictionUsage,
             callPurpose: finalizing
-              ? execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
+              ? reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
               : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
                 : researchRecoveryRound ? "read_only_research_recovery" : "research",
             roundModelElapsedMs,
@@ -1145,10 +1172,15 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               ({ claimPath, location, kind, missingTokens })) });
         }
         if (!config.observeOnly) {
+          reviewEvidence.observe(captured.messages);
+          reviewRegister.observe(captured.messages, roundIndex + 1, internalDataParts);
+          reviewRegister.attach(reviewEvidence);
+          const reviewFact = reviewRegister.fact();
+          if (reviewFact) runtimeFacts.set("review_register", reviewFact);
           // Progress text shown this execution can state a finding as confirmed
           // without any packet; it is held to the same engine facts.
           const visibleMessages = visibleTranscript.snapshot().getMessagesArray();
-          progressEngineGaps = textEngineClaimGaps(confirmedProgressStatements(visibleMessages, ""),
+          progressEngineGaps = textEngineClaimGaps([...confirmedProgressStatements(visibleMessages, ""), ...reviewRegister.findings()],
             returnedEngineEvidence([...visibleMessages, ...captured.messages]), scope.engine, "progress");
           const engineGaps = [...packetEngineGaps, ...progressEngineGaps];
           const engineFact = engineClaimFact(engineGaps);
@@ -1172,7 +1204,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           // input are different. Failed reads establish neither unchangedness nor completion.
           // A round that only restored bodies it had already restored once is
           // re-reading, though the restore regains current availability.
-          const onlyRepeatRestores = screening.repeatRestores > 0 && screening.repages === 0;
+          // Archive pages count too: a page inside spans already restored is a
+          // repeat even though it repages a delivered version.
+          const onlyRepeatRestores = screening.repeatRestores > 0
+            && screening.repeatRestores + screening.redundant >= screening.readResults - screening.failedReads;
           const noNewEvidence = screening.readResults > 0 && screening.failedReads === 0
             && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
             && (recoveryProgress.restoredWorkingEvidenceUnits === 0 || onlyRepeatRestores);
@@ -1287,14 +1322,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
           const reportDelivered = deliveryState === "complete" || Boolean(safePartialReport);
           if (config.showDebugInfo) ctl.debug({
-            event: execution.finalizationTrigger === "output_recovery"
+            event: reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery"
               ? "output_recovery"
               : ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence"].includes(execution.finalizationTrigger || "")
                 ? "research_recovery_finalization" : "bounded_audit_finalization",
             executionId,
             modelInputId,
             trigger: execution.finalizationTrigger,
-            phase: execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "finalize_once",
+            phase: reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "finalize_once",
             attempt: deliveryController.attempts,
             maxAttempts: boundedAudit ? 1 : recoveryCoordinator.planningAttempts > 0 ? 2 : 1,
             recoveryAttempts: recoveryCoordinator.planningAttempts,
@@ -1338,6 +1373,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex += 1;
             continue;
           }
+          if (reviewingReport && !visibleTextFromMessages(captured.messages).trim()) reportReviewEmpty = true;
           if (deliveryState !== "complete") ctl.createStatus({
             status: deliveryState === "no_answer" ? "error" : "canceled",
             text: safePartialReport
@@ -1423,12 +1459,40 @@ event: decision.trigger === "research_recovery_exhausted"
           roundIndex += 1;
           continue;
         }
+        if (!config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted
+          && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
+          && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
+          const answer = visibleTranscript.lastAnswerText;
+          const gaps = unresolvedReportEngineClaimGaps(answer,
+            returnedEngineEvidence(visibleTranscript.snapshot().getMessagesArray()), scope.engine);
+          reviewMissing = reviewRegister.missing(answer);
+          if (answer.trim() && (reviewMissing.length || gaps.length)) {
+            reportReviewAttempted = true;
+            runtimeFacts.set("report_review", reportReviewFact(reviewMissing, gaps));
+            // The delivered answer is data, not the last message: a trailing
+            // complete assistant answer is one the model only continues, and a
+            // finished answer continues with EOS (conversation 1792929236226:
+            // one token from 53,802 input tokens). The input ends with the last
+            // tool results, so the supplement is a new assistant turn.
+            runtimeFacts.set("delivered_report", deliveredReportFact(answer));
+            reportContinuation = answer;
+            deliveryController.retainReportPrefix(answer);
+            deliveryController.beginSupplement("report_review", true);
+            workingHistory = historyBeforeRound;
+            execution.finishResearch("report_review");
+            if (config.showDebugInfo) ctl.debug({ event: "report_review_scheduled", executionId, modelInputId,
+              missing: reviewMissing.map(row => row.identifier), contracts: gaps.map(gap => gap.factId), toolCount: 0 });
+            roundIndex++;
+            continue;
+          }
+        }
         if (!boundedAudit && config.outputRecoveryMode === "on"
           && rawIntentText.trim() && canRecoverOutputLimit(visibleCaptured, generationAtRoundEnd)) {
           // Assistant-authored prose is continuation context, never committed
           // planning or source evidence. Preserve exactly the delivered prefix.
           reportContinuation = visibleTranscript.lastAnswerText;
           deliveryController.retainReportPrefix(reportContinuation);
+          deliveryController.beginSupplement("output_recovery", false);
           workingHistory = historyBeforeRound;
           workingHistory.append(ChatMessage.create("assistant", reportContinuation));
           execution.finishResearch("output_recovery");
@@ -1488,7 +1552,9 @@ event: decision.trigger === "research_recovery_exhausted"
           deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
         }
         if (!captured.continueAfterTools) break;
-        if (reportNowFinalize && !execution.finalizing && !execution.reasoningRecovery && !execution.recovering) {
+        if ((reportNowFinalize || workingSetExhausted) && !execution.finalizing && !execution.reasoningRecovery && !execution.recovering) {
+          if (workingSetExhausted && config.showDebugInfo) ctl.debug({ event: "working_set_exhausted", executionId, modelInputId, roundIndex,
+            bundledRows: reviewRegister.rows.filter(row => row.bundle).length });
           execution.finishResearch("research_no_new_evidence");
           roundIndex += 1;
           continue;
@@ -1507,12 +1573,13 @@ event: decision.trigger === "research_recovery_exhausted"
       }
       // The visible recorder owns both the delivered prefix and its automatic
       // continuation, plus validation exchanges that working compaction may omit.
-      const scopeNotice = verificationScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      const deliveredAnswer = visibleTranscript.lastAnswerText;
+      const scopeNotice = verificationScopeNotice(visibleTranscript.snapshot(), deliveredAnswer);
       if (scopeNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(scopeNotice);
         if (config.showDebugInfo) ctl.debug({ event: "verification_scope_notice", executionId });
       }
-      const searchNotice = partialSearchScopeNotice(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText);
+      const searchNotice = partialSearchScopeNotice(visibleTranscript.snapshot(), deliveredAnswer);
       if (searchNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(searchNotice);
         if (config.showDebugInfo) ctl.debug({ event: "partial_search_scope_notice", executionId });
@@ -1522,19 +1589,23 @@ event: decision.trigger === "research_recovery_exhausted"
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(quoteNotice);
         if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_notice", executionId, mismatches: packetQuoteGaps.length });
       }
-      const engineNotice = visibleTranscript.lastAnswerText ? engineClaimNotice(packetEngineGaps) : null;
+      const reviewedReport = reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty;
+      const remainingPacketGaps = reviewedReport ? unresolvedEngineClaimGaps(packetEngineGaps, deliveredAnswer) : packetEngineGaps;
+      const engineNotice = deliveredAnswer && !reviewedReport ? engineClaimNotice(packetEngineGaps) : null;
       if (engineNotice) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(engineNotice);
         if (config.showDebugInfo) ctl.debug({ event: "engine_claim_notice", executionId, gaps: packetEngineGaps.length });
       }
-      const answer = visibleTranscript.lastAnswerText;
+      const answer = deliveredAnswer;
       if (answer && !config.observeOnly) {
         const visible = visibleTranscript.snapshot().getMessagesArray();
         const evidence = returnedEngineEvidence(visible);
-        const reportGaps = textEngineClaimGaps(gradedSections(answer), evidence, scope.engine, "report")
-          .filter(gap => !packetEngineGaps.some(packetGap => packetGap.factId === gap.factId));
+        const reportGaps = unresolvedReportEngineClaimGaps(answer, evidence, scope.engine)
+          .filter(gap => !remainingPacketGaps.some(packetGap => packetGap.factId === gap.factId));
+        if (reviewedReport) reportGaps.push(...remainingPacketGaps);
         const reportNotice = reportEngineClaimNotice(reportGaps,
-          textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, scope.engine, "progress"));
+          reviewedReport ? []
+            : textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, scope.engine, "progress"));
         if (reportNotice) {
           visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(reportNotice);
           if (config.showDebugInfo) ctl.debug({ event: "report_engine_claim_notice", executionId, gaps: reportGaps.length });
@@ -1544,6 +1615,9 @@ event: decision.trigger === "research_recovery_exhausted"
           visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(coverageNotice);
           if (config.showDebugInfo) ctl.debug({ event: "file_coverage_notice", executionId });
         }
+        const reviewNotice = reportReviewBlocked || reportReviewEmpty
+          ? reportReviewNotice(reviewMissing, reportReviewEmpty ? "empty" : "budget") : null;
+        if (reviewNotice) visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(reviewNotice);
       }
     } catch (error) {
       executionFailure = error;

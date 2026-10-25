@@ -110,6 +110,23 @@ test("data slots holding twice the current data are replaced by one current bloc
   assert.ok(composed.runtimeDataChars < 3 * current.length + 1, `runtime data stays bounded: ${composed.runtimeDataChars}`);
 });
 
+// Conversation 1792916809646 v1: between thresholds the slots reached 28K
+// chars (about 9.7K tokens) while projections rewrote the input every few rounds.
+test("a round that rewrites its input consolidates superseded data in the same rewrite", () => {
+  const history = exchange(Chat.from([{ role: "user", content: "Audit" }]), "r1");
+  const shown = new Map();
+  const first = compose(history, [ledger(`in full ${"x".repeat(3000)}`)], shown);
+  shown.set(first.dataBlock.anchor, first.dataBlock.parts);
+  exchange(history, "r2");
+  const current = ledger(`none (archived) ${"y".repeat(1500)}`);
+  // Below the standing threshold an ordinary round only appends its delta.
+  assert.notEqual(compose(history, [current], shown).dataBlock.replacesShown, true);
+  const rewritten = composeModelHistory(history, null, config, [], false, undefined, [current], shown, true);
+  assert.equal(rewritten.dataBlock.replacesShown, true);
+  assert.deepEqual(rewritten.dataBlock.parts, [current]);
+  assert.equal(rewritten.runtimeDataChars, current.length);
+});
+
 test("a one-line fact under a shared header is kept whole the first time", () => {
   const fact = "Runtime evidence observation: the previous assistant turn ended after tool results without a final answer.";
   const history = exchange(Chat.from([{ role: "user", content: "Continue" }]), "r1");

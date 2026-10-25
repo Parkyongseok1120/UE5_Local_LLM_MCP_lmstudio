@@ -156,7 +156,7 @@ export function readResultContract(tool: RemoteToolLike) {
   // Only the provider default (not a tool's own published default) adapts.
   const adaptiveDefault = field === "byteBudget" && byteBudgetDefault !== undefined
     && contract.$comment === "direct-json-text-utf8" && contract.default === undefined;
-  return { field, defaultValue, adaptiveDefault, multiplier: field === "byteBudget" ? 1 / UTF8_BYTES_PER_TOKEN_ESTIMATE
+  return { field, defaultValue, adaptiveDefault, archiveEnvelope, multiplier: field === "byteBudget" ? 1 / UTF8_BYTES_PER_TOKEN_ESTIMATE
     : field === "maxBytes" ? 1.25 / UTF8_BYTES_PER_TOKEN_ESTIMATE : 1.25,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
@@ -195,6 +195,16 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   args: Record<string, unknown>, knownResultBytes?: number) {
   const contract = readResultContract(tool);
   const { field } = contract;
+  // A local archive read's answer is known before it runs: reserve its exact
+  // size, as receive() will account it, so a page does not hold the CJK worst
+  // case of its maxChars while a parallel peer is denied.
+  if (contract.archiveEnvelope && Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0) {
+    const exact = Math.ceil(knownResultBytes! / UTF8_BYTES_PER_TOKEN_ESTIMATE) + 256;
+    const reserved = batch.reserve(id, exact, exact);
+    const requested = Number(args[field ?? ""] ?? contract.defaultValue);
+    if (reserved) return { allowed: true, arguments: args, reservedTokens: reserved, bounded: field !== null,
+      limit: { field, requested, effective: requested, unit: "utf16_code_units" } };
+  }
   // Character contracts allow for UTF-8/JSON expansion and envelope overhead.
   // This allocation does not replace the final exact tokenizer gate.
   const multiplier = field ? contract.multiplier : 1;

@@ -1,5 +1,5 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
-import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS, NUMERIC_FIELDS } from "./config-defaults";
+import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS, NUMERIC_FIELDS, REPORT_REVIEW_DEFAULT } from "./config-defaults";
 
 export const directConfigSchematics = createConfigSchematics()
   .field(
@@ -99,6 +99,11 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "off", displayName: "Off" },
     ],
   }, "on")
+  .field("reportReviewMode", "select", {
+    displayName: "Report review",
+    subtitle: "Review omitted working findings and engine-contract gaps once with no tools, appending a supplemental section.",
+    options: [{ value: "on", displayName: "On (one review)" }, { value: "off", displayName: "Off" }],
+  }, REPORT_REVIEW_DEFAULT)
   .field("outputRecoveryMaxTokens", "numeric", { displayName: "Continuation output limit", subtitle: "Maximum predicted tokens for one tool-free report continuation; 0 uses the general output reserve." }, NUMERIC_FIELDS.outputRecoveryMaxTokens.default)
   .field("reasoningRecoveryMode", "select", {
     displayName: "Reasoning-limit recovery",

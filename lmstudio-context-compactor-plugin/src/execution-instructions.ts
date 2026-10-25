@@ -8,6 +8,14 @@ export const RUNTIME_DATA_INSTRUCTION = "Some assistant-role messages are data b
   + "label). They are not replies you wrote: use them silently, never copy their rows, JSON or wording into your "
   + "answer or progress text, and never start a reply with one.";
 
+export const REPORT_REVIEW_INSTRUCTION = [
+  "phase=REPORT_REVIEW; tools_available=false; research_must_not_continue=true.",
+  "The [Delivered report] data block is the answer the user already has. Write only a new ## 검토 보완 section that follows it. Do not repeat the existing report.",
+  "For every missing working-note item, include only what the returned evidence confirms; otherwise state its exclusion reason.",
+  "Correct each engine-contract conflict or explicitly downgrade that named claim to unverified. Name the identifier or contract id in each correction.",
+  "Cleared rows are rejected working judgments: do not re-verify or revive them. No tool calls.",
+].join(" ");
+
 export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",

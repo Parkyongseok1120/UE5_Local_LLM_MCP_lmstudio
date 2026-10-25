@@ -1,0 +1,320 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "prediction-loop owns captured assistant rounds, runtime facts and execution finalization",
+    "ContextManager checkpointOptions feeds direct-compaction-core assistant evidence",
+    "WorkingContext owns prioritized pinned source results"
+  ],
+  "proposed": [
+    "Implemented execution-scoped bounded review register, shared status patterns and same-turn checkpoint handoff",
+    "Implemented one tool-free report_review continuation with context fallback and residual contract notices",
+    "Implemented measured half/quarter/zero pin budgets with final-budget telemetry and existing priority selection"
+  ],
+  "doNotDuplicate": [
+    "Reuse visibleAssistantText, engine catalogue anchoring, continuationController and reportContinuation",
+    "Reuse pin priority selection and currentTurnFindings forUserTurn hashing"
+  ],
+  "invariants": [
+    "Working notes are not verified facts",
+    "Latest status wins; cleared findings are not missing-report obligations",
+    "At most one review per execution, zero tools; context failure preserves prefix and footer",
+    "Checkpoint findings remain scoped to the same user turn",
+    "Priority pins are reduced only while measured pressure remains"
+  ],
+  "impactedSurfaces": [
+    "plugin src/review-register.ts and shared patterns",
+    "prediction-loop/context-manager/direct-compaction-core/internal-data-output",
+    "config/defaults/instructions/contracts and round-input",
+    "unit/integration/replay tests and runtime package allowlist"
+  ],
+  "validationPlan": [
+    "Extract source excerpts from saved conversation 1792916809646",
+    "Run targeted tests, full plugin suite, generated contract --check and build identity",
+    "UPDATE.bat dry run and update, then safe LM Studio restart and same-prompt runtime audit if available"
+  ],
+  "claims": [
+    {
+      "id": "implemented-offline-regressions",
+      "claim": "Reasoning-only found/cleared judgments survive input projection and feed a single tool-free report-review continuation; pin pressure can retain a priority source at half budget. These are automated-fixture observations, not proof of real-model report quality.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/review-register.test.cjs",
+          "observation": "Exact r9/r10 log excerpts, latest status, twenty-row cap, incremental/private data, echoes and checkpoint scope."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "Single append, missing/covered/off/observe-only paths, engine contract before next research input, budget fallback and residual footer."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/review-working-set.test.cjs",
+          "observation": "Half-budget projection retains one newest source result, pinsReleased=false."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_package.py",
+          "observation": "Portable dependency install/compile, runtime allowlist and guidance packaging: three tests pass."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js:93",
+          "observation": "Current findings only read visible text, so the new register must supply checkpoint rows explicitly."
+        }
+      ],
+      "unknowns": [
+        "One same-prompt candidate run regressed from 27 to 63 model calls and ended truncated, reportCompleted=false. No causal performance attribution or repeated A/B trial.",
+        "Report review was proven by automated fixtures, but was not entered in this real-model run because its research-EOS admission condition never occurred.",
+        "Extraction, missing-identifier matching and correction detection remain bounded regex heuristics, not factual verification."
+      ],
+      "behaviorPath": []
+    },
+    {
+      "id": "partial-report-engine-semantics-error",
+      "claim": "The generated partial report attributes built-in Health reduction to AActor::TakeDamage, but the installed UE 5.7 implementation dispatches damage helpers/notifications and returns ActualDamage without that core health mutation. The specific core-engine premise in the report is unsupported.",
+      "claimType": "framework_semantics",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:3390",
+          "observation": "Full TakeDamage body through return at 3453 contains damage helpers and ReceiveAnyDamage/OnTakeAnyDamage notifications, no built-in Health reduction."
+        },
+        {
+          "kind": "runtime",
+          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025/new-report-visible.txt",
+          "observation": "Partial finding 1 asserts Super::TakeDamage reduces AActor::Health and diverges from PlayerState health."
+        },
+        {
+          "kind": "project_source",
+          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:294",
+          "observation": "Project calls Super::TakeDamage then PS->ApplyDamage(Actual)."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:3445",
+          "observation": "ReceiveAnyDamage and delegates may cause project-defined effects; that does not establish an intrinsic AActor Health property mutation."
+        }
+      ],
+      "unknowns": [
+        "Blueprint damage event consumers and arbitrary project-defined effects were not audited in this harness task."
+      ]
+    }
+  ],
+  "localUpdate": {
+    "dryRunExit": 0,
+    "actualUpdateExit": 0,
+    "installedBuildId": "ef-build-v2-68eb5ba25262e5aba2e64688d187221b44164fefd10517da62b2a158b37a0436",
+    "sourceDistInstalledSourceDistProductionMatch": true,
+    "mcpAndSettingsHashesUnchanged": true,
+    "backup": "C:/Users/sster/.evidence-first/backups/harness-review-register-20261025-183204",
+    "diagnostics": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025",
+    "loadedMatchesInstalledObserved": true,
+    "runtimeExecutionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+    "runtimeConversation": "1792916809646",
+    "runtimeSelectedVersion": 1,
+    "runtimeStatus": "finished_truncated",
+    "computerUseStoppedByPhysicalEscape": true
+  },
+  "validationResults": {
+    "pluginSuite": {
+      "passed": 1017,
+      "failed": 0,
+      "log": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025/plugin-suite.log"
+    },
+    "portablePackaging": {
+      "passed": 3,
+      "failed": 0
+    },
+    "checks": [
+      "TypeScript build",
+      "guidance --check",
+      "toolcontract --check",
+      "unitycontract --check",
+      "identity --check",
+      "status source layout",
+      "git diff --check"
+    ]
+  },
+  "runtimeResults": {
+    "outcome": {
+      "event": "execution_outcome",
+      "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+      "modelInputId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a:final-report-2",
+      "terminalPhase": "FINAL_DELIVERY",
+      "executionOutcome": "truncated",
+      "reason": "max_predicted_tokens",
+      "finalFinishReason": "maxPredictedTokensReached",
+      "generationCompleted": false,
+      "reportPresent": true,
+      "reportDelivered": true,
+      "reportCompleted": false,
+      "deliveryState": "partial",
+      "reportState": "partial_report",
+      "objectiveSatisfied": null,
+      "taskCompleted": false,
+      "cleanupFailures": []
+    },
+    "baseline": {
+      "rounds": 27,
+      "toolCalls": 51,
+      "executionS": 1516.3,
+      "prefillS": 577.3,
+      "promptTokens": 1218262,
+      "toolCallsByName": {
+        "read_file": 20,
+        "read_file_range": 17,
+        "list_directory": 5,
+        "unreal_symbol_lookup": 5,
+        "search_files": 3,
+        "read_symbol": 1
+      }
+    },
+    "candidate": {
+      "rounds": 63,
+      "toolCalls": 87,
+      "executionS": 2315.9,
+      "prefillS": 1375.6,
+      "promptTokens": 3158235,
+      "toolCallsByName": {
+        "read_file": 50,
+        "evidence_first_read_context": 32,
+        "list_directory": 5
+      }
+    },
+    "projectionEvents": [
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 10,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": false,
+        "beforeInputTokens": 55421,
+        "inputTokens": 45272,
+        "pinnedWorkingSetMaxChars": 31826,
+        "pinnedWorkingSetFinalChars": 31826,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      },
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 22,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": true,
+        "beforeInputTokens": 62325,
+        "inputTokens": 60178,
+        "pinnedWorkingSetMaxChars": 35789,
+        "pinnedWorkingSetFinalChars": 35789,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      },
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 26,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": false,
+        "beforeInputTokens": 62986,
+        "inputTokens": 58008,
+        "pinnedWorkingSetMaxChars": 35789,
+        "pinnedWorkingSetFinalChars": 17894,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      },
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 30,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": false,
+        "beforeInputTokens": 57928,
+        "inputTokens": 56094,
+        "pinnedWorkingSetMaxChars": 35789,
+        "pinnedWorkingSetFinalChars": 35789,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      },
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 38,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": false,
+        "beforeInputTokens": 58889,
+        "inputTokens": 56571,
+        "pinnedWorkingSetMaxChars": 35789,
+        "pinnedWorkingSetFinalChars": 35789,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      },
+      {
+        "event": "working_context_projection",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 50,
+        "changed": true,
+        "reason": "measured_input_pressure",
+        "archiveFailed": false,
+        "reasoningBounded": false,
+        "beforeInputTokens": 61389,
+        "inputTokens": 57037,
+        "pinnedWorkingSetMaxChars": 35789,
+        "pinnedWorkingSetFinalChars": 17894,
+        "pinsReleased": false,
+        "deepenLowWater": true,
+        "exact": true
+      }
+    ],
+    "allPinsReleasedEvents": 0,
+    "reportReviewAttempts": 0,
+    "engineClaimChecks": [
+      {
+        "event": "engine_claim_check",
+        "executionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
+        "roundIndex": 61,
+        "gaps": [
+          {
+            "claimPath": "progress \"ClientConfirmHit\"",
+            "severity": "unrated",
+            "factId": "ue.net.client-rpc-callspace"
+          }
+        ]
+      }
+    ],
+    "missingFromVisiblePartialReport": [
+      "HeadshotMultiplier",
+      "HealthRegenRate",
+      "HealthRegenDelay",
+      "RunSpeed",
+      "ReloadSound"
+    ],
+    "interpretation": "The candidate failed this real-model audit. A completed ordinary research EOS report was never produced: research hit the 60-round cap, first forced final emitted raw tool text, planning recovery and second forced final hit output limits. The requested review path therefore did not trigger. Reduced pin budget and pre-report register engine anchoring were observed; final report completeness and correctness were not achieved."
+  }
+}

@@ -49,6 +49,39 @@ test("a 19KB archived source body returns in one call when the budget allows", (
   assert.equal(archive.read(record.evidenceId, "0".repeat(64), 0, 24576, "body").errorCode, "version_mismatch");
 });
 
+// Conversation 1792916809646 v1, r55-r58: with maxChars 2048 the envelope left
+// about 270 body chars per page, and the last 709 chars of Character.h took
+// three rounds.
+test("a short remainder of an archived body comes with the page that reaches it", () => {
+  const archive = new EvidenceArchive(scope);
+  const content = sourceLines(70).join("\n");
+  const handle = archive.readHandleFor(archivedRange(archive, content));
+  const first = archive.readByHandle(handle, 0, 4096, "body");
+  assert.equal(first.archiveHasMore, true);
+  const rest = content.length - first.nextOffset;
+  assert.ok(rest > 1024, "the fixture leaves more than the tail after the first page");
+  const tailStart = content.length - 900;
+  const tail = archive.readByHandle(handle, tailStart, 2048, "body");
+  assert.equal(tail.ok, true, JSON.stringify(tail).slice(0, 300));
+  assert.equal(tail.archiveReachedEnd, true, "900 remaining chars return in one call");
+  assert.equal(tail.content, content.slice(tailStart));
+  assert.deepEqual(tail.sourceIdentity, { path: "project://Source/Game/Big.cpp" }, "a continuation keeps only the path");
+});
+
+test("a path-only archive read starts at the window that begins the file", () => {
+  const archive = new EvidenceArchive(scope);
+  const filePath = "project://Source/Game/Chunked.cpp", sha = "c".repeat(64), body = "y".repeat(3000);
+  const put = (offset, next, id) => archive.put(JSON.stringify({ ok: true, path: filePath, sha256: sha, size: 3000,
+    offsetBytes: offset, nextOffsetBytes: next, hasMore: next < 3000, content: body.slice(offset, next),
+    range: { unit: "byte", start: offset, endExclusive: next, total: 3000 } }), {
+    callKey: `chunk-${id}`, providerRequestId: `chunk-${id}`, toolName: "read_file", sourceIdentity: { path: filePath },
+    sourceVersion: sha, originRanges: { unit: "byte", start: offset, endExclusive: next, total: 3000 }, originRangeUnit: "utf8_byte" });
+  put(0, 1000, 1); put(1000, 2000, 2); put(2000, 3000, 3);
+  const page = archive.readByPath(filePath, 0, 8192, "body");
+  assert.equal(page.ok, true, JSON.stringify(page).slice(0, 300));
+  assert.deepEqual(page.sourceRange, { unit: "byte", start: 0, endExclusive: 1000, total: 3000 });
+});
+
 test("the larger archive request is still lowered to the input room the batch has", () => {
   const tool = new WorkingContext(scope).tool();
   assert.equal(tool.parametersJsonSchema.properties.maxChars.maximum, ARCHIVE_READ_CONTRACT.maximumEnvelopeChars);
@@ -60,6 +93,31 @@ test("the larger archive request is still lowered to the input room the batch ha
   const bounded = reserveReadResult(pressured, "bounded", tool, { maxChars: 24576 });
   assert.equal(bounded.allowed, true);
   assert.ok(bounded.limit.effective < 24576 && bounded.limit.effective >= ARCHIVE_READ_CONTRACT.minimumEnvelopeChars);
+});
+
+// Conversation 1792916809646 v1, r10: a 24576-char archive page held about
+// all 22978 tokens of the batch and its parallel peer was denied.
+test("parallel archive reads reserve their exact local answer, not the maxChars worst case", () => {
+  const context = new WorkingContext(scope);
+  const tool = context.tool();
+  localObservationTools.add(tool);
+  const big = context.archive.readHandleFor(archivedRange(context.archive, sourceLines(270).join("\n")));
+  const small = context.archive.readHandleFor(archivedRange(context.archive, sourceLines(90).join("\n"), 1,
+    "project://Source/Game/Small.cpp"));
+  const broker = new BudgetBroker({ workingInputTargetTokens: 40000, workingInputTriggerTokens: 56000, safetyMarginTokens: 2048 });
+  const batch = broker.beginBatch({ contextLength: 84224, inputTokens: 50000, outputReserve: 8192 }, true);
+  const first = { action: "read", readHandle: big, view: "body", maxChars: 24576 };
+  const second = { action: "read", readHandle: small, view: "body", maxChars: 9000 };
+  const a = reserveReadResult(batch, "a", tool, first, context.archiveResponseBytes(first));
+  const b = reserveReadResult(batch, "b", tool, second, context.archiveResponseBytes(second));
+  assert.equal(a.allowed, true);
+  assert.equal(a.arguments.maxChars, 24576, "the exact answer fits, so the request is not lowered");
+  assert.equal(b.allowed, true, JSON.stringify(b));
+  assert.equal(context.archive.stats.reads, 0, "measuring an answer is not a read");
+  // Without the exact size the first page would take the shared allowance.
+  const blind = broker.beginBatch({ contextLength: 84224, inputTokens: 50000, outputReserve: 8192 }, true);
+  reserveReadResult(blind, "a", tool, first);
+  assert.equal(reserveReadResult(blind, "b", tool, second).allowed, false);
 });
 
 test("an archived source body reads by source-file line range and continues on whole lines", async () => {
@@ -81,7 +139,8 @@ test("an archived source body reads by source-file line range and continues on w
   while (startLine !== null) {
     const page = await tool.implementation({ action: "read", readHandle, startLine, endLine: 299, maxChars: 4096 }, environment);
     assert.equal(page.ok, true);
-    assert.ok(JSON.stringify(page).length <= 4096);
+    // A remainder of at most 1024 chars may come with the page that reaches it.
+    assert.ok(JSON.stringify(page).length <= (page.lineRangeComplete ? 4096 + 2048 : 4096));
     assert.ok(page.lineRangeComplete || page.content.endsWith("\n"));
     collected += page.content; startLine = page.nextStartLine; rounds++;
   }
@@ -321,6 +380,36 @@ test("after a projection removed the body, the identical read returns that body 
   assert.equal(third.repeatRestores, 1);
 });
 
+// Conversation 1792916809646 v1: after each projection the model restored the
+// same files again in new archive windows or by read_file, 52 rounds in all,
+// and every round counted as progress because its offsets were new.
+test("restoring spans already restored is a repeat across windows and tools", async () => {
+  const { manager, history, archiveTool } = ledgerSetup();
+  const projected = manager.project(history, {}, 512).history;
+  manager.captureExposure(projected, "body-projected", true);
+  const handle = JSON.parse(projected.getMessagesArray().at(-1).getToolCallResults()[0].content).archiveRef.readHandle;
+  const page = async (id, startOffset, maxChars, round) => {
+    const value = await archiveTool.implementation({ action: "read", readHandle: handle, view: "body", startOffset, maxChars }, environment);
+    return returnRound(manager, exchangeMessages(id, "evidence_first_read_context",
+      { action: "read", readHandle: handle, view: "body", startOffset, maxChars }, value), round);
+  };
+  // A first restore in two windows is progress both times.
+  const first = await page("p1", 0, 12000, 3);
+  const end = JSON.parse(first.messages.at(-1).getToolCallResults()[0].content).returnedRange[1];
+  assert.ok(end < characterBody.length, "the first window is partial");
+  assert.equal(first.repeatRestores, 0);
+  const second = await page("p2", end, 24576, 4);
+  assert.equal(second.repeatRestores, 0, "the rest of the body was not restored before");
+  // The whole version is now restored: another window, or a source re-read, repeats it.
+  const third = await page("p3", 2000, 4096, 5);
+  assert.equal(third.repeatRestores, 1);
+  assert.equal(third.newDeliveries, 0);
+  manager.captureExposure(manager.project(projected, {}, 512).history, "body-projected-again", true);
+  const reread = returnRound(manager, exchangeMessages("c9", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 6);
+  assert.equal(reread.repeatRestores, 1, "a read_file of a version the archive already restored whole");
+  assert.equal(reread.focusedReads, 0);
+});
+
 test("the same path with a new sha returns its full body; a narrower range keeps its body and says it is unchanged", () => {
   const { manager } = ledgerSetup();
   const changedBody = characterBody.replace("Fire() {", "Fire(int Burst) {");
@@ -358,6 +447,50 @@ test("a server no-new-information answer and an archive re-page are non-progress
   const progress = manager.observe(repage.messages);
   assert.equal(progress.archiveRepageCount, 1);
   assert.equal(progress.newArchiveUnits, 0, "restoring delivered lines is not new archive coverage");
+});
+
+// Conversation 1792929236226, r7-r12: after a projection the model re-read
+// files whose every judgment it had already reached.
+test("a whole re-read of a closed file returns its judgments once, then the body", () => {
+  const { manager, history } = ledgerSetup();
+  const key = "source/game/ledgercharacter.cpp";
+  manager.setClosedFileFacts((file, sha) => file === key && sha === shaOf("3c")
+    ? ["[found] ResetForRespawn: never called | ↳ project://Source/Game/LedgerCharacter.cpp:200 @3c3c3c3c"] : null);
+  assert.equal(manager.isClosedFile(key), true);
+  const projected = manager.project(history, {}, 512).history;
+  assert.match(projected.toString(), /CLOSED REVIEW: every judgment on this file/);
+  manager.captureExposure(projected, "body-projected", true);
+  const first = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 4);
+  const closed = resultOf(first);
+  assert.equal(closed.status, "closed_by_review_register");
+  assert.equal(closed.content, undefined, "no body");
+  assert.match(closed.reviewItems[0], /ResetForRespawn/);
+  assert.match(closed.notice, /^CLOSED: .* repeat this read if the whole body is needed/);
+  assert.equal(first.repeatRestores, 1);
+  // Asked again, the whole body comes back.
+  const again = returnRound(manager, exchangeMessages("c3", "read_file", { path: SOURCE }, readResult(SOURCE, shaOf("3c"), characterBody)), 5);
+  assert.equal(resultOf(again).content, characterBody);
+});
+
+// Conversation 1792916809646 v1, r32 and r34: the server's repeat cache
+// answered a read whose body projection had removed, and the model spent the
+// next round fetching it from the archive.
+test("a server repeat receipt for a hidden body returns the archived body", () => {
+  const { manager, history } = ledgerSetup();
+  const projected = manager.project(history, {}, 512).history;
+  manager.captureExposure(projected, "body-projected", true);
+  const server = returnRound(manager, exchangeMessages("c2", "read_file", { path: SOURCE },
+    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abc" }), 4);
+  const restored = resultOf(server);
+  assert.equal(restored.content, characterBody, "the body is back without an archive round");
+  assert.match(restored.unchangedNotice, /Same sha 3c3c3c3c/);
+  assert.equal(server.redundant, 0);
+  assert.equal(server.focusedReads, 1, "counted as a restore");
+  // The restored body is visible again, so the next receipt is a locator.
+  const other = returnRound(manager, exchangeMessages("c3", "read_file", { path: SOURCE },
+    { ok: true, duplicate: true, status: "no_new_information", originalOutcome: "success", resultDigest: "abd" }), 5);
+  assert.equal(resultOf(other).kind, "redundant_source_read");
+  assert.equal(other.redundant, 1);
 });
 
 test("a version from another record explains whose it is and that the source is unchanged", async () => {

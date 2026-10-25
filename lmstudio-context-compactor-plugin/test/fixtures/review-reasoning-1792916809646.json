@@ -1,0 +1,4 @@
+{
+  "r9": "**Issue 9: `TakeDamage` — `Super::TakeDamage(Damage, ...)` returns the actual damage; then `PS->ApplyDamage(Actual, ...)`. ACharacter's default TakeDamage implementation just returns DamageAmount (AActor::TakeDamage returns DamageAmount). So Actual == Damage. No issue.",
+  "r10": "The search is complete (filesScanned 21, coverage: complete). Confirmed the following:\n\n- `Heal()` — only called from tests. Not used in gameplay (no health regeneration loop exists). HealthRegenRate/HealthRegenDelay are never read at all → dead SSOT fields; LastDamageTime is written but never read.\n- `ResetForRespawn()` — declared + defined, never called from anywhere (respawn goes through PossessedBy → InitializeForSpawn). Dead code.\n- `HeadshotMultiplier` — only the declaration in CombatTypes.h. Never used.\n- `ReloadSound` — only the declaration. Never played.\n- `RunSpeed` — only the declaration. Never used (only WalkSpeed/CrouchSpeed are applied)."
+}

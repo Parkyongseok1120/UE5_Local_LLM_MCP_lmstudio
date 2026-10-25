@@ -126,7 +126,8 @@ export class EvidenceManager {
     return this.store?.project(history, request => {
       const matches = this.tools.filter(tool => tool.name === request.name);
       return matches.length === 1 && isObservationOnlyToolCall(matches[0], request);
-    }, { ...metadata, toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])) }, maxChars)
+    }, { ...metadata, toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])),
+      ...(this.closedFileFacts ? { closedFile: this.isClosedFile } : {}) }, maxChars)
       || { history, changed: false, reason: "disabled" };
   }
   captureExposure(history: Chat, modelInputId: string, completed = false) {
@@ -165,7 +166,18 @@ export class EvidenceManager {
   // Execution-local: archive pages this execution saw re-deliver a version
   // the ledger already held, and hidden read ranges it already restored.
   private readonly repagedPages = new Set<string>();
-  private readonly restoredReads = new Set<string>();
+  // Restored spans per file version and unit: a restore inside them is a
+  // repeat, whichever offsets the model chose (2026-10-25 run: 52 restore
+  // rounds, each a new byte or line window, never counted as re-reading).
+  private readonly restoredSpans = new Map<string, Array<[number, number]>>();
+  private readonly wholeRestores = new Set<string>();
+  /** File versions whose whole re-read was answered with their closed judgments. */
+  private readonly closedSubstitutions = new Set<string>();
+  private closedFileFacts: ((key: string, sha: string | null) => string[] | null) | null = null;
+  /** The review register's closed judgments per file (see ReviewRegister.closedFileFacts). */
+  setClosedFileFacts(provider: (key: string, sha: string | null) => string[] | null) { this.closedFileFacts = provider; }
+  /** A file whose latest delivered version has only closed judgments. */
+  isClosedFile = (key: string) => Boolean(this.closedFileFacts?.(key, this.ledger.latestFor(key)?.sourceVersion ?? null));
   // The delivered path each receipt this execution may send back stands for.
   private readonly receiptPaths = new Map<string, string>();
   private readonly handleCache = new Map<string, string | null>();
@@ -224,8 +236,16 @@ export class EvidenceManager {
           else if (!page) screening.otherResults++;
           else {
             screening.readResults++;
-            if (this.ledger.notePage(page, round)) { screening.repages++; this.repagedPages.add(archivePageKey(value!)); }
-            else screening.newDeliveries++;
+            const repage = this.ledger.notePage(page, round);
+            if (repage) { screening.repages++; this.repagedPages.add(archivePageKey(value!)); }
+            const returned = value?.returnedRange;
+            const span = Array.isArray(returned) && Number.isSafeInteger(returned[0]) && returned[1] > returned[0]
+              ? [returned[0], returned[1] - 1] as [number, number] : null;
+            const totalChars = Number(value?.totalChars);
+            if (this.noteRestore(`${page.key}\u0000${page.sourceVersion}`, `archive:${String(value?.evidenceId || "")}`, span,
+              Number.isSafeInteger(totalChars) && totalChars > 0 ? [0, totalChars - 1] : null))
+              screening.repeatRestores++;
+            else if (!repage) screening.newDeliveries++;
             if (page.bodyVerified) this.rememberVisibleRead(page);
           }
           return result;
@@ -254,9 +274,14 @@ export class EvidenceManager {
       const receiptPath = typeof receipt === "string" ? this.receiptPaths.get(receipt) : undefined;
       const entry = (receiptPath && ledger.latestFor(receiptPath)) || (typeof path === "string" ? ledger.latestFor(path) : null);
       if (!entry) return null;
+      const bodyVisible = this.visibleReads.has(`${entry.key}\u0000${entry.sourceVersion}`);
+      // The receipt stands for a body this input no longer shows: answer the
+      // read with the archived body of that version, so restoring it does not
+      // take a second round through the archive (2026-10-25 run, r32 and r34).
+      const archived = bodyVisible ? null : this.archivedReadFor(entry, request.arguments || {});
+      if (archived) return this.screenSourceRead(request, toolCallId, archived, round, screening) ?? JSON.stringify(archived);
       ledger.noteRedundant(entry, round, 0, { source: "server_repeat_receipt" });
       screening.redundant++; screening.suppressedCallIds.push(toolCallId);
-      const bodyVisible = this.visibleReads.has(`${entry.key}\u0000${entry.sourceVersion}`);
       return JSON.stringify(this.unchangedFact(entry, null, value, this.store?.archiveLocator(entry.archiveRef, true) || null, bodyVisible));
     }
     const facts = readLedgerModule.readFacts(value);
@@ -270,6 +295,24 @@ export class EvidenceManager {
     // input; once projection or compaction removed it, the read is how the
     // model restores it, whole file or focused range alike.
     const restoringHidden = verdict.status === "redundant" && !this.visibleRead(facts);
+    // A whole re-read of a file whose every judgment has its evidence in the
+    // review register restores nothing the review still needs: answer it with
+    // those judgments once. A line range, a changed sha or a repeated request
+    // still gets the body (conversation 1792929236226, r7-r12).
+    const closedKey = `${facts.key}\u0000${facts.sourceVersion}`;
+    const closed = restoringHidden && facts.complete && verdict.entry && !this.closedSubstitutions.has(closedKey)
+      ? this.closedFileFacts?.(facts.key, facts.sourceVersion) : null;
+    if (closed && verdict.entry) {
+      this.closedSubstitutions.add(closedKey);
+      const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
+      ledger.noteRedundant(verdict.entry, round, facts.chars, { source: "closed_review_file" });
+      screening.repeatRestores++; screening.suppressedCallIds.push(toolCallId);
+      return JSON.stringify({ ...this.unchangedFact(verdict.entry, facts, value, locator, false),
+        status: "closed_by_review_register", reviewItems: closed,
+        notice: `CLOSED: ${verdict.entry.path} sha ${facts.sourceVersion.slice(0, 8)} is unchanged and its ${closed.length} judgment(s) `
+          + "already carry their evidence (reviewItems; the review register). Report from them. Read a specific line range for "
+          + "anything they do not cover, or repeat this read if the whole body is needed." });
+    }
     if (verdict.status === "redundant" && verdict.entry && !restoringHidden) {
       const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
       ledger.noteRedundant(verdict.entry, round, facts.chars, locator ? {} : { bodyKept: "no_archive_locator" });
@@ -286,19 +329,47 @@ export class EvidenceManager {
     const prior = verdict.entry;
     ledger.record(facts, { round, toolName: request.name });
     this.rememberVisibleRead(facts);
-    // Restoring a hidden body is progress once per version and range: a second
-    // restore of the same one means it left the input again, a loop the
+    // Restoring a hidden body is progress once per version and span: restoring
+    // what was already restored means it left the input again, a loop the
     // stagnation guard must still see.
-    const restoreKey = restoringHidden ? `${facts.key}\u0000${facts.sourceVersion}\u0000${JSON.stringify([facts.lines, facts.bytes])}` : "";
-    if (restoreKey && this.restoredReads.has(restoreKey)) screening.repeatRestores++;
-    else if (verdict.status === "narrower" || restoringHidden) {
-      if (restoreKey) this.restoredReads.add(restoreKey);
-      screening.focusedReads++;
-    } else screening.newDeliveries++;
+    const whole: [number, number] | null = facts.lines ? (facts.totalLines ? [1, facts.totalLines] : null)
+      : facts.size ? [0, facts.size - 1] : null;
+    const repeat = restoringHidden && this.noteRestore(`${facts.key}\u0000${facts.sourceVersion}`,
+      facts.lines ? "line" : "byte", facts.lines || facts.bytes, whole);
+    if (repeat) screening.repeatRestores++;
+    else if (verdict.status === "narrower" || restoringHidden) screening.focusedReads++;
+    else screening.newDeliveries++;
     if (!prior || verdict.status === "new_version") return pending(null);
     // Same hash as an earlier delivery: say so, so "modified" can only come from a hash change.
     return pending(JSON.stringify({ ...value, unchangedSince: unchangedSince(prior),
       unchangedNotice: `Same sha ${prior.sourceVersion.slice(0, 8)} as the version delivered in ${unchangedSince(prior)}: the file is unchanged.` }));
+  }
+
+  /** The archived read of entry's version that answers these arguments: the
+   * whole file, or the same starting window. Another window is not it. */
+  private archivedReadFor(entry: LedgerEntry, args: Record<string, unknown>): Record<string, any> | null {
+    const value = this.store?.archivedValue?.(entry.archiveRef) as Record<string, any> | null | undefined;
+    const facts = value ? readLedgerModule.readFacts(value) : null;
+    if (!value || !facts || facts.key !== entry.key || facts.sourceVersion !== entry.sourceVersion) return null;
+    if (facts.complete) return value;
+    const sameStart = args.startLine !== undefined ? facts.lines?.[0] === Number(args.startLine)
+      && (args.endLine === undefined || facts.lines[1] >= Number(args.endLine))
+      : facts.bytes?.[0] === Number(args.offsetBytes ?? 0);
+    return sameStart ? value : null;
+  }
+
+  /** Records a restored span of one file version in one unit; true when
+   * earlier restores already covered it, or already restored the whole
+   * version in any unit (archive pages and source re-reads alternate). */
+  private noteRestore(version: string, unit: string, span: [number, number] | null, whole: [number, number] | null): boolean {
+    if (!span) return false;
+    const key = `${version}\u0000${unit}`, spans = this.restoredSpans.get(key) || [];
+    const repeat = this.wholeRestores.has(version) || spans.some(([start, end]) => start <= span[0] && end >= span[1]);
+    const merged = inputAvailability.normalizeRanges([...spans, span]) as Array<[number, number]>;
+    this.restoredSpans.set(key, merged);
+    if (whole && merged.some(([start, end]) => start <= whole[0] && end >= whole[1])) this.wholeRestores.add(version);
+    while (this.restoredSpans.size > 128) this.restoredSpans.delete(this.restoredSpans.keys().next().value!);
+    return repeat;
   }
 
   private rememberReceipt(receipt: string, path: string) {
@@ -349,7 +420,8 @@ export class EvidenceManager {
 
   /** Bytes the same request returned before, while its version is unchanged. */
   knownResultBytes = (name: string, args: Record<string, unknown>): number | undefined =>
-    this.ledger.knownResultBytes(repeatRequestKey(name, args));
+    name === "evidence_first_read_context" ? this.store?.archiveResponseBytes?.(args)
+      : this.ledger.knownResultBytes(repeatRequestKey(name, args));
 
   /** Accepted packet claims tied to observed source ranges. Acceptance and
    * source coverage do not independently verify the assistant's statement. */

@@ -138,6 +138,8 @@ function atomicWrite(directory, name, value) {
 // Locks are held only for synchronous, millisecond-scale sections. A lock file
 // older than this belongs to a process that died mid-section; its PID may have
 // been reused (common on Windows), so liveness alone cannot clear it.
+// A remainder this short is returned with the page that reaches it.
+const ARCHIVE_TAIL_CHARS = 1024;
 const LOCK_STALE_MS = 30 * 1000;
 const LOCK_RETRY_DELAYS_MS = Object.freeze([10, 20, 40, 80, 80]);
 const LEASE_STALE_MS = 6 * 3600 * 1000;
@@ -580,8 +582,16 @@ class EvidenceArchive {
       return r.metadata?.originRangeUnit === "line" && Number.isInteger(start) && Number.isInteger(end)
         && start <= lines.startLine && end >= (lines.endLine ?? lines.startLine);
     };
+    // Without a line range the read pages the file from its start: a whole
+    // observation, else the window that starts the file. The newest window
+    // alone was the last chunk read (2026-10-25 run, r45).
+    const origin = r => { const range = r.metadata?.originRanges;
+      return Array.isArray(range) ? { start: range[0], end: range[1] + 1 } : { start: range?.start, end: range?.endExclusive ?? range?.end, total: range?.total }; };
+    const first = r => { const { start } = origin(r); return start === 0 || (start === 1 && r.metadata?.originRangeUnit === "line"); };
+    const whole = r => { const { end, total } = origin(r); return first(r) && Number.isInteger(total) && end >= total; };
     const record = (lines?.startLine !== undefined
-      && (latest.find(covers) || latest.find(r => r.metadata?.originRangeUnit === "line"))) || latest[0];
+      ? latest.find(covers) || latest.find(r => r.metadata?.originRangeUnit === "line")
+      : latest.find(whole) || latest.find(first)) || latest[0];
     return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view, lines);
   }
 
@@ -775,10 +785,12 @@ class EvidenceArchive {
         evidenceId: id, version, currentFile: false, grantsMutation: false };
       start = lineView.start; limit = lineView.end;
     }
+    // A continuation page repeats the identity its first page carried; the
+    // digest keys it, so the page keeps only the path.
     const base = { ok: true, kind: "historical_evidence_range", evidenceId: id, version,
       originalCallId: r.metadata?.providerRequestId,
       sourceHash: r.sourceHash, sourceVersion: r.metadata?.sourceVersion,
-      sourceIdentity: identity, sourceIdentityDigest: r.metadata?.sourceIdentityDigest || "unknown-source",
+      sourceIdentity: start > 0 && !lineView && identity.path ? { path: identity.path } : identity, sourceIdentityDigest: r.metadata?.sourceIdentityDigest || "unknown-source",
       toolName: r.metadata?.toolName, resultStatus: r.metadata?.resultStatus,
       errorCode: r.metadata?.errorCode ?? null,
       sourceRange: r.metadata?.originRanges || (Number.isInteger(sourceFacts.offsetBytes)
@@ -840,6 +852,17 @@ class EvidenceArchive {
         recommendedMaxChars: Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars,
           Math.max(ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, serialized.length + ARCHIVE_READ_CONTRACT.minimumBodyChars)),
         currentFile: false, grantsMutation: false };
+    }
+    // A short remainder comes with this page: the envelope takes most of a
+    // small budget, so the last few hundred chars cost a model round each
+    // (2026-10-25 run: 709 chars of Character.h in three rounds).
+    if (end > start && end < limit && limit - end <= ARCHIVE_TAIL_CHARS) {
+      const kept = end;
+      end = limit;
+      const extended = response(), extendedChars = JSON.stringify(extended).length;
+      if (extendedChars <= Math.min(ARCHIVE_READ_CONTRACT.maximumEnvelopeChars, totalBudget + 2 * ARCHIVE_TAIL_CHARS)) {
+        result = extended; serialized = JSON.stringify(extended);
+      } else end = kept;
     }
     this.stats.returnedChars += end - start;
     return result;

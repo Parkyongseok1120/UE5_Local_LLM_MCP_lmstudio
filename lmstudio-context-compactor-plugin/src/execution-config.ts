@@ -2,7 +2,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
-import { NUMERIC_FIELDS, type NumericField } from "./config-defaults";
+import { NUMERIC_FIELDS, REPORT_REVIEW_DEFAULT, type NumericField } from "./config-defaults";
 import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
 import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction, type WorkingInputScaling } from "./execution-contracts";
 import {
@@ -77,6 +77,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     hardRemainingTokens: read("hardRemainingTokens"),
     maxOutputReserve,
     outputRecoveryMode: outputRecoveryMode(config.get("outputRecoveryMode")),
+    reportReviewMode: config.get("reportReviewMode") === "off" ? "off" : REPORT_REVIEW_DEFAULT,
     reasoningRecoveryMode: outputRecoveryMode(config.get("reasoningRecoveryMode")),
     outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
     outputRecoverySeconds: read("outputRecoverySeconds"),

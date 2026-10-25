@@ -1,0 +1,63 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "prediction-loop owns captured assistant rounds, runtime facts and execution finalization",
+    "ContextManager checkpointOptions feeds direct-compaction-core assistant evidence",
+    "WorkingContext owns prioritized pinned source results"
+  ],
+  "proposed": [
+    "Execution-scoped review register from reasoning and visible lines; register-backed checkpoint findings",
+    "One tool-free report_review continuation with omission/engine-contract inputs",
+    "Measured half/quarter/zero pin budgets"
+  ],
+  "doNotDuplicate": [
+    "Reuse visibleAssistantText, engine catalogue anchoring, continuationController and reportContinuation",
+    "Reuse pin priority selection and currentTurnFindings forUserTurn hashing"
+  ],
+  "invariants": [
+    "Working notes are not verified facts",
+    "Latest status wins; cleared findings are not missing-report obligations",
+    "At most one review per execution, zero tools; context failure preserves prefix and footer",
+    "Checkpoint findings remain scoped to the same user turn",
+    "Priority pins are reduced only while measured pressure remains"
+  ],
+  "impactedSurfaces": [
+    "plugin src/review-register.ts and shared patterns",
+    "prediction-loop/context-manager/direct-compaction-core/internal-data-output",
+    "config/defaults/instructions/contracts and round-input",
+    "unit/integration/replay tests and runtime package allowlist"
+  ],
+  "validationPlan": [
+    "Extract source excerpts from saved conversation 1792916809646",
+    "Run targeted tests, full plugin suite, generated contract --check and build identity",
+    "UPDATE.bat dry run and update, then safe LM Studio restart and same-prompt runtime audit if available"
+  ],
+  "claims": [
+    {
+      "id": "implementation-plan",
+      "claim": "Existing runtime facts and continuation paths can host the requested register and single report review without a second evidence ledger.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "Proposed",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:252",
+          "observation": "Execution owns runtimeFacts and reportContinuation; research output recovery schedules a tool-free finalization."
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js:93",
+          "observation": "Current findings only read visible text, so the new register must supply checkpoint rows explicitly."
+        }
+      ],
+      "unknowns": [
+        "Actual model behavior after deployment remains to be observed."
+      ],
+      "behaviorPath": []
+    }
+  ]
+}

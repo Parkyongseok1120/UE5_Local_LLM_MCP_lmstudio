@@ -15,6 +15,7 @@ import { RUNTIME_DATA_INSTRUCTION } from "./execution-instructions";
 import { visibleAssistantOutput } from "./raw-tool-intent";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
+import { REVIEW_REGISTER_HEADER } from "./review-patterns.js";
 
 type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
   tokenCountCalls: number; contextLengthCalls: number; cacheHits: number };
@@ -223,6 +224,7 @@ export function composeModelHistory(
   referenceData?: string,
   runtimeFacts: Array<string> = [],
   shownBlocks?: ShownDataBlocks,
+  consolidateShown = false,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -291,7 +293,11 @@ export function composeModelHistory(
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
     const chars = (parts: ReadonlyArray<string>) => parts.reduce((sum, part) => sum + part.length, 0);
     const shownChars = chars([...blocks.values()].flat());
-    if (shownChars > Math.max(RUNTIME_DATA_CONSOLIDATE_MIN_CHARS, 2 * chars(runtimeParts))) {
+    // A round that rewrites its input (projection, compaction) consolidates
+    // superseded copies in that same rewrite: they had grown to 28K chars
+    // between thresholds (conversation 1792916809646 v1).
+    if (shownChars > Math.max(RUNTIME_DATA_CONSOLIDATE_MIN_CHARS, 2 * chars(runtimeParts))
+      || consolidateShown && shownChars > chars(runtimeParts)) {
       // Earlier blocks now hold more superseded copies than current data
       // (2026-10-25 run: 33K chars of data slots for about 12K of current
       // facts). One rewrite replaces them with the current data at the newest
@@ -315,10 +321,11 @@ export function composeModelHistory(
     if (!message.isSystemPrompt()) composed.append(message);
   });
   const latestUserText = latestUser >= 0 ? messages[latestUser].getText() : "";
-  const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:"];
+  const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:",
+    REVIEW_REGISTER_HEADER];
   const sentParts = [...blocks.values()].flat();
   const privateDataParts = sentParts.filter(part =>
-    part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data")
+    part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data") || part.startsWith("[Delivered report")
     || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
   // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
   const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
@@ -330,7 +337,7 @@ export type ShownDataBlocks = ReadonlyMap<string, readonly string[]>;
 
 /** Line-structured parts re-rendered every round with mostly the same rows. */
 const INCREMENTAL_PART_HEADERS = ["[Available tool-call refs]", "Runtime read ledger (kept across compaction)",
-  "Runtime evidence observation:"];
+  "Runtime evidence observation:", REVIEW_REGISTER_HEADER];
 const DERIVED_HEADER = "[Derived reference data";
 /** Data slots are rewritten once they exceed this and twice the current data. */
 const RUNTIME_DATA_CONSOLIDATE_MIN_CHARS = 6000;
@@ -432,6 +439,9 @@ export type InputAssemblyOptions = {
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
   /** Execution-scoped data blocks already sent; read only here. */
   shownDataBlocks?: ShownDataBlocks;
+  /** True while this round rewrites its input anyway: earlier data blocks are
+   * consolidated in the same rewrite instead of outliving it. */
+  consolidateDataBlocks?: () => boolean;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
@@ -469,7 +479,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -523,7 +533,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -536,7 +546,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -715,21 +725,44 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         { name: "mandatory_floor", options: { maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" } },
       ];
       // Complete exchanges are indivisible. Never assume token sizes are monotone.
-      for (const choice of candidates) {
-        const candidate = choice.name === "mandatory_floor" ? floorCandidate
-          : buildCompactedHistory(history, choice.recentTurns ?? 0, this.config, { ...this.checkpointOptions, requiredIndexes, ...choice.options });
+      const attempt = async (name: string, choiceOptions: Record<string, unknown>, recentTurns = 0,
+        ceiling = water.effectiveLowWaterTokens) => {
+        const candidate = name === "mandatory_floor" ? floorCandidate
+          : buildCompactedHistory(history, recentTurns, this.config, { ...this.checkpointOptions, requiredIndexes, ...choiceOptions });
         const input = candidate.history === history ? before
-          : choice.name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
-        const accepted = input.measurement.exact && input.measurement.inputTokens <= water.effectiveLowWaterTokens
+          : name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
+        const accepted = input.measurement.exact && input.measurement.inputTokens <= ceiling
           && input.measurement.inputTokens <= water.hardInputCeiling
           && this.broker.watermarks(input.measurement, floor.measurement.inputTokens,
             options.hasReadTools, options.minimumReadTokens).nextActionFit;
-        measurements.push({ candidate: choice.name, finalExactInputTokens: input.measurement.inputTokens, accepted });
-        if (accepted) {
-          selected = {
-history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
-            name: choice.name
-}; break;
+        measurements.push({ candidate: name, finalExactInputTokens: input.measurement.inputTokens, accepted });
+        return accepted ? { history: candidate.history, assembled: input, checkpoint: candidate.checkpoint, name } : null;
+      };
+      let selectedChoice: (typeof candidates)[number] | null = null;
+      for (const choice of candidates) {
+        const accepted = await attempt(choice.name, choice.options, choice.recentTurns ?? 0);
+        if (accepted) { selected = accepted; selectedChoice = choice; break; }
+      }
+      // A cap that halves the kept exchanges can cut far below low water
+      // (conversation 1792916809646 v0 r19: 55.1K to 35.6K for a 47.7K
+      // target). Keep the most exchanges between the rejected cap above and
+      // the accepted one that still reaches low water, leaving a quarter of the
+      // gap to high water as growth room so the next rewrite does not follow at once.
+      const refinedCeiling = water.effectiveLowWaterTokens
+        - Math.max(0, Math.floor((water.effectiveHighWaterTokens - water.effectiveLowWaterTokens) / 4));
+      const capOf = (name: string) => Number(/complete_exchange_cap_(\d+)$/u.exec(name)?.[1] ?? NaN);
+      if (selectedChoice && Number.isInteger(capOf(selectedChoice.name))
+        && selected.assembled.measurement.inputTokens < refinedCeiling) {
+        const family = selectedChoice.name.replace(/\d+$/u, "");
+        let low = capOf(selectedChoice.name);
+        // With no rejected cap above it, keeping the whole turn (the rejected
+        // recent-turn candidates) bounds it.
+        let high = Math.min(...measurements.filter(m => !m.accepted && m.candidate.startsWith(family)
+          && capOf(m.candidate) > low).map(m => capOf(m.candidate)), history.length);
+        while (high - low > 1) {
+          const mid = Math.floor((low + high) / 2);
+          const refined = await attempt(`${family}${mid}`, { ...selectedChoice.options, maxCurrentTurnMessages: mid }, 0, refinedCeiling);
+          if (refined) { selected = refined; low = mid; } else high = mid;
         }
       }
     }

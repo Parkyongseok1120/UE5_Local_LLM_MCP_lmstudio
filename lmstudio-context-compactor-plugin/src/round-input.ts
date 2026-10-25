@@ -39,6 +39,8 @@ type RoundInputOptions = {
   semanticSummaryCooldownUntilRound: number; objectiveFingerprint: string;
   finalizing: boolean; boundedAudit: boolean; researchRecoveryEpisodeStarted: boolean; allowReadRecovery: boolean;
   reasoningRecovery?: boolean;
+  /** An output cap above maxOutputReserve that headroom bounds (final reports). */
+  headroomOutputCap?: boolean;
   reportContinuation?: string;
   guidanceDocuments?: readonly GuidanceDocument[];
   guidanceIntent?: GuidanceIntent;
@@ -65,6 +67,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // projectionApplied also records projections of recovery candidates; this
   // records only a projection of the input this round adopts.
   let workingInputProjected = false;
+  // Set once this round rewrites its input, before the rewritten input is assembled.
+  let rewritingInput = false;
+  // Releasing every pin still left the input over high water: the working set
+  // no longer fits, and restoring it again would only repeat this rewrite.
+  let projectionExhausted = false;
   const minimumReadBudget = (tools: RemoteToolLike[]) => minimumReadResultTokens(
     tools.filter(hasReadCapability), Boolean(workingContext?.hasArchivedEvidence));
   let outputCapSource: "configured" | "headroom_clamp" = "configured";
@@ -82,7 +89,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
     getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
-    shownDataBlocks: options.shownDataBlocks });
+    shownDataBlocks: options.shownDataBlocks, consolidateDataBlocks: () => rewritingInput || compacted });
   const assembleRecoveryCandidate = async (sourceHistory: Chat, tools: RemoteToolLike[], instruction: string,
     candidateModelInputId: string) => {
     const desiredMaxTokens = Math.min(config.maxOutputReserve, RESEARCH_RECOVERY_MAX_TOKENS);
@@ -137,7 +144,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       fit: finalBudget.fit && assembled.measurement.remainingTokens >= 0 && low.canRun };
   };
   let assembledInput = await assembleModelInput(workingHistory);
-  if (options.reasoningRecovery && !config.observeOnly && roundOutputReserve > config.maxOutputReserve) {
+  if ((options.reasoningRecovery || options.headroomOutputCap) && !config.observeOnly && roundOutputReserve > config.maxOutputReserve) {
     const measured = assembledInput.measurement;
     const budget = resolveGenerationBudget({ desiredMaxTokens: roundOutputReserve, contextLength: measured.contextLength,
       inputTokens: measured.inputTokens, safetyMarginTokens: config.safetyMarginTokens, minimumTokens: MIN_FINAL_OUTPUT_TOKENS });
@@ -162,26 +169,32 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     const water = contextManager.broker.watermarks(assembledInput.measurement, 0, hasReadTools, minimumReadBudget(roundTools));
     const beforeInputTokens = assembledInput.measurement.inputTokens;
     const pinnedWorkingSetMaxChars = contextManager.broker.pinnedWorkingSetChars(water);
+    let pinnedWorkingSetFinalChars = pinnedWorkingSetMaxChars;
     const project = (pinnedChars: number) => evidenceManager.project(workingHistory,
       { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRaw: true,
         pinnedWorkingSetMaxChars: pinnedChars },
       config.toolResultProjectionChars);
     let projected = project(pinnedWorkingSetMaxChars);
     if (projected.changed) {
-      workingHistory = projected.history;
+      workingHistory = projected.history; rewritingInput = true;
       assembledInput = await assembleModelInput(workingHistory);
     }
     // The working set yields when keeping it leaves the input over high water.
     let pinsReleased = false;
-    if (contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools, minimumReadBudget(roundTools),
-      retainedGuidanceTokens)) {
-      const released = project(0);
+    let changed = projected.changed;
+    for (const pinBudget of [Math.floor(pinnedWorkingSetMaxChars / 2), Math.floor(pinnedWorkingSetMaxChars / 4), 0]) {
+      if (!contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools, minimumReadBudget(roundTools),
+        retainedGuidanceTokens)) break;
+      const released = project(pinBudget);
+      pinnedWorkingSetFinalChars = pinBudget;
+      pinsReleased = pinBudget === 0;
       if (released.changed) {
-        projected = released; pinsReleased = true; workingHistory = released.history;
+        projected = released; changed = true; rewritingInput = true; workingHistory = released.history;
         assembledInput = await assembleModelInput(workingHistory);
       }
     }
-    const changed = projected.changed || pinsReleased;
+    projectionExhausted = pinsReleased && contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools,
+      minimumReadBudget(roundTools), retainedGuidanceTokens);
     let reasoningBounded = false;
     if (changed) {
       projectionApplied = true; workingInputProjected = true;
@@ -209,7 +222,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
       changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
       reasoningBounded, beforeInputTokens, inputTokens: assembledInput.measurement.inputTokens,
-      pinnedWorkingSetMaxChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact });
+      pinnedWorkingSetMaxChars, pinnedWorkingSetFinalChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact });
   }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const measurePressure = async () => {
@@ -251,7 +264,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
           pinnedWorkingSetMaxChars: 0 },
         config.toolResultProjectionChars);
       if (projected.changed) {
-        workingHistory = projected.history; projectionApplied = true; workingInputProjected = true;
+        workingHistory = projected.history; projectionApplied = true; workingInputProjected = true; rewritingInput = true;
         deepenLowWater = true;
         assembledInput = await assembleModelInput(workingHistory);
       }
@@ -473,7 +486,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   return { kind: "ready" as const, ...baseResult(), before, workingHistory, modelHistory: workingHistory,
     modelComposition: assembledInput.composition, modelInput: assembledInput.history, finalMeasurement, assembledInput,
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
-    lowWater, projectionApplied, roundOutputReserve, outputCapSource, assembleRecoveryCandidate,
+    lowWater, projectionApplied, projectionExhausted, roundOutputReserve, outputCapSource, assembleRecoveryCandidate,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
     mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
       && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };

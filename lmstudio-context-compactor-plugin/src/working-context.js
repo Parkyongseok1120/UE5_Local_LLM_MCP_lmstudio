@@ -140,18 +140,28 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
     if (!facts || (!facts.lines && !facts.bytes)) return;
     const key = `${facts.key}\u0000${JSON.stringify([facts.lines, facts.bytes])}`;
     reads.delete(key);
-    reads.set(key, { file: facts.key, version: facts.sourceVersion,
+    reads.set(key, { file: facts.key, version: facts.sourceVersion, complete: facts.complete === true && !facts.partialPage,
       key: `${messageIndex}:${resultIndex}`, messageIndex, size: envelope.length, sequence: sequence++ });
     versions.set(facts.key, facts.sourceVersion);
   }));
+  // A complete read of a version supersedes its partial windows: pinning
+  // those too spent the budget on copies (2026-10-25 run, r11: three reads of
+  // each data asset header pinned while Character.h was cut to 512 chars).
+  const completeAt = new Map();
+  for (const read of reads.values()) if (read.complete && read.version === versions.get(read.file))
+    completeAt.set(read.file, Math.max(completeAt.get(read.file) ?? -1, read.sequence));
+  for (const [key, read] of reads) if (completeAt.has(read.file) && read.sequence !== completeAt.get(read.file)) reads.delete(key);
   const cited = edited.size ? new Map() : citedLineRanges(messages.slice(turnStart + 1));
   const isCited = file => {
     const own = fileKey(file), stem = fileStem(own);
     return [...cited.keys()].some(key => key.startsWith("stem:") ? namesMatch(key.slice(5), stem) : namesMatch(key, own));
   };
   const useOf = file => Number(metadata.readUse?.(file)) || 0;
+  // A file whose judgments are all closed with their evidence is not still
+  // under investigation: it yields its pin to the files that are.
   const candidates = [...reads.values()]
-    .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file)))
+    .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file))
+      && !(edited.size === 0 && metadata.closedFile?.(read.file)))
     .map(read => ({ ...read, cited: isCited(read.file), use: useOf(read.file) }))
     .sort((a, b) => Number(b.cited) - Number(a.cited) || b.use - a.use || b.sequence - a.sequence);
   const pinnedFiles = new Set();
@@ -588,6 +598,15 @@ class WorkingContext {
     return locator;
   }
 
+  /** The archived result object of a still-readable record, or null. */
+  archivedValue(ref) {
+    if (!ref?.evidenceId || !ref?.version) return null;
+    const loaded = this.archive.load(ref.evidenceId);
+    if (!loaded.ok || loaded.record.archivedBodyHash !== ref.version) return null;
+    const value = decodeToolResultRecord(loaded.record.body).value;
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+
   summaryRefs() {
     return new Set(this.summaryEvidence().map(item => item.ref));
   }
@@ -737,6 +756,10 @@ class WorkingContext {
           fullRawProvided: false, currentFile: false, grantsMutation: false,
           ...(outline ? { sourceOutline: outline } : {}),
           excerpt: "" };
+        // A closed file points at its judgments, not at paging the body back.
+        const closedNotice = bodyFirst && metadata.closedFile?.(pathKey(identity.path ?? parsed.path ?? ""))
+          ? `CLOSED REVIEW: every judgment on this file is in the review register with its evidence; re-read it only if its sha `
+            + `changes or for a line range those judgments do not cover (readHandle=${projection.archiveRef.readHandle})` : "";
         if (bodyFirst) {
           compactBodyProjection(projection);
           // Lines the model cited later are the ones it will quote again.
@@ -746,7 +769,7 @@ class WorkingContext {
               omittedBodyRanges: complementRanges(cited.ranges, boundedBody.length),
               bodyOmittedChars: boundedBody.length - cited.shown, bodyComplete: false, excerpt: cited.excerpt,
               projectionCoverage: "partial",
-              notice: `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
+              notice: closedNotice || `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
             const citedContent = JSON.stringify(projection);
             if (citedContent.length < originalEnvelope.length) { changed = true; return { ...result, content: citedContent }; }
           }
@@ -771,7 +794,7 @@ class WorkingContext {
           const shown = Math.min(projectedEnd, total);
           projection.projectionCoverage = shown < total ? "partial" : "complete";
           if (shown < total) {
-            projection.notice = `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
+            projection.notice = closedNotice || `PARTIAL BODY: chars 0-${shown} of ${total}; page with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}`
               + (outline ? "; sourceOutline lists declaration line spans to re-read with a line-range source read" : "");
           } else delete projection.notice;
         };
@@ -808,7 +831,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or path alone for the newest archived body of that file, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or path alone to page the newest archived version of that file from its start, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content; a remainder of 1024 chars or less comes with the page that reaches it. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -834,20 +857,38 @@ class WorkingContext {
             || args.continuation && args.catalogVersion === 1) return { ok: false, errorCode: "pagination_conflict" };
           return args.catalogVersion === 2 || args.continuation ? this.archive.catalogPage(args) : this.archive.catalog(args);
         }
-        if (args.endLine !== undefined && args.startLine === undefined) return { ok: false, errorCode: "start_line_required" };
-        if ((args.startLine !== undefined || args.symbol !== undefined) && args.startOffset !== undefined
-          || args.symbol !== undefined && args.startLine !== undefined) return { ok: false, errorCode: "pagination_conflict" };
-        const lines = args.symbol !== undefined ? { symbol: String(args.symbol) }
-          : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
-        const maxChars = args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars;
-        const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
-          args.startOffset ?? 0, maxChars, args.view ?? "body", lines, args.path)
-          : args.evidenceId === undefined && args.version === undefined && typeof args.path === "string"
-            ? this.archive.readByPath(args.path, args.startOffset ?? 0, maxChars, args.view ?? "body", lines)
-            : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, maxChars,
-              args.view ?? (lines ? "body" : "envelope"), lines);
-        return this.explainArchiveError(result);
+        return this.archiveRead(args);
       } });
+  }
+
+  /** One archive read (not a catalog), as the tool answers it. */
+  archiveRead(args) {
+    if (args.endLine !== undefined && args.startLine === undefined) return { ok: false, errorCode: "start_line_required" };
+    if ((args.startLine !== undefined || args.symbol !== undefined) && args.startOffset !== undefined
+      || args.symbol !== undefined && args.startLine !== undefined) return { ok: false, errorCode: "pagination_conflict" };
+    const lines = args.symbol !== undefined ? { symbol: String(args.symbol) }
+      : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
+    const maxChars = args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars;
+    const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
+      args.startOffset ?? 0, maxChars, args.view ?? "body", lines, args.path)
+      : args.evidenceId === undefined && args.version === undefined && typeof args.path === "string"
+        ? this.archive.readByPath(args.path, args.startOffset ?? 0, maxChars, args.view ?? "body", lines)
+        : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, maxChars,
+          args.view ?? (lines ? "body" : "envelope"), lines);
+    return this.explainArchiveError(result);
+  }
+
+  /** UTF-8 size of what an archive read will return, without counting it as
+   * a read. The archive is local, so its answer can be reserved exactly
+   * rather than at the maxChars contract's CJK worst case (2026-10-25 run, r10:
+   * one page held the whole batch and its peer was denied). */
+  archiveResponseBytes(args) {
+    if (args?.action !== "read" || (args.readHandle && (args.evidenceId !== undefined || args.version !== undefined))) return undefined;
+    const stats = { ...this.archive.stats };
+    try {
+      const result = this.archiveRead(args);
+      return result?.ok === true ? Buffer.byteLength(JSON.stringify(result)) : undefined;
+    } finally { Object.assign(this.archive.stats, stats); }
   }
 
   /** A version_mismatch names an archive record digest, never a source edit.

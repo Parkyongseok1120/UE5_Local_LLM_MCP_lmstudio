@@ -21,10 +21,31 @@ export class DeliveryController {
   // and an interrupted earlier generation must never count as delivered work.
   beginRound() { this.observation = { reportText: "" }; }
   retainReportPrefix(text: string) { this.priorReportPresent ||= Boolean(text.trim()); }
+  /** The report the user already has and the follow-up round that extends it:
+   * a review supplement after a complete report, or the continuation of a cut one. */
+  private supplement: { kind: "report_review" | "output_recovery"; reportComplete: boolean } | null = null;
+  beginSupplement(kind: "report_review" | "output_recovery", reportComplete: boolean) {
+    this.supplement = { kind, reportComplete };
+  }
   private includePriorReport(outcome: ExecutionOutcome): ExecutionOutcome {
-    return this.priorReportPresent ? { ...outcome, reportPresent: true,
+    if (!this.priorReportPresent) return outcome;
+    const merged: ExecutionOutcome = { ...outcome, reportPresent: true,
       deliveryState: outcome.deliveryState === "no_answer" ? "partial" : outcome.deliveryState,
-      reportState: outcome.reportState === "no_answer" ? "partial_report" : outcome.reportState } : outcome;
+      reportState: outcome.reportState === "no_answer" ? "partial_report" : outcome.reportState };
+    if (!this.supplement) return merged;
+    // The delivered report and its follow-up are recorded apart: an empty
+    // supplement does not undeliver the report the user already has
+    // (conversation 1792929236226: reportDelivered:false after a complete report).
+    // A budget-blocked follow-up never ran and keeps its own reason.
+    const blocked = /context_budget/u.test(outcome.reason);
+    const empty = !blocked && (outcome.deliveryState === "no_answer" || outcome.reason === "empty_visible_output");
+    const stopped = ["timed_out", "canceled"].includes(outcome.executionOutcome);
+    const supplement = { kind: this.supplement.kind,
+      state: stopped ? "stopped" : blocked ? "blocked" : empty ? "empty" : "delivered" } as const;
+    if (!this.supplement.reportComplete || stopped || !(empty || blocked)) return { ...merged, reportDelivered: true, supplement };
+    return { ...merged, executionOutcome: "completed", reason: blocked ? outcome.reason : `${this.supplement.kind}_empty`,
+      reportDelivered: true, reportCompleted: true, deliveryState: "complete", reportState: "report",
+      taskCompleted: outcome.objectiveSatisfied === true, supplement };
   }
   observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown }, timedOut = false) {
     this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
