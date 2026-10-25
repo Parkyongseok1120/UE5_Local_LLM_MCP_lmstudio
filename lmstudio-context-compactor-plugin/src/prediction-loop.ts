@@ -232,7 +232,8 @@ export function createPredictionLoopHandler(
     const execution = finalExecution = new ExecutionState();
     const budgetBroker = new BudgetBroker(config);
     const contextManager = new ContextManager(config, budgetBroker, { changeOrigin: evidenceManager.changeOrigin },
-      history => workingContext?.pendingResultIndexes(history) || []);
+      history => workingContext?.pendingResultIndexes(history) || [],
+      (history, maxChars) => workingContext?.pinnedResultIndexes(history, maxChars) || []);
     const deliveryController = terminalOwner = new DeliveryController(allModelTools);
     const recoveryCoordinator = execution.recovery;
 
@@ -475,8 +476,11 @@ export function createPredictionLoopHandler(
           evidenceManager.captureExposure(modelInput, modelInputId, false);
         }
         // This input is final: its new data block, if any, is now part of what was sent.
-        if (modelComposition && "dataBlock" in modelComposition && modelComposition.dataBlock)
+        if (modelComposition && "dataBlock" in modelComposition && modelComposition.dataBlock) {
+          // A consolidated block replaces every earlier one.
+          if (modelComposition.dataBlock.replacesShown) shownDataBlocks.clear();
           shownDataBlocks.set(modelComposition.dataBlock.anchor, modelComposition.dataBlock.parts);
+        }
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
           {
 model: String((tokenSource as { identifier?: unknown }).identifier || "unknown"), contextLength: finalMeasurement.contextLength,
@@ -554,6 +558,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             mode: config.contextManagementMode,
             inputTargetTokens: config.workingInputTargetTokens,
             inputTriggerTokens: config.workingInputTriggerTokens,
+            runtimeDataChars: modelComposition?.runtimeDataChars ?? 0,
             targetMet: finalMeasurement.exact
               ? finalMeasurement.inputTokens <= config.workingInputTargetTokens : null,
             mandatoryFloorTokens: mandatoryFloorMeasurement?.exact
@@ -747,7 +752,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
                 }
               }
               liveMessages.set(message, { visibleMessage, textStreamed });
-              roundEmitter.emit(visibleMessage, textStreamed);
+              roundEmitter.emit(visibleMessage, textStreamed, true);
               displayedMessages.add(message);
             },
             guardToolCall: createToolGuard({
@@ -778,7 +783,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // UNCHANGED facts; the user's transcript keeps every returned body.
         const screening = config.observeOnly
           ? { messages: captured.messages, replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, newDeliveries: 0,
-            readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, pending: [], suppressedCallIds: [] }
+            readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, repeatRestores: 0, pending: [], suppressedCallIds: [] }
           : evidenceManager.screenReturnedReads(captured.messages, roundIndex);
         const historyReplacements = new Map(captured.messages.map((message, index) => [message, screening.messages[index]]));
         evidenceManager.captureReturned(screening.messages, executionId, modelInputId);
@@ -786,6 +791,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (config.showDebugInfo && (screening.readResults || screening.replaced)) ctl.debug({ event: "read_ledger", executionId,
           modelInputId, roundIndex, readResults: screening.readResults, newDeliveries: screening.newDeliveries,
           redundantRereads: screening.redundant, duplicatedChars: screening.duplicatedChars, archiveRepages: screening.repages,
+          restoredReads: screening.focusedReads, repeatRestores: screening.repeatRestores,
           failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds,
           ledger: evidenceManager.ledger.stats(),
           events: evidenceManager.ledger.events.filter(event => event.round === roundIndex + 1).slice(0, 16) });
@@ -850,7 +856,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
                 }
                 noteLifecycle = update.kind;
               } else {
-                noteLifecycle = noteEnabled ? "rejected_invalid" : "ignored_disabled";
+                // A well-formed note on a round that commits no planning (a
+                // final report) is not applied, but it is not invalid either.
+                noteLifecycle = !noteEnabled ? "ignored_disabled"
+                  : extracted.note && !transaction.planningCommitted ? "ignored_uncommitted_round" : "rejected_invalid";
               }
             }
           }
@@ -858,6 +867,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if (durableMessage) workingHistory.append(durableMessage);
           if (!displayedMessages.has(message)) roundEmitter.emit(visibleMessage, textAlreadyStreamed);
         }
+        roundEmitter.flushDeferred();
         visibleHistory = visibleTranscript.snapshot();
         const interruption = transaction.interruptionMessage(runtimeToolTrace.values());
         if (interruption) workingHistory.append(interruption);
@@ -1160,9 +1170,12 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
           // Historical novelty and restoring evidence needed in the current
           // input are different. Failed reads establish neither unchangedness nor completion.
+          // A round that only restored bodies it had already restored once is
+          // re-reading, though the restore regains current availability.
+          const onlyRepeatRestores = screening.repeatRestores > 0 && screening.repages === 0;
           const noNewEvidence = screening.readResults > 0 && screening.failedReads === 0
             && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
-            && recoveryProgress.restoredWorkingEvidenceUnits === 0;
+            && (recoveryProgress.restoredWorkingEvidenceUnits === 0 || onlyRepeatRestores);
           noNewEvidenceRounds = noNewEvidence ? noNewEvidenceRounds + 1 : 0;
           if (!noNewEvidence) { runtimeFacts.delete("report_now"); reportNowTriggers = 0; }
           if (noNewEvidence && noNewEvidenceRounds >= config.noNewEvidenceRounds) {

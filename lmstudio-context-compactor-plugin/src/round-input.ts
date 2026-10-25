@@ -153,14 +153,37 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // the system message and costs a full prompt rebuild, so the round that must
   // rewrite the input makes room for it instead.
   const retainedGuidanceTokens = options.guidanceRetention?.kept?.tokens ?? 0;
+  const hasReadTools = roundTools.some(hasReadCapability);
+  // Set when this round rewrites its input anyway and is close enough to high
+  // water that the same rewrite should also reach low water (plan B2).
+  let deepenLowWater = false;
   if (workingContext && !finalizing && contextManager.shouldProjectEvidence(assembledInput.measurement,
-    roundTools.some(hasReadCapability), minimumReadBudget(roundTools), retainedGuidanceTokens)) {
-    const projected = evidenceManager.project(workingHistory,
-      { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRaw: true },
+    hasReadTools, minimumReadBudget(roundTools), retainedGuidanceTokens)) {
+    const water = contextManager.broker.watermarks(assembledInput.measurement, 0, hasReadTools, minimumReadBudget(roundTools));
+    const beforeInputTokens = assembledInput.measurement.inputTokens;
+    const pinnedWorkingSetMaxChars = contextManager.broker.pinnedWorkingSetChars(water);
+    const project = (pinnedChars: number) => evidenceManager.project(workingHistory,
+      { executionId, roundIndex, modelInputId, proofLevel: "returned_tool_result", preserveUnconsumedRaw: true,
+        pinnedWorkingSetMaxChars: pinnedChars },
       config.toolResultProjectionChars);
-    let reasoningBounded = false;
+    let projected = project(pinnedWorkingSetMaxChars);
     if (projected.changed) {
       workingHistory = projected.history;
+      assembledInput = await assembleModelInput(workingHistory);
+    }
+    // The working set yields when keeping it leaves the input over high water.
+    let pinsReleased = false;
+    if (contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools, minimumReadBudget(roundTools),
+      retainedGuidanceTokens)) {
+      const released = project(0);
+      if (released.changed) {
+        projected = released; pinsReleased = true; workingHistory = released.history;
+        assembledInput = await assembleModelInput(workingHistory);
+      }
+    }
+    const changed = projected.changed || pinsReleased;
+    let reasoningBounded = false;
+    if (changed) {
       projectionApplied = true; workingInputProjected = true;
       // This rewrite already discards the reusable prefix, so older reasoning
       // goes in the same rewrite: it would otherwise outlive the bodies it
@@ -173,11 +196,20 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         reasoningBounded = bounded !== workingHistory;
         workingHistory = bounded;
       }
-      assembledInput = await assembleModelInput(workingHistory);
+      if (reasoningBounded) assembledInput = await assembleModelInput(workingHistory);
     }
+    // Reach low water in this rewrite only when the input (with the retained
+    // instruction) is still above the midpoint: far below it, cutting whole
+    // exchanges saves no rewrite soon and loses the turn's own progress. An
+    // unchanged projection that cannot make room would otherwise drop the
+    // retained instruction alone, a full prompt rebuild that reclaims nothing
+    // (2026-10-25 run, r18 then r19: two rebuilds in a row).
+    const settled = assembledInput.measurement.inputTokens + retainedGuidanceTokens;
+    deepenLowWater = settled > (water.effectiveLowWaterTokens + water.effectiveHighWaterTokens) / 2;
     if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
-      changed: projected.changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
-      reasoningBounded, inputTokens: assembledInput.measurement.inputTokens, exact: assembledInput.measurement.exact });
+      changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
+      reasoningBounded, beforeInputTokens, inputTokens: assembledInput.measurement.inputTokens,
+      pinnedWorkingSetMaxChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact });
   }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const measurePressure = async () => {
@@ -220,6 +252,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         config.toolResultProjectionChars);
       if (projected.changed) {
         workingHistory = projected.history; projectionApplied = true; workingInputProjected = true;
+        deepenLowWater = true;
         assembledInput = await assembleModelInput(workingHistory);
       }
       if (config.showDebugInfo) ctl.debug({ event: preserve ? "working_context_first_consumer_batch" : "working_context_projection",
@@ -252,11 +285,10 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       assembledInput = await assembleModelInput(workingHistory);
     }
   }
-  // A round that projected its adopted input has already lost the reusable
-  // prefix: reach the low-water target in the same rewrite (plan B2).
+  // A round that rewrites its adopted input near high water reaches the
+  // low-water target in the same rewrite (plan B2; see deepenLowWater).
   let lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-    force: compacted, deepen: workingInputProjected, hasReadTools: roundTools.some(hasReadCapability),
-    minimumReadTokens: minimumReadBudget(roundTools) });
+    force: compacted, deepen: deepenLowWater, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
     if (workingContext && lowWater.checkpoint && !config.observeOnly) {
@@ -283,8 +315,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // contract; the summary completion itself never authorizes dispatch.
     if (activeNote !== priorNote) {
       lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-        force: compacted, deepen: workingInputProjected, hasReadTools: roundTools.some(hasReadCapability),
-        minimumReadTokens: minimumReadBudget(roundTools) });
+        force: compacted, deepen: deepenLowWater, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
       assembledInput = lowWater.assembled; acceptLow();
     }
   }

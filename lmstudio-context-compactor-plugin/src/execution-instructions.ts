@@ -1,5 +1,13 @@
 
 
+/** Fixed text (the system prefix stays reusable): the per-round data slots are
+ * assistant-role messages, and a model that reads them as its own earlier
+ * replies starts its answer with a copy (2026-10-25 run: 18 visible echoes). */
+export const RUNTIME_DATA_INSTRUCTION = "Some assistant-role messages are data blocks the host inserted (a read "
+  + "ledger, observations, budget facts, reference data or tool-call refs, each opening with a Runtime or bracketed "
+  + "label). They are not replies you wrote: use them silently, never copy their rows, JSON or wording into your "
+  + "answer or progress text, and never start a reply with one.";
+
 export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",

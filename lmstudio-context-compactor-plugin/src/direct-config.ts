@@ -72,7 +72,7 @@ export const directConfigSchematics = createConfigSchematics()
   .field("workingInputTriggerTokens", "numeric", { displayName: "Working input trigger", subtitle: "Start target-based compaction above this full templated input size; kept separate from the post-compaction target." }, NUMERIC_FIELDS.workingInputTriggerTokens.default)
   .field("workingInputScaling", "select", {
     displayName: "Working input scaling",
-    subtitle: "Auto treats the trigger and target as minimums and raises them with the loaded context (60%/45% of the usable input), keeping working space above the mandatory floor. Fixed uses the configured absolute values.",
+    subtitle: "Auto treats the trigger and target as minimums and raises them with the loaded context (86%/65% of the usable input), keeping working space above the mandatory floor. Fixed uses the configured absolute values.",
     options: [
       { value: "auto", displayName: "Auto (scale with context)" },
       { value: "fixed", displayName: "Fixed (absolute values)" },

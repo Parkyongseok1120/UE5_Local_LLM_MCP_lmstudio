@@ -106,6 +106,12 @@ export function createMessageEmitter(
   const unidentifiedRequestCallIds: Array<number> = [];
   const unidentifiedResultCallIds: Array<number> = [];
   const emittedCallIds = new Set<number>();
+  // A captured message can arrive before the SDK finalized all of its
+  // requests; a request shown then under a fallback id was shown a second time
+  // when it was finalized (2026-10-25 run, round 1). Such requests wait for
+  // their registration and are flushed at the end of the round otherwise.
+  const emittedRequestIds = new Set<string>();
+  const deferredRequests: ToolCallRequest[] = [];
   const requestBlocks = new Map<number, ReturnType<ContentController["createContentBlock"]>>();
   let fallbackCallId = 1_000_000;
 
@@ -115,6 +121,8 @@ export function createMessageEmitter(
     unidentifiedRequestCallIds.length = 0;
     unidentifiedResultCallIds.length = 0;
     emittedCallIds.clear();
+    emittedRequestIds.clear();
+    deferredRequests.length = 0;
     requestBlocks.clear();
   };
 
@@ -137,8 +145,14 @@ export function createMessageEmitter(
     return unidentifiedResultCallIds.shift() ?? fallbackCallId++;
   };
 
-  const emit = (message: ChatMessage, skipText = false) => {
-    const requests = message.getToolCallRequests().map((request) => ({
+  /** deferUnregistered: a live capture, whose unregistered requests wait. */
+  const emit = (message: ChatMessage, skipText = false, deferUnregistered = false) => {
+    // A result never precedes its request in the transcript.
+    if (message.getToolCallResults().length) flushDeferred();
+    const all = message.getToolCallRequests().filter(request => !(request.id && emittedRequestIds.has(request.id)));
+    const waiting = deferUnregistered ? all.filter(request => request.id && !callIdsByToolRequestId.has(request.id)) : [];
+    deferredRequests.push(...waiting);
+    const requests = all.filter(request => !waiting.includes(request)).map((request) => ({
       request,
       callId: resolveRequestCallId(request.id),
     }));
@@ -150,6 +164,7 @@ export function createMessageEmitter(
     if (text && !skipText) block.appendText(text);
     for (const { request, callId } of pendingRequests) {
       emittedCallIds.add(callId);
+      if (request.id) emittedRequestIds.add(request.id);
       block.appendToolRequest({
         callId,
         toolCallRequestId: request.id,
@@ -169,8 +184,9 @@ export function createMessageEmitter(
 
   const emitRequest = (callId: number, request: ToolCallRequest) => {
     registerRequest(callId, request);
-    if (emittedCallIds.has(callId)) return;
+    if (emittedCallIds.has(callId) || (request.id && emittedRequestIds.has(request.id))) return;
     emittedCallIds.add(callId);
+    if (request.id) emittedRequestIds.add(request.id);
     const block = ctl.createContentBlock({ roleOverride: "assistant" });
     requestBlocks.set(callId, block);
     block.appendToolRequest({
@@ -187,7 +203,21 @@ export function createMessageEmitter(
       name: request.name, parameters: request.arguments || {},
       pluginIdentifier: toolPluginIdentifier(tools, request.name) });
   };
-  return { beginRound, emit, emitRequest, replaceRequest, registerRequest };
+  /** Deferred requests the SDK has not registered (yet), shown once. */
+  function flushDeferred() {
+    const pending = deferredRequests.splice(0).filter(request => !(request.id && emittedRequestIds.has(request.id)));
+    if (!pending.length) return;
+    const block = ctl.createContentBlock({ roleOverride: "assistant" });
+    for (const request of pending) {
+      const callId = resolveRequestCallId(request.id);
+      if (emittedCallIds.has(callId)) continue;
+      emittedCallIds.add(callId);
+      if (request.id) emittedRequestIds.add(request.id);
+      block.appendToolRequest({ callId, toolCallRequestId: request.id, name: request.name,
+        parameters: request.arguments || {}, pluginIdentifier: toolPluginIdentifier(tools, request.name) });
+    }
+  }
+  return { beginRound, emit, emitRequest, replaceRequest, registerRequest, flushDeferred };
 }
 
 export function createToolGenerationTracker(ctl: PredictionLoopHandlerController) {

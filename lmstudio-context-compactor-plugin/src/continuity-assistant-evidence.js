@@ -1,6 +1,6 @@
 "use strict";
 
-const { clip, clipHeadTail, visibleAssistantText } = require("./continuity-text.js");
+const { clip, clipHeadTail, normalizedTextKey, visibleAssistantText } = require("./continuity-text.js");
 const {
   sanitizeDerivedOperationalText,
   sanitizeStructuredDurableValue,
@@ -77,9 +77,49 @@ function boundedPreviousResponse(value, limit) {
     ...(typeof value.forUserTurn === "string" && /^[a-f0-9]{64}$/u.test(value.forUserTurn) ? { forUserTurn: value.forUserTurn } : {}) };
 }
 
+const TURN_FINDINGS_MAX_ITEMS = 12;
+const TURN_FINDING_MAX_CHARS = 240;
+// A code span or a file:line citation: a statement about code, not a plan.
+const CODE_STATEMENT = /`[^`\n]{2,}`|[\w./\\-]+\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|cs|ini|json|ts|js|py):\d+/u;
+// Echoed runtime data is not the assistant's finding.
+const RUNTIME_ECHO = /^(?:[-*]\s+project:\/\/|Runtime |\[Derived reference data|\[Available tool-call refs\]|UNCHANGED:)/u;
+
+/** The lines of this user turn's assistant progress that state something about
+ * code, oldest first, merged with the ones an earlier compaction of the same
+ * turn carried. A review states its findings across many rounds while the
+ * checkpoint otherwise keeps only the last update, so earlier conclusions were
+ * lost and re-verified by re-reading (2026-10-25 run). Assistant judgments,
+ * never verified facts. */
+function currentTurnFindings(messages, latestUserIndex, forUserTurn, carried = null) {
+  const items = isRecord(carried) && carried.forUserTurn === forUserTurn && Array.isArray(carried.items)
+    ? carried.items.filter(item => typeof item === "string") : [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || message.index <= latestUserIndex || generatedAssistantCheckpoint(message)) continue;
+    for (const raw of visibleAssistantText(message.text).split("\n")) {
+      const line = raw.trim().replace(/^(?:[-*+]|\d+[.)]|#+)\s+/u, "");
+      if (line.length >= 16 && !RUNTIME_ECHO.test(raw.trim()) && CODE_STATEMENT.test(line)) items.push(line);
+    }
+  }
+  const seen = new Set(), unique = [];
+  for (const item of items.reverse()) {
+    const key = normalizedTextKey(item);
+    if (!seen.has(key)) { seen.add(key); unique.unshift(item); }
+  }
+  return { forUserTurn, items: unique.slice(-TURN_FINDINGS_MAX_ITEMS) };
+}
+
+function boundedTurnFindings(value, count, chars) {
+  if (!isRecord(value) || !/^[a-f0-9]{64}$/u.test(String(value.forUserTurn || "")) || !Array.isArray(value.items) || count <= 0)
+    return null;
+  const items = value.items.filter(item => typeof item === "string").slice(-count)
+    .map(item => safeText(item, chars)).filter(Boolean);
+  return items.length ? { forUserTurn: value.forUserTurn, items } : null;
+}
+
 function boundedAssistantEvidence(value, limits = {}) {
   if (!isRecord(value) || Object.keys(value).some((key) => ![
     "schemaVersion", "authority", "lastAssistantUpdate", "pendingAssistantItems", "recentRawTail", "previousResponse",
+    "turnFindings",
   ].includes(key))) return null;
   if (value.schemaVersion !== 1 || value.authority !== AUTHORITY) return null;
   const update = isRecord(value.lastAssistantUpdate) && typeof value.lastAssistantUpdate.text === "string"
@@ -101,10 +141,13 @@ function boundedAssistantEvidence(value, limits = {}) {
         ? { continuityOrder: item.continuityOrder } : {}) }))
     : [];
   const previous = boundedPreviousResponse(value.previousResponse, limits.previous ?? 3000);
+  const findings = boundedTurnFindings(value.turnFindings, limits.findingsCount ?? TURN_FINDINGS_MAX_ITEMS,
+    limits.findingsChars ?? TURN_FINDING_MAX_CHARS);
   return sanitizeStructuredDurableValue({
     schemaVersion: 1, authority: AUTHORITY,
     ...(previous ? { previousResponse: previous } : {}),
     ...(update?.text ? { lastAssistantUpdate: update } : {}),
+    ...(findings ? { turnFindings: findings } : {}),
     pendingAssistantItems: pending.filter((item) => item.text),
     recentRawTail: tail.filter((item) => item.text),
   });
@@ -117,10 +160,13 @@ function splitAssistantEvidence(memory) {
     ...item, continuityOrder,
   }));
   const previous = systemMemory.previousTurnFinalResponseEvidence;
+  const turnFindings = systemMemory.currentTurnFindings;
+  delete systemMemory.currentTurnFindings;
   const evidence = boundedAssistantEvidence({
     schemaVersion: 1,
     authority: AUTHORITY,
     ...(previous?.present && previous.text ? { previousResponse: previous } : {}),
+    ...(turnFindings ? { turnFindings } : {}),
     lastAssistantUpdate: work.lastAssistantUpdate,
     pendingAssistantItems: (systemMemory.unresolvedItems || []).filter((item) => (
       item?.kind === "assistant_progress_evidence"
@@ -141,17 +187,17 @@ function splitAssistantEvidence(memory) {
 
 function renderAssistantCheckpoint(evidence, maxChars, { previousOnly = false } = {}) {
   if (!evidence || maxChars < 180) return "";
-  const none = { update: 0, pendingCount: 0, pendingChars: 0, tailCount: 0, tailChars: 0 };
+  const none = { update: 0, pendingCount: 0, pendingChars: 0, tailCount: 0, tailChars: 0, findingsCount: 0 };
   const variants = previousOnly ? [3000, 2000, 1200, 600].map(previous => ({ ...none, previous })) : [
-    { previous: 3000, update: 1000, pendingCount: 4, pendingChars: 220, tailCount: 2, tailChars: 320 },
-    { previous: 2000, update: 700, pendingCount: 3, pendingChars: 180, tailCount: 1, tailChars: 240 },
-    { previous: 1200, update: 400, pendingCount: 2, pendingChars: 140, tailCount: 0, tailChars: 0 },
-    { previous: 600, update: 220, pendingCount: 1, pendingChars: 100, tailCount: 0, tailChars: 0 },
+    { previous: 3000, update: 1000, pendingCount: 4, pendingChars: 220, tailCount: 2, tailChars: 320, findingsCount: 12, findingsChars: 240 },
+    { previous: 2000, update: 700, pendingCount: 3, pendingChars: 180, tailCount: 1, tailChars: 240, findingsCount: 8, findingsChars: 200 },
+    { previous: 1200, update: 400, pendingCount: 2, pendingChars: 140, tailCount: 0, tailChars: 0, findingsCount: 5, findingsChars: 160 },
+    { previous: 600, update: 220, pendingCount: 1, pendingChars: 100, tailCount: 0, tailChars: 0, findingsCount: 3, findingsChars: 120 },
   ];
   for (const limits of variants) {
     const candidate = boundedAssistantEvidence(evidence, limits);
     if (!candidate?.previousResponse && !candidate?.lastAssistantUpdate && !candidate?.pendingAssistantItems.length
-      && !candidate?.recentRawTail.length) {
+      && !candidate?.recentRawTail.length && !candidate?.turnFindings) {
       return "";
     }
     const rendered = `${ASSISTANT_MARKER}\n${JSON.stringify(candidate)}`;
@@ -181,6 +227,7 @@ function mergePriorAssistantEvidence(previousState, evidence) {
   merged.currentWorkStatus ||= {};
   delete merged.currentWorkStatus.lastAssistantUpdate;
   if (evidence.lastAssistantUpdate) merged.currentWorkStatus.lastAssistantUpdate = evidence.lastAssistantUpdate;
+  if (evidence.turnFindings) merged.currentTurnFindings = evidence.turnFindings;
   if (evidence.previousResponse) merged.previousTurnFinalResponseEvidence = {
     ...(isRecord(merged.previousTurnFinalResponseEvidence) ? merged.previousTurnFinalResponseEvidence : {}),
     present: true, ...evidence.previousResponse };
@@ -198,6 +245,7 @@ module.exports = {
   retainVisibleResponse,
   isDeliveredPartialResponse,
   ASSISTANT_MARKER,
+  currentTurnFindings,
   extractPriorAssistantEvidence,
   generatedAssistantCheckpoint,
   mergePriorAssistantEvidence,

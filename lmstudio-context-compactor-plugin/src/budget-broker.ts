@@ -1,6 +1,6 @@
 import {
-  MIN_WORKING_SPACE_TOKENS, POST_TOOL_REQUEST_TOKENS, SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO,
-  UTF8_BYTES_PER_TOKEN_ESTIMATE, type ContextMeasurement, type DirectConfig
+  MIN_WORKING_SPACE_TOKENS, PINNED_WORKING_SET_MIN_CHARS, PINNED_WORKING_SET_SHARE, POST_TOOL_REQUEST_TOKENS,
+  SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO, UTF8_BYTES_PER_TOKEN_ESTIMATE, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { localObservationTools } from "./tool-capability-registry";
@@ -64,6 +64,13 @@ export class BudgetBroker {
       targetUnreachable: mandatoryFloorTokens > configuredLowWaterTokens,
       blockingComponent: mandatoryFloorTokens > configuredLowWaterTokens ? "mandatory_objective_evidence_and_template" : null
     };
+  }
+  /** Envelope characters the current turn's working set may keep verbatim
+   * through projection and compaction: a share of low water, so the pinned
+   * reads plus the mandatory floor still leave room under high water. */
+  pinnedWorkingSetChars(water: Pick<Watermarks, "effectiveLowWaterTokens">): number {
+    return Math.max(PINNED_WORKING_SET_MIN_CHARS,
+      Math.floor(tokens(water.effectiveLowWaterTokens) * PINNED_WORKING_SET_SHARE * UTF8_BYTES_PER_TOKEN_ESTIMATE));
   }
   beginBatch(measured: ContextMeasurement, hasReadTools = true) {
     const budget = this.watermarks(measured, 0, hasReadTools);

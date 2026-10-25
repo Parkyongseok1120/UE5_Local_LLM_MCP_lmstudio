@@ -10,8 +10,9 @@ const { ASSISTANT_MARKER } = require("../src/continuity-assistant-evidence.js");
 const { ContextManager, createInputAssembler } = require("../dist/context-manager");
 const { BudgetBroker } = require("../dist/budget-broker");
 const { readConfig } = require("../dist/execution-config");
+const { RUNTIME_DATA_INSTRUCTION } = require("../dist/execution-instructions");
 
-const message = (role, text, index) => ({ role, text, index, toolRequests: [], toolResults: [] });
+const message =(role, text, index) => ({ role, text, index, toolRequests: [], toolResults: [] });
 
 function fixture(overrides = {}) {
   const config = readConfig({ getPluginConfig() { return { get: key => ({ contextManagementMode: "deterministic",
@@ -87,7 +88,7 @@ test("volatile runtime data sits before the latest user message, keeping earlier
     .getMessagesArray().map(m => `${m.getRole()}:${m.getText()}`);
   const a = render(["Runtime read-result budget facts: A"]), b = render(["Runtime read-result budget facts: B"]);
   assert.deepEqual(a.slice(0, 3), b.slice(0, 3));
-  assert.deepEqual(a.slice(0, 3), ["system:stable system\n\nscope", "user:first request", "assistant:first answer"]);
+  assert.deepEqual(a.slice(0, 3), [`system:stable system\n\nscope\n\n${RUNTIME_DATA_INSTRUCTION}`, "user:first request", "assistant:first answer"]);
   assert.equal(a[3], "assistant:Runtime read-result budget facts: A");
   assert.equal(a.at(-1), "user:second request");
   assert.equal(history.getMessagesArray().length, 4, "runtime facts are never written into the source history");
@@ -153,7 +154,7 @@ test("same-anchor retries append new observations without rewriting already show
   assert.deepEqual(shown.get("user"), ["observation A"], "candidate assembly cannot commit state");
   assert.deepEqual(retry.dataBlock.parts, ["observation A", "observation B"]);
   assert.deepEqual(retry.history.getMessagesArray().map(m => m.getText()),
-    ["system\n\nscope", "observation A", "observation B", "request"]);
+    [`system\n\nscope\n\n${RUNTIME_DATA_INSTRUCTION}`, "observation A", "observation B", "request"]);
   shown.set(retry.dataBlock.anchor, retry.dataBlock.parts);
   const repeat = compose(["observation B"]);
   assert.equal(repeat.dataBlock, undefined, "unchanged retries do not accumulate data");

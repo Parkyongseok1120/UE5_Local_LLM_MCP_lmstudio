@@ -40,6 +40,33 @@ function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag'
   return {ctl,tool,request,emitter,tracker,trace,events,cards,statuses,requests,invoke,abort,recorder,get outcome(){return outcome}};
 }
 
+// 2026-10-25 run, round 1: a message captured before its second request was
+// finalized showed that request under a fallback id, then again when finalized.
+test('a request captured before its registration is shown once', () => {
+  const {ChatMessage} = require('@lmstudio/sdk');
+  const shown = [];
+  const ctl = {createContentBlock(){return {appendText(){}, appendToolRequest(value){shown.push(value)}, appendToolResult(){}}}};
+  const emitter = createMessageEmitter(ctl, []);
+  const first = {type:'function', id:'req-a', name:'get_active_project', arguments:{}};
+  const second = {type:'function', id:'req-b', name:'unreal_get_active_project', arguments:{}};
+  const message = ChatMessage.from({role:'assistant', content:[{type:'toolCallRequest', toolCallRequest:first},
+    {type:'toolCallRequest', toolCallRequest:second}]});
+  emitter.beginRound();
+  emitter.emitRequest(11, first);
+  emitter.emit(message, false, true);
+  emitter.emitRequest(12, second);
+  emitter.emit(message);
+  emitter.flushDeferred();
+  assert.deepEqual(shown.map(item => [item.toolCallRequestId, item.callId]), [['req-a', 11], ['req-b', 12]]);
+  // A request the SDK never registers is still shown, once.
+  emitter.beginRound();
+  shown.length = 0;
+  emitter.emit(message, false, true);
+  emitter.flushDeferred();
+  emitter.flushDeferred();
+  assert.deepEqual(shown.map(item => item.toolCallRequestId), ['req-a', 'req-b']);
+});
+
 test('Allow all and exact tool preferences use provider identity, not tool name alone',()=>{
   const policy={skipToolConfirmationPatterns:['mcp/unreal-rag:*','mcp/unity-tools:patch_file']};
   assert.equal(hostToolAutoApproval(policy,'mcp/unreal-rag','unreal_set_active_project'),true);
@@ -164,10 +191,11 @@ test('an identical read already present in the input carries its repeatReceipt t
   const present = presentRepeatReceipts(history);
   assert.equal(present.get(repeatRequestKey('read_file_range', args)), 'rr_live');
   assert.equal(present.get(repeatRequestKey('read_file_range', {...args, byteBudget:8192})), 'rr_live', 'byteBudget rewrites match');
-  assert.equal(present.size, 1, 'a projection without a remembered receipt has none');
-  const archived = new Map([['ev_b', {key: repeatRequestKey('read_file_range', bArgs), receipt:'rr_projected', arguments:bArgs}]]);
-  const candidates = repeatReceiptCandidates(history, archived);
-  assert.equal(candidates.get(repeatRequestKey('read_file_range', bArgs)).receipt, 'rr_projected', 'projected results keep their receipt');
+  assert.equal(present.size, 1, 'a projection has no receipt');
+  const candidates = repeatReceiptCandidates(history);
+  // Its body left the input: repeating the read must return that body, not
+  // a server "no new information" answer the model then has to page around.
+  assert.equal(candidates.get(repeatRequestKey('read_file_range', bArgs)), undefined, 'projected results carry no receipt');
 
   const hit = fixture('read_file_range', 'mcp/unreal-agent', {}, {inputRepeatReceipts: candidates});
   hit.request.arguments = {...args, byteBudget:8192};

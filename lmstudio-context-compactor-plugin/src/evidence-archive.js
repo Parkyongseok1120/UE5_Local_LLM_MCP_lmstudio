@@ -549,6 +549,42 @@ class EvidenceArchive {
         sourceVersion: r.metadata?.sourceVersion, sourceRange: r.metadata?.originRanges }));
   }
 
+  /** The newest readable record of one source path (scheme-relative, any
+   * slash, case-folded; a shorter spelling matches the path it ends). A
+   * path-only read needs no handle copied from earlier output: the 2026-10-25
+   * run paged one file with another file's handle twice. With a line range,
+   * a record of that version whose returned lines cover it is preferred. */
+  readByPath(sourcePath, start = 0, maxChars = 4096, view = "body", lines = null) {
+    const key = value => String(value || "").trim().replace(/\\/g, "/").replace(/^project:\/\//i, "")
+      .replace(/^\.\//, "").toLowerCase();
+    const wanted = key(sourcePath);
+    const matches = !wanted ? [] : this.entries().map(e => this.load(e.key))
+      .filter(e => e.ok && e.record.metadata?.sourceKind !== "conversation_message").map(e => e.record)
+      .filter(r => { const own = key(r.metadata?.sourceIdentity?.path); return Boolean(own) && (own === wanted || own.endsWith(`/${wanted}`)); })
+      .sort((a, b) => b.createdAt - a.createdAt || a.evidenceId.localeCompare(b.evidenceId));
+    const paths = new Set(matches.map(r => key(r.metadata?.sourceIdentity?.path)));
+    if (!matches.length || paths.size > 1) {
+      const validHandles = matches.length ? matches.slice(0, 8).map(r => ({ readHandle: this.readHandleFor(r),
+        path: r.metadata?.sourceIdentity?.path, sourceVersion: r.metadata?.sourceVersion })) : this.validHandles(undefined);
+      return { ok: false, errorCode: matches.length ? "path_ambiguous" : "path_unavailable", currentFile: false,
+        grantsMutation: false, validHandles, message: matches.length
+          ? "This path names more than one archived source; repeat with the full path or a readHandle from validHandles."
+          : "No archived record of this path is readable here; read the current source file instead." };
+    }
+    const version = matches[0].metadata?.sourceVersion;
+    const latest = matches.filter(r => r.metadata?.sourceVersion === version);
+    // originRanges is [start, end] or a file observation's {unit, start, end, total}.
+    const covers = r => {
+      const range = r.metadata?.originRanges;
+      const [start, end] = Array.isArray(range) ? range : [range?.start, range?.end];
+      return r.metadata?.originRangeUnit === "line" && Number.isInteger(start) && Number.isInteger(end)
+        && start <= lines.startLine && end >= (lines.endLine ?? lines.startLine);
+    };
+    const record = (lines?.startLine !== undefined
+      && (latest.find(covers) || latest.find(r => r.metadata?.originRangeUnit === "line"))) || latest[0];
+    return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view, lines);
+  }
+
   readByHandle(handle, start = 0, maxChars = 4096, view = "body", lines = null, sourcePath = undefined) {
     if (!/^h_[a-f0-9]{24}$/.test(String(handle)) || !["body", "envelope"].includes(view))
       return { ok: false, errorCode: "invalid_read_handle", validHandles: this.validHandles(sourcePath),

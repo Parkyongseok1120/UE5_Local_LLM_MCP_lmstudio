@@ -68,6 +68,7 @@ export const workingContextModule = require("./working-context.js") as {
     close(): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
     pendingResultIndexes(history: Chat): number[];
+    pinnedResultIndexes(history: Chat, maxChars: number): number[];
     archiveConversationProse(history: Chat, retainedIndexes?: number[]): number;
     releaseOmittedPending(history: Chat): string[];
     captureReturned(history: Chat, observation: (request: ToolCallRequest) => boolean, metadata?: Record<string, unknown>): number;
@@ -127,7 +128,7 @@ export const readLedgerModule = require("./read-ledger.js") as {
   projectionFacts(value: unknown): ReadFacts | null;
   archivePageFacts(value: unknown): ReadFacts | null;
   pathKey(value: unknown): string;
-  unchangedReadNotice(entry: LedgerEntry, locator: ArchiveLocator | null): string;
+  unchangedReadNotice(entry: LedgerEntry, locator: ArchiveLocator | null, bodyVisible?: boolean): string;
   deliveredText(entry: LedgerEntry): string;
   visibleRanges(observations: Array<Record<string, unknown>>): Map<string, { line: Array<[number, number]>; utf8_byte: Array<[number, number]> }>;
   ledgerFact(ledger: ReadLedgerLike, options: { observations?: Array<Record<string, unknown>>; excerpts?: Set<string>;

@@ -11,6 +11,7 @@ import { stripInternalDataEcho } from "./internal-data-output";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { numeric } from "./execution-config";
 import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, type DirectConfig, type NormalizedMessage } from "./execution-contracts";
+import { RUNTIME_DATA_INSTRUCTION } from "./execution-instructions";
 import { visibleAssistantOutput } from "./raw-tool-intent";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
@@ -233,7 +234,7 @@ export function composeModelHistory(
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
-    return { history, overhead: 0, privateDataParts: [] as string[] };
+    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0 };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -250,11 +251,15 @@ export function composeModelHistory(
   const overhead = (canIncludeInstruction ? instruction.length + (canIncludeNote ? noteText.length : 0) : 0)
     + (canIncludeRefs ? refsText.length : 0) + taskData.length;
   const composed = Chat.empty();
+  // The runtime-data rule is present whenever this composition can carry data
+  // slots, from the first round on, so the system prefix never changes for it.
+  // Observe-only leaves the model input as the host built it.
   const combinedSystemText = [
     ...messages.filter((message) => message.isSystemPrompt())
       .map((message) => message.getText().trim()).filter(Boolean),
     ...instructions,
     ...(canIncludeInstruction ? [instruction] : []),
+    ...(config.observeOnly ? [] : [RUNTIME_DATA_INSTRUCTION]),
   ].join("\n\n");
   if (combinedSystemText) composed.append("system", combinedSystemText);
   // Data that changes between rounds stays in assistant data slots (never in a
@@ -281,16 +286,27 @@ export function composeModelHistory(
   const slot = runtimeSlotIndex(messages, latestUser);
   const slotAnchor = anchors.get(slot);
   const blocks = new Map<number, readonly string[]>();
-  let dataBlock: { anchor: string; parts: string[] } | undefined;
+  let dataBlock: { anchor: string; parts: string[]; replacesShown?: boolean } | undefined;
   if (shownBlocks && slotAnchor) {
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
-    // A reasoning retry can produce a new observation without a new tool
-    // exchange/anchor. Keep everything already shown, then append only the
-    // missing parts; otherwise that observation is silently lost on the retry.
-    const fresh = unshownParts(runtimeParts, [...blocks.values()].flat());
-    if (fresh.length) {
-      const parts = [...(blocks.get(slot) || []), ...fresh];
-      blocks.set(slot, parts); dataBlock = { anchor: slotAnchor, parts };
+    const chars = (parts: ReadonlyArray<string>) => parts.reduce((sum, part) => sum + part.length, 0);
+    const shownChars = chars([...blocks.values()].flat());
+    if (shownChars > Math.max(RUNTIME_DATA_CONSOLIDATE_MIN_CHARS, 2 * chars(runtimeParts))) {
+      // Earlier blocks now hold more superseded copies than current data
+      // (2026-10-25 run: 33K chars of data slots for about 12K of current
+      // facts). One rewrite replaces them with the current data at the newest
+      // anchor; incremental blocks resume from there.
+      blocks.clear(); blocks.set(slot, runtimeParts);
+      dataBlock = { anchor: slotAnchor, parts: [...runtimeParts], replacesShown: true };
+    } else {
+      // A reasoning retry can produce a new observation without a new tool
+      // exchange/anchor. Keep everything already shown, then append only the
+      // missing parts; otherwise that observation is silently lost on the retry.
+      const fresh = unshownParts(runtimeParts, [...blocks.values()].flat());
+      if (fresh.length) {
+        const parts = [...(blocks.get(slot) || []), ...fresh];
+        blocks.set(slot, parts); dataBlock = { anchor: slotAnchor, parts };
+      }
     }
   } else blocks.set(slot, runtimeParts);
   if (slot < 0) for (const part of runtimeParts) composed.append("assistant", part);
@@ -300,24 +316,73 @@ export function composeModelHistory(
   });
   const latestUserText = latestUser >= 0 ? messages[latestUser].getText() : "";
   const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:"];
-  const privateDataParts = [...blocks.values()].flat().filter(part =>
+  const sentParts = [...blocks.values()].flat();
+  const privateDataParts = sentParts.filter(part =>
     part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data")
     || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
-  return { history: composed, overhead, privateDataParts, ...(dataBlock ? { dataBlock } : {}) };
+  // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
+  const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
+  return { history: composed, overhead, privateDataParts, runtimeDataChars, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
 export type ShownDataBlocks = ReadonlyMap<string, readonly string[]>;
 
-/** Parts not already visible in an earlier block. A refs part keeps its header
- * and only the rows not shown yet; other parts are kept unless shown verbatim. */
+/** Line-structured parts re-rendered every round with mostly the same rows. */
+const INCREMENTAL_PART_HEADERS = ["[Available tool-call refs]", "Runtime read ledger (kept across compaction)",
+  "Runtime evidence observation:"];
+const DERIVED_HEADER = "[Derived reference data";
+/** Data slots are rewritten once they exceed this and twice the current data. */
+const RUNTIME_DATA_CONSOLIDATE_MIN_CHARS = 6000;
+// Availability flags of a reference item follow every projection; an item
+// whose observation is otherwise unchanged is not sent again for them alone.
+const VOLATILE_ITEM_FIELDS = ["returnedBodyInCurrentInput", "sourceBodyInCurrentInput", "hostInputVerification"];
+
+/** An item's identity for "already shown": its data without availability flags. */
+function stableItem(item: unknown): string {
+  if (!item || typeof item !== "object") return JSON.stringify(item);
+  const { data, ...rest } = item as { data?: unknown };
+  const stableData = data && typeof data === "object" && !Array.isArray(data)
+    ? Object.fromEntries(Object.entries(data).filter(([key]) => !VOLATILE_ITEM_FIELDS.includes(key))) : data;
+  return JSON.stringify({ ...rest, data: stableData });
+}
+
+/** The items of a derived reference block, or null when it is not one. */
+function derivedItems(part: string): { envelope: Record<string, unknown>; items: unknown[] } | null {
+  if (!part.startsWith(DERIVED_HEADER)) return null;
+  const lines = part.split("\n");
+  try {
+    const envelope = JSON.parse(lines[1] || "");
+    return envelope && Array.isArray(envelope.items) ? { envelope, items: envelope.items } : null;
+  } catch { return null; }
+}
+
+/** Parts not already visible in an earlier block. A line-structured part
+ * (refs, read ledger, evidence observation) keeps its header and only the
+ * rows not shown yet; a derived reference block keeps only the items not
+ * shown yet; other parts are kept unless shown verbatim. Earlier blocks stay
+ * where they were, so a re-rendered fact adds its changes instead of a copy
+ * per round (2026-10-25 run: about 9.5K tokens of repeated facts). */
 function unshownParts(parts: ReadonlyArray<string>, shown: ReadonlyArray<string>) {
   const shownLines = new Set(shown.flatMap(part => part.split("\n")));
+  const shownItems = new Set(shown.flatMap(part => derivedItems(part)?.items.map(stableItem) || []));
   return parts.flatMap(part => {
-    if (!part.startsWith("[Available tool-call refs]")) return shown.includes(part) ? [] : [part];
-    const [header, ...rows] = part.split("\n");
-    const fresh = rows.filter(row => !shownLines.has(row));
-    return fresh.length ? [[header, ...fresh].join("\n")] : [];
+    if (shown.includes(part)) return [];
+    // A one-line fact under the same header (a prior-turn or stagnation
+    // observation) is a whole fact, not a header with rows.
+    if (part.includes("\n") && INCREMENTAL_PART_HEADERS.some(header => part.startsWith(header))) {
+      const [header, ...rows] = part.split("\n");
+      const fresh = rows.filter(row => !shownLines.has(row));
+      return fresh.length ? [[header, ...fresh].join("\n")] : [];
+    }
+    const derived = derivedItems(part);
+    if (derived && shownItems.size) {
+      const fresh = derived.items.filter(item => !shownItems.has(stableItem(item)));
+      if (!fresh.length) return [];
+      const lines = part.split("\n");
+      return [[lines[0], JSON.stringify({ ...derived.envelope, items: fresh }), ...lines.slice(2)].join("\n")];
+    }
+    return [part];
   });
 }
 
@@ -500,7 +565,10 @@ export class ContextManager {
   constructor(readonly config: DirectConfig, readonly broker: BudgetBroker,
     readonly checkpointOptions: Record<string, unknown> = {},
     /** Indexes that every compaction candidate must retain (pending results). */
-    readonly requiredIndexes: (history: Chat) => number[] = () => []) { }
+    readonly requiredIndexes: (history: Chat) => number[] = () => [],
+    /** Indexes a candidate keeps while it still reaches the target (the pinned
+     * working set within maxChars); candidates without them follow. */
+    readonly preferredIndexes: (history: Chat, maxChars: number) => number[] = () => []) { }
   /** Exact measurements are deterministic per execution/model handle. */
   readonly measurementCache = new Map<string, ContextMeasurement>();
   /** reservedTokens: material this round will add after the evidence window
@@ -626,16 +694,24 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
     const pressured = required || Boolean(options.deepen);
     if (pressured && before.measurement.inputTokens > water.effectiveLowWaterTokens) {
       const caps = [...new Set([128, 64, 32, 16, 8, 4, 2].filter(cap => cap <= history.length))];
+      const exchangeCaps = caps.map(cap => ({ name: `complete_exchange_cap_${cap}`, options: {
+        maxCurrentTurnMessages: cap, checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } }));
+      const checkpointBudgets = [1, 0.5, 0.25, 0.125].map(ratio => ({ name: `checkpoint_budget_${ratio}`, options: {
+        maxCurrentTurnMessages: 0, checkpointPolicy: "bounded",
+        maxCheckpointChars: Math.max(2000, Math.floor(this.config.maxCheckpointChars * ratio)) } }));
+      // The reads the turn is still reasoning about survive a cut of older
+      // exchanges first; re-paging them costs a round each (2026-10-25 run).
+      const preferred = this.preferredIndexes(history, this.broker.pinnedWorkingSetChars(water))
+        .filter(index => !requiredIndexes.includes(index));
+      const pinnedRequired = [...requiredIndexes, ...preferred];
+      const pinnedVariants = preferred.length ? [...exchangeCaps, ...checkpointBudgets].map(choice => ({
+        name: `pinned_${choice.name}`, options: { ...choice.options, requiredIndexes: pinnedRequired } })) : [];
       // Most-retaining first: keep the last one or two complete user turns
       // verbatim before collapsing every earlier turn into the checkpoint.
       const candidates: Array<{ name: string; recentTurns?: number; options: Record<string, unknown> }> = [
         ...[2, 1].map(recentTurns => ({ name: `recent_turns_${recentTurns}`, recentTurns, options: {
           checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } })),
-        ...caps.map(cap => ({ name: `complete_exchange_cap_${cap}`, options: {
-          maxCurrentTurnMessages: cap, checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } })),
-        ...[1, 0.5, 0.25, 0.125].map(ratio => ({ name: `checkpoint_budget_${ratio}`, options: {
-          maxCurrentTurnMessages: 0, checkpointPolicy: "bounded",
-          maxCheckpointChars: Math.max(2000, Math.floor(this.config.maxCheckpointChars * ratio)) } })),
+        ...pinnedVariants, ...exchangeCaps, ...checkpointBudgets,
         { name: "mandatory_floor", options: { maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" } },
       ];
       // Complete exchanges are indivisible. Never assume token sizes are monotone.
@@ -678,6 +754,7 @@ history: candidate.history, assembled: input, checkpoint: candidate.checkpoint,
         lowTargetMet: success, mandatoryFloorException: water.targetUnreachable, hardFit,
         nextActionFit: finalWater.nextActionFit, disposition, canRun,
         metadataTokens: selected.assembled.metadataTokens, toolSchemaTokens: final.toolSchemaTokens,
+        runtimeDataChars: selected.assembled.composition.runtimeDataChars,
         reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0
 }
     };

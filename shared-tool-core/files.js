@@ -85,8 +85,11 @@ class Files {
     const s = await this.snapshot(args.path);
     const lines = s.content.split(/\r\n|\n|\r/);
     const start = args.startLine ?? 1;
-    const limit = args.limit ?? 100;
-    const selected = lines.slice(start - 1, start - 1 + limit);
+    // Without a limit the page is as many whole lines as the byteBudget holds,
+    // like the Unreal reader: the harness budgets reads by bytes, and a fixed
+    // 100-line page took five rounds for a 420-line file.
+    const explicitLimit = args.limit !== undefined;
+    const selected = explicitLimit ? lines.slice(start - 1, start - 1 + args.limit) : lines.slice(start - 1);
     const observedAt = new Date().toISOString();
     // Numbers are display only; hash, receipt and edit matching use the raw file text.
     const numbered = args.lineNumbers !== false;
@@ -94,7 +97,9 @@ class Files {
       const endLine = count > 0 ? start + count - 1 : null;
       const hasMore = start - 1 + count < lines.length;
       const shown = selected.slice(0, count);
-      const cut = count < selected.length;
+      // Only an explicit limit names requested lines; a budget-filled page is complete.
+      const cut = explicitLimit && count < selected.length;
+      const budgetStop = !explicitLimit && count < selected.length;
       return envelope({ status: "observed", path: args.path, receipt: s.receipt, receiptScope: "entire_file_bytes", hash: s.hash,
         observedAt, startLine: start, endLine, returnedLineCount: count, totalLines: lines.length,
         text: (numbered ? numberLines(shown, start) : shown).join("\n"),
@@ -103,14 +108,19 @@ class Files {
         // merely continues past them is moreLinesInFile, not truncation.
         hasMore, nextStartLine: hasMore ? start + count : null, truncated: cut, moreLinesInFile: hasMore,
         requestedRangeComplete: !cut,
-        ...budgetFields(args.byteBudget ?? DEFAULT_BYTE_BUDGET, cut ? "byte_budget" : hasMore ? "line_limit" : null) });
+        ...budgetFields(args.byteBudget ?? DEFAULT_BYTE_BUDGET, cut || budgetStop ? "byte_budget" : hasMore ? "line_limit" : null) });
     };
     const budget = args.byteBudget ?? DEFAULT_BYTE_BUDGET;
-    // Budget the actual transport envelope. Return whole lines with explicit
-    // continuation; a single oversized line still fails instead of clipping.
-    for (let count = selected.length; count > 0; count--) {
-      const result = makePage(count);
-      if (Buffer.byteLength(JSON.stringify(result)) <= budget) return result;
+    // Budget the actual transport envelope: the whole selection when it fits,
+    // else the largest whole-line page that does (a partial page also carries
+    // its continuation, so the full page is tried on its own first). Return
+    // whole lines with explicit continuation; a single oversized line still
+    // fails instead of clipping.
+    if (selected.length) {
+      const whole = makePage(selected.length);
+      if (Buffer.byteLength(JSON.stringify(whole)) <= budget) return whole;
+      const page = fitPage(selected.slice(0, -1), makePage, budget);
+      if (page) return page;
     }
     return bounded(makePage(Math.min(1, selected.length)), budget);
   }

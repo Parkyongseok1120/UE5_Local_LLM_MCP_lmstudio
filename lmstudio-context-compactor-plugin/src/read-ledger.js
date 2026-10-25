@@ -297,13 +297,16 @@ function deliveredText(entry) {
   return [rangeText(entry.lineRanges, "line"), rangeText(entry.byteRanges, "byte")].filter(Boolean).join("; ") + " (partial)";
 }
 
-/** The fact that replaces a same-hash re-read body. */
-function unchangedReadNotice(entry, locator) {
+/** The fact that replaces a same-hash re-read body. bodyVisible: the earlier
+ * body is still in this input (otherwise only a repeat without the receipt
+ * returns it). */
+function unchangedReadNotice(entry, locator, bodyVisible = true) {
   const where = locator?.readHandle
     ? ` Page only the lines you need with evidence_first_read_context(action=read, readHandle=${locator.readHandle}, view=body, startLine, endLine${locator.outline ? ", or symbol from sourceOutline" : ""}), or read a narrower line range.`
     : " Read a narrower line range for the lines you need.";
+  const visibility = bodyVisible ? "" : " That body is not in this input: repeat the read without repeatReceipt to receive it.";
   return `UNCHANGED: ${entry.path} sha ${short(entry.sourceVersion)} is the same version already returned in ${whenDelivered(entry)} `
-    + `(${deliveredText(entry)}). The file was not modified; its body is not repeated here.${where}`;
+    + `(${deliveredText(entry)}). The file was not modified; its body is not repeated here.${visibility}${where}`;
 }
 
 /** Ranges of each path+version shown verbatim in this input. */
@@ -337,21 +340,23 @@ function ledgerFact(ledger, { observations = [], excerpts = new Set(), handles =
   const latest = new Map();
   for (const entry of ledger.entries()) latest.set(entry.key, entry);
   const shown = visibleRanges(observations);
-  const rows = [], remaining = [];
+  const rows = [];
   let hidden = 0;
   for (const entry of [...latest.values()].reverse()) {
     const id = `${entry.key}\u0000${entry.sourceVersion}`;
     const visible = visibleText(entry, shown.get(id), excerpts.has(id));
     const stale = ledger.staleChecks(entry);
-    if (!entry.checks.length) remaining.push(entry.path.split(/[\\/]/u).pop());
     if (visible === "in full" && !reportNow) continue;
     hidden += visible === "in full" ? 0 : 1;
     const handle = handles.get(id);
-    const claims = entry.checks.length ? entry.checks.map(item => item.check).join(", ") : "none recorded";
+    // Only claims that exist are listed: a "none" on every row is the same
+    // text each round and reads as an instruction to re-verify the file.
+    const claims = entry.checks.map(item => item.check).join(", ");
     rows.push(`- ${entry.path} sha ${short(entry.sourceVersion)}: delivered ${deliveredText(entry)} in ${whenDelivered(entry)}`
       + `${entry.deliveries > 1 ? `, ${entry.deliveries} deliveries` : ""}${entry.redundant ? `, ${entry.redundant} repeated read(s) answered UNCHANGED` : ""}`
       + `; visible now: ${visible}`
-      + `${handle ? `; readHandle=${handle}` : ""}; recorded claims: ${claims}${stale.length ? `; earlier-version claims need re-check: ${stale.join(", ")}` : ""}`);
+      + `${handle ? `; readHandle=${handle}` : ""}${claims ? `; recorded claims: ${claims}` : ""}`
+      + `${stale.length ? `; earlier-version claims need re-check: ${stale.join(", ")}` : ""}`);
   }
   if (!hidden && !reportNow) return null;
   const lines = [];
@@ -364,10 +369,10 @@ function ledgerFact(ledger, { observations = [], excerpts = new Set(), handles =
   return [
     "Runtime read ledger (kept across compaction). delivered = returned earlier; visible = in this input; recorded claims = assistant claims with checked citations, not factual verification or file-level audit completion.",
     ...lines, ...(more > 0 ? [`- ${more} more file(s) not listed`] : []),
-    ...(remaining.length ? [`No claim recorded at this sha: ${remaining.slice(0, 12).join(", ")}${remaining.length > 12 ? ", ..." : ""}.`] : []),
-    "These are last-observed versions, not a fresh disk check. A repeated read of the same observed version returns a short "
-      + "UNCHANGED fact, not the body. Page only the lines you need from the readHandle (view=body with startLine/endLine), "
-      + "or read a narrower line range. Delivered earlier is not visible now: quote only text present in this input.",
+    "These are last-observed versions, not a fresh disk check. Repeating a read whose body is still visible returns a short "
+      + "UNCHANGED fact; a body that is not visible now comes back from the same read. To restore only part of it, page the "
+      + "lines you need from the readHandle or the row's path (view=body with startLine/endLine) or read a narrower line range. "
+      + "Delivered earlier is not visible now: quote only text present in this input.",
   ].join("\n");
 }
 

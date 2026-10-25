@@ -145,7 +145,8 @@ test("pending raw identity survives persistence sanitization, cancellation and r
   assert.equal(restarted.returnedRefs.has(id), true, "commit is not consumer completion");
   assert.throws(() => restarted.captureExposure(Chat.empty(), "cancel-retry", false), /PENDING_EVIDENCE_OMITTED/);
   restarted.captureExposure(restored.history, "retry", false);
-  const projected = restarted.project(restored.history, () => true, {}, 256);
+  // No working-set pin: the replayed read must reach the archive here.
+  const projected = restarted.project(restored.history, () => true, { pinnedWorkingSetMaxChars: 0 }, 256);
   assert.equal(projected.changed, true);
   assert.equal(restarted.archive.entries().length, 1, "sanitized replay retains the original archive identity");
   restarted.captureExposure(projected.history, "retry", true);

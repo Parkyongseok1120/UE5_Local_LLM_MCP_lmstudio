@@ -182,6 +182,38 @@ test("failed reads retain unavailable observation scope without inventing deleti
   const denied = await f.call("read_file", { path: "../Elsewhere.cs" });
   assert.equal(denied.path, undefined); assert.equal(denied.observationState, undefined);
 });
+// The harness budgets reads by bytes (like the Unreal reader): without a
+// limit a page is as many whole lines as the byteBudget holds.
+test("read_file without a limit fills its byteBudget with whole lines", async t => {
+  const f = fixture(t);
+  const lines = count => Array.from({ length: count }, (_, i) => `    int value${i} = Compute(${i}); // line ${i + 1}`).join("\n");
+  f.put("Assets/Character.cs", lines(420));
+  const whole = await f.call("read_file", { path: "Assets/Character.cs", byteBudget: 32768 });
+  assert.equal(whole.endLine, 420, "a 420-line file is one page, not five");
+  assert.equal(whole.hasMore, false);
+  assert.equal(whole.coverage, "complete");
+  assert.equal(whole.omissionReason, undefined);
+
+  f.put("Assets/Large.cs", lines(20000));
+  const startedAt = Date.now();
+  const page = await f.call("read_file", { path: "Assets/Large.cs", byteBudget: 8192 });
+  assert.ok(Date.now() - startedAt < 2000, "the page size is searched, not stepped line by line");
+  assert.ok(Buffer.byteLength(JSON.stringify(page)) <= 8192);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.truncated, false, "no requested lines were cut: none were requested");
+  assert.equal(page.requestedRangeComplete, true);
+  assert.equal(page.omissionReason, "byte_budget");
+  assert.equal(page.nextStartLine, page.endLine + 1);
+  assert.deepEqual(page.suggestion, { tool: "read_file", args: { path: "Assets/Large.cs", byteBudget: 8192, startLine: page.nextStartLine } });
+  const next = await f.call("read_file", page.suggestion.args);
+  assert.equal(next.startLine, page.endLine + 1);
+  assert.ok(next.returnedLineCount > 1);
+
+  const limited = await f.call("read_file", { path: "Assets/Large.cs", limit: 10 });
+  assert.equal(limited.returnedLineCount, 10, "an explicit limit still bounds the page");
+  assert.equal(limited.omissionReason, "line_limit");
+});
+
 test("read_file reports exact ranges and reads Unity package and project settings files", async t => {
   const f = fixture(t);
   f.put("Assets/Code.cs", "one\ntwo\nthree\nfour\nfive");

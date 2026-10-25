@@ -66,17 +66,20 @@ export function partialProjectionFact(messages: ChatMessage[]): { fact: string |
   const more = hiddenFiles > 0 ? [`- ${hiddenFiles} more file(s) with partial results not listed`] : [];
   return { count: views.length, fact: [
     `Runtime evidence observation: ${views.length} earlier tool result(s) are present in this input only in part (compacted), across ${byPath.size} source(s).`,
-    ...lines, ...more,
-    "Partial here does not mean the source was never read, and it does not require restoring every omitted body. "
-      + "Use the evidence already present when it answers the current question. The omitted text of these ranges, "
-      + "including exact calls, arguments, conditions and UPROPERTY/UFUNCTION specifiers, is not in this input; "
-      + "code quoted in your earlier notes or validation packets is not the source. Before quoting such code or "
-      + "stating that something is absent there, page only that scope with evidence_first_read_context(action=read, "
-      + "readHandle, view=body, startLine/endLine of the span, or symbol=its name), not the whole body from offset 0; "
-      + "or read the focused current source range if the handle is unavailable. "
-      + "Do not claim whole-source review or absence from a partial body.",
+    ...lines, ...more, PARTIAL_PROJECTION_GUIDANCE,
   ].join("\n") };
 }
+
+/** The closing sentence of the partial-projection fact (the output filter
+ * recognizes an echo of it by its opening). */
+export const PARTIAL_PROJECTION_GUIDANCE = "Partial here does not mean the source was never read, and it does not require restoring every omitted body. "
+  + "Use the evidence already present when it answers the current question. The omitted text of these ranges, "
+  + "including exact calls, arguments, conditions and UPROPERTY/UFUNCTION specifiers, is not in this input; "
+  + "code quoted in your earlier notes or validation packets is not the source. Before quoting such code or "
+  + "stating that something is absent there, page only that scope with evidence_first_read_context(action=read, "
+  + "readHandle, view=body, startLine/endLine of the span, or symbol=its name), not the whole body from offset 0; "
+  + "or read the focused current source range if the handle is unavailable. "
+  + "Do not claim whole-source review or absence from a partial body.";
 
 /** The runtime fact after K tool rounds that only re-delivered versions the
  * read ledger already held: write the report from what was returned. */

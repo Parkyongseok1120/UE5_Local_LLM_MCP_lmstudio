@@ -15,10 +15,20 @@ test("auto scaling raises watermarks with the loaded context", () => {
     const w = broker.watermarks(measured(ctx));
     return [ctx, [w.effectiveHighWaterTokens, w.configuredLowWaterTokens]];
   }));
+  // High water is capped below the hard ceiling by one round's tool results.
   assert.deepEqual(table[32768], [17664, 13248]);
-  assert.deepEqual(table[38912], [22000, 16500]);
-  assert.deepEqual(table[65536], [33177, 24882]);
-  assert.deepEqual(table[131072], [72499, 54374]);
+  assert.deepEqual(table[38912], [23040, 17280]);
+  assert.deepEqual(table[65536], [47554, 35665]);
+  assert.deepEqual(table[131072], [103915, 77936]);
+});
+
+// 2026-10-25 runs: an 84,224 context with 40K/56K saved settings compacted a
+// 13-file review repeatedly. Auto scaling raises both above the saved values.
+test("auto scaling at an 84K context leaves room for a whole review", () => {
+  const broker = new BudgetBroker({ ...DEFAULTS, workingInputTargetTokens: 40000, workingInputTriggerTokens: 56000 });
+  const w = broker.watermarks(measured(84224));
+  assert.deepEqual([w.effectiveHighWaterTokens, w.configuredLowWaterTokens], [63626, 47719]);
+  assert.ok(w.effectiveHighWaterTokens <= w.hardInputCeiling - w.reservedToolResultTokens - w.requiredPostToolOverhead);
 });
 
 test("fixed scaling keeps the configured absolute trigger and target", () => {

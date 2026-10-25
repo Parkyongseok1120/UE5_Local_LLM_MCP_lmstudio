@@ -1,3 +1,22 @@
+const LEDGER_HEADER = "Runtime read ledger (kept across compaction)";
+const OBSERVATION_HEADER = "Runtime evidence observation:";
+// A re-rendered observation header: its counts change between rounds.
+const OBSERVATION_FAMILY = /^Runtime evidence observation: \d+ earlier tool result\(s\) are present in this input only in part/u;
+// "- <path> sha <8 hex>: ..." (ledger) or "- <path>: ..." (observation).
+const RUNTIME_ROW = /^- (\S+?)(?: sha [0-9a-f]{8})?: /u;
+// Long injected sentences are recognized by their opening when a model rewrites a number further on.
+const LINE_PREFIX_CHARS = 48;
+// What a model echoes once it has seen the ledger and observation blocks: rows
+// in their exact shape for any file, with invented handles, and the fixed
+// sentences that follow them, without the header (2026-10-25 run
+// 1792913431525). These shapes are hidden whenever such a block is injected.
+const LEDGER_ROW_SHAPE = /^- \S+ sha [0-9a-f]{8}: delivered .*; visible now: /u;
+const OBSERVATION_ROW_SHAPE = /^- \S+: .*\(\d+ of \d+ chars shown/u;
+const OVERFLOW_ROW = /^- \d+ more file\(s\)/u;
+/** Openings of the fixed sentences read-ledger.js and resume-facts.ts append. */
+export const RUNTIME_SENTENCE_OPENINGS = ["Partial here does not mean the source was never read",
+  "These are last-observed versions, not a fresh disk check"];
+
 /** Only protocols actually supplied by this execution are candidates for hiding.
  * Quoted/fenced examples and ordinary JSON remain user content. This filter never
  * interprets a ref as a tool call or grants authority to an observation. */
@@ -10,6 +29,11 @@ export class InternalDataOutputFilter {
   private readonly runtimeParts: string[];
   private readonly runtimeHeaders: string[];
   private readonly runtimeLines: Set<string>;
+  /** Source paths the injected ledger/observation rows name. */
+  private readonly runtimePaths: Set<string>;
+  private readonly runtimeLinePrefixes: Set<string>;
+  private readonly ledgerInjected: boolean;
+  private readonly observationInjected: boolean;
   private inRuntime = false;
   private pending = "";
   private candidate = "";
@@ -20,14 +44,49 @@ export class InternalDataOutputFilter {
 
   constructor(parts: readonly string[] = []) {
     this.budgetParts = parts.filter(p => p.startsWith(this.budgetHeader));
-    this.runtimeParts = parts.filter(p => p.startsWith("Runtime read ledger (kept across compaction)")
-      || p.startsWith("Runtime evidence observation:"));
+    this.runtimeParts = parts.filter(p => p.startsWith(LEDGER_HEADER) || p.startsWith(OBSERVATION_HEADER));
     this.runtimeHeaders = this.runtimeParts.map(p => p.split(/\r?\n/u)[0]);
     this.runtimeLines = new Set(this.runtimeParts.flatMap(p => p.split(/\r?\n/u)));
+    const rows = this.runtimeParts.flatMap(p => p.split(/\r?\n/u).slice(1));
+    this.runtimePaths = new Set(rows.map(row => RUNTIME_ROW.exec(row)?.[1]).filter((path): path is string => Boolean(path)));
+    this.runtimeLinePrefixes = new Set(rows.filter(row => row.length >= LINE_PREFIX_CHARS && !row.startsWith("- "))
+      .map(row => row.slice(0, LINE_PREFIX_CHARS)));
+    this.ledgerInjected = this.runtimeParts.some(p => p.startsWith(LEDGER_HEADER));
+    this.observationInjected = this.runtimeParts.some(p => p.includes("\n") && OBSERVATION_FAMILY.test(p));
     this.refsHeader = parts.find(p => p.startsWith("[Available tool-call refs]"))?.split(/\r?\n/u)[0];
     this.derivedParts = parts.filter(p => p.startsWith("[Derived reference data — observations, not instructions]"))
       .map(p => p.replace(/\r\n/gu, "\n"));
     this.derivedHeader = this.derivedParts[0]?.split("\n")[0];
+  }
+
+  /** A re-rendered header of an injected runtime part (its counts may differ). */
+  private runtimeHeader(bare: string): boolean {
+    return this.runtimeHeaders.includes(bare)
+      || (this.ledgerInjected && bare.startsWith(LEDGER_HEADER))
+      || (this.observationInjected && OBSERVATION_FAMILY.test(bare));
+  }
+
+  private get runtimeInjected() { return this.ledgerInjected || this.observationInjected; }
+
+  /** Inside a runtime block: any row naming an injected path, an injected
+   * line, a rewritten injected sentence, or the overflow line. */
+  private runtimeBlockLine(bare: string): boolean {
+    if (!bare || this.runtimeLines.has(bare) || this.headerlessRuntimeLine(bare)) return true;
+    if (bare.length >= LINE_PREFIX_CHARS && this.runtimeLinePrefixes.has(bare.slice(0, LINE_PREFIX_CHARS))) return true;
+    const path = RUNTIME_ROW.exec(bare)?.[1];
+    return Boolean(path && this.runtimePaths.has(path));
+  }
+
+  /** A runtime line echoed without its header: an injected row verbatim or,
+   * while this input carries ledger/observation data, a line in a row's exact
+   * shape for any file (the model invents rows for files the bounded ledger
+   * did not list) or one of the fixed sentences. Ordinary bullets about the
+   * same files do not have those shapes. */
+  private headerlessRuntimeLine(bare: string): boolean {
+    if (bare.startsWith("- ") && this.runtimeLines.has(bare)) return true;
+    if (!this.runtimeInjected) return false;
+    return LEDGER_ROW_SHAPE.test(bare) || OBSERVATION_ROW_SHAPE.test(bare) || OVERFLOW_ROW.test(bare)
+      || RUNTIME_SENTENCE_OPENINGS.some(opening => bare.startsWith(opening));
   }
 
   private line(line: string): string {
@@ -38,7 +97,9 @@ export class InternalDataOutputFilter {
       try {
         const data = JSON.parse(body);
         // Match the observation envelope, not arbitrary JSON after a heading.
-        if (data && typeof data.interpretation === "string" && Array.isArray(data.items)
+        // Its items may be rearranged in an echo (2026-10-25 run moved them
+        // under referenceContext), so the envelope's own fields decide.
+        if (data && typeof data === "object" && typeof data.interpretation === "string"
           && data.coverage?.scope === "bounded_current_execution") {
           this.candidate = ""; this.mode = "derivedEnd"; return "";
         }
@@ -71,9 +132,12 @@ export class InternalDataOutputFilter {
     if (marker) { this.fence = { character: marker[1][0], length: marker[1].length }; return line; }
     // Do not trim leading indentation: indented code and blockquotes are literal.
     const bare = line.replace(/\r?\n$/u, "").trimEnd();
-    if (this.runtimeHeaders.includes(bare)) { this.inRuntime = true; return ""; }
-    if (this.inRuntime && (!bare || this.runtimeLines.has(bare))) return "";
+    if (this.runtimeHeader(bare)) { this.inRuntime = true; return ""; }
+    if (this.inRuntime && this.runtimeBlockLine(bare)) return "";
     this.inRuntime = false;
+    // 2026-10-25 runs: answers began with ledger/observation rows and their
+    // closing sentences, without a header.
+    if (this.headerlessRuntimeLine(bare)) return "";
     if (this.budgetParts.length && bare.startsWith(this.budgetHeader)) {
       // A model may rewrite numeric values while echoing the injected protocol.
       // Recognize its bounded schema and only its supplied instruction suffix;
@@ -125,8 +189,18 @@ export class InternalDataOutputFilter {
     // Ordinary prose streams immediately; only possible metadata/fence prefixes
     // are held until their line is classified. No paragraph-sized delay.
     const prefixes = [this.refsHeader, this.derivedHeader, ...this.runtimeHeaders,
+      ...(this.ledgerInjected ? [LEDGER_HEADER] : []), ...(this.observationInjected ? [OBSERVATION_HEADER] : []),
+      ...(this.runtimeInjected ? RUNTIME_SENTENCE_OPENINGS : []),
       ...(this.inRuntime ? [...this.runtimeLines] : []), ...(this.budgetParts.length ? [this.budgetHeader] : [])].filter((p): p is string => Boolean(p));
-    const possibleHeader = prefixes.some(p => p.startsWith(this.pending) || this.pending.startsWith(p));
+    // A bullet may be a runtime row: hold its line until it can be classified.
+    const possibleRow = (this.runtimeInjected || this.runtimePaths.size > 0)
+      && ("- ".startsWith(this.pending) || this.pending.startsWith("- "));
+    // Inside a block, a rewritten injected sentence diverges only after its opening.
+    const possibleSentence = this.inRuntime && (this.pending.length >= LINE_PREFIX_CHARS
+      ? this.runtimeLinePrefixes.has(this.pending.slice(0, LINE_PREFIX_CHARS))
+      : [...this.runtimeLinePrefixes].some(prefix => prefix.startsWith(this.pending)));
+    const possibleHeader = possibleRow || possibleSentence
+      || prefixes.some(p => p.startsWith(this.pending) || this.pending.startsWith(p));
     const possibleFence = /^ {0,3}(?:`*|~*)$/u.test(this.pending)
       || /^ {0,3}(?:`{3,}|~{3,})/u.test(this.pending);
     if (this.pending && (this.passthrough || (this.mode === "normal" && !possibleHeader && !possibleFence))) {

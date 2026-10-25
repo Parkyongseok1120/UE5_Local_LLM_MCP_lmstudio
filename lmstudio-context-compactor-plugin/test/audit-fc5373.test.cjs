@@ -48,7 +48,7 @@ test('B01 mandatory floor LOW fit does not certify next read liveness',()=>{
   const b=new BudgetBroker({workingInputTargetTokens:18000,workingInputTriggerTokens:22000,safetyMarginTokens:2048});
   const m={contextLength:38912,outputReserve:8192,inputTokens:27000};
   const w=b.watermarks(m,27000,true);
-  assert.equal(w.effectiveHighWaterTokens,22000);assert.equal(w.effectiveLowWaterTokens,27000);
+  assert.equal(w.effectiveHighWaterTokens,23040);assert.equal(w.effectiveLowWaterTokens,27000);
   assert.equal(w.nextActionFit,false);assert.equal(b.beginBatch(m).capacity,0);
 });
 test('B02 native Unreal maxBytes is clamped and oversize return blocks later dispatch',()=>{
@@ -182,7 +182,8 @@ test('E03 source and projected page use the same identity/query across provider 
   const h=history(payload({kind:'git_observation',pageStart:1,pageEnd:2,query:'Alpha'}),'r',{path:'a',byteBudget:65536,startLine:1});
   manager.captureReturned(h.getMessagesArray(),'e');
   const raw=require('../dist/evidence-manager').observationRecords(h.getMessagesArray(),[tool])[0].value;
-  const projection=JSON.parse(manager.project(h,{},256).history.getMessagesArray().at(-1).getToolCallResults()[0].content);
+  // No working-set pin: this checks the projection's identity, not retention.
+  const projection=JSON.parse(manager.project(h,{pinnedWorkingSetMaxChars:0},256).history.getMessagesArray().at(-1).getToolCallResults()[0].content);
   assert.equal(coverageQueryKey(raw),coverageQueryKey(projection));
   const again=require('../dist/evidence-manager').observationRecords(history(payload({kind:'git_observation',pageStart:3,pageEnd:4,query:'Alpha'}),'r2',{path:'a',byteBudget:1024,startLine:3}).getMessagesArray(),[tool])[0].value;
   assert.equal(coverageQueryKey(raw),coverageQueryKey(again));

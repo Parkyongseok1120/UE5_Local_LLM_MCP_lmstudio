@@ -162,11 +162,10 @@ export class EvidenceManager {
   /** The per-file read ledger: the working window's (persisted with it), or
    * this execution's own when no working context exists. */
   get ledger(): ReadLedgerLike { return this.store?.readLedger || this.localLedger; }
-  // Execution-local: the receipt of a read whose body later left the input,
-  // by the archive record it was captured as, and archive pages this
-  // execution saw re-deliver a version the ledger already held.
-  private readonly archivedReceipts = new Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }>();
+  // Execution-local: archive pages this execution saw re-deliver a version
+  // the ledger already held, and hidden read ranges it already restored.
   private readonly repagedPages = new Set<string>();
+  private readonly restoredReads = new Set<string>();
   // The delivered path each receipt this execution may send back stands for.
   private readonly receiptPaths = new Map<string, string>();
   private readonly handleCache = new Map<string, string | null>();
@@ -200,11 +199,12 @@ export class EvidenceManager {
 
   /** Before returned results enter the working history: a same-hash read of
    * an already delivered range becomes an UNCHANGED fact with the archive
-   * locator of that version, unless it is a narrower read or no readable
-   * record of the version exists. A different hash always keeps its body. */
+   * locator of that version while that range is still visible in the input,
+   * unless it is a narrower read or no readable record of the version exists.
+   * A hidden range or a different hash always keeps its body. */
   screenReturnedReads(messages: Array<ChatMessage>, roundIndex: number): ReadScreening {
     const screening: ReadScreening = { messages: [...messages], replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, focusedReads: 0,
-      newDeliveries: 0, readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] };
+      repeatRestores: 0, newDeliveries: 0, readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] };
     const history = Chat.empty(); for (const message of messages) history.append(message);
     const pairs = workingContextModule.exchangeIndex(history);
     if (pairs.ambiguous) return screening;
@@ -256,7 +256,8 @@ export class EvidenceManager {
       if (!entry) return null;
       ledger.noteRedundant(entry, round, 0, { source: "server_repeat_receipt" });
       screening.redundant++; screening.suppressedCallIds.push(toolCallId);
-      return JSON.stringify(this.unchangedFact(entry, null, value, this.store?.archiveLocator(entry.archiveRef, true) || null));
+      const bodyVisible = this.visibleReads.has(`${entry.key}\u0000${entry.sourceVersion}`);
+      return JSON.stringify(this.unchangedFact(entry, null, value, this.store?.archiveLocator(entry.archiveRef, true) || null, bodyVisible));
     }
     const facts = readLedgerModule.readFacts(value);
     if (!facts) { screening.otherResults++; screening.readResults--; return null; }
@@ -265,8 +266,11 @@ export class EvidenceManager {
       screening.pending.push({ request, toolCallId, content, facts, repeatReceipt: typeof value.repeatReceipt === "string" ? value.repeatReceipt : "" });
       return content;
     };
-    const restoringFocused = verdict.status === "redundant" && !facts.complete && !this.visibleRead(facts);
-    if (verdict.status === "redundant" && verdict.entry && !restoringFocused) {
+    // A repeat is suppressed only while its body is still visible in this
+    // input; once projection or compaction removed it, the read is how the
+    // model restores it, whole file or focused range alike.
+    const restoringHidden = verdict.status === "redundant" && !this.visibleRead(facts);
+    if (verdict.status === "redundant" && verdict.entry && !restoringHidden) {
       const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
       ledger.noteRedundant(verdict.entry, round, facts.chars, locator ? {} : { bodyKept: "no_archive_locator" });
       screening.redundant++; screening.duplicatedChars += facts.chars;
@@ -282,8 +286,15 @@ export class EvidenceManager {
     const prior = verdict.entry;
     ledger.record(facts, { round, toolName: request.name });
     this.rememberVisibleRead(facts);
-    if (verdict.status === "narrower" || restoringFocused) screening.focusedReads++;
-    else screening.newDeliveries++;
+    // Restoring a hidden body is progress once per version and range: a second
+    // restore of the same one means it left the input again, a loop the
+    // stagnation guard must still see.
+    const restoreKey = restoringHidden ? `${facts.key}\u0000${facts.sourceVersion}\u0000${JSON.stringify([facts.lines, facts.bytes])}` : "";
+    if (restoreKey && this.restoredReads.has(restoreKey)) screening.repeatRestores++;
+    else if (verdict.status === "narrower" || restoringHidden) {
+      if (restoreKey) this.restoredReads.add(restoreKey);
+      screening.focusedReads++;
+    } else screening.newDeliveries++;
     if (!prior || verdict.status === "new_version") return pending(null);
     // Same hash as an earlier delivery: say so, so "modified" can only come from a hash change.
     return pending(JSON.stringify({ ...value, unchangedSince: unchangedSince(prior),
@@ -295,7 +306,8 @@ export class EvidenceManager {
     while (this.receiptPaths.size > 256) this.receiptPaths.delete(this.receiptPaths.keys().next().value!);
   }
 
-  private unchangedFact(entry: LedgerEntry, facts: ReadFacts | null, value: Record<string, any>, locator: ArchiveLocator | null) {
+  private unchangedFact(entry: LedgerEntry, facts: ReadFacts | null, value: Record<string, any>, locator: ArchiveLocator | null,
+    bodyVisible = true) {
     if (typeof value.repeatReceipt === "string") this.rememberReceipt(value.repeatReceipt, entry.path);
     const identityFields = ["canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath", "activeProject",
       "resolvedRootType", "projectRelativePath"];
@@ -308,10 +320,11 @@ export class EvidenceManager {
       ...(entry.size !== null ? { size: entry.size } : {}),
       unchangedSince: unchangedSince(entry), deliveredRanges: readLedgerModule.deliveredText(entry),
       readCoverageState: entry.complete ? "complete" : "partial", bodyOmitted: true, omittedBodyChars: facts?.chars ?? 0,
+      bodyInCurrentInput: bodyVisible,
       ...(locator ? { archiveRef: { evidenceId: locator.evidenceId, version: locator.version, readHandle: locator.readHandle, view: "body" } } : {}),
       ...(locator?.outline ? { sourceOutline: { entries: locator.outline, approximate: true } } : {}),
       ...(typeof value.repeatReceipt === "string" ? { repeatReceipt: value.repeatReceipt } : {}),
-      notice: readLedgerModule.unchangedReadNotice(entry, locator) };
+      notice: readLedgerModule.unchangedReadNotice(entry, locator, bodyVisible) };
   }
 
   /** After the returned results were archived: bind each delivered version to
@@ -326,8 +339,6 @@ export class EvidenceManager {
       if (locator) {
         this.ledger.attachArchiveRef(item.facts, locator);
         this.handleCache.set(locator.evidenceId, locator.readHandle);
-        if (item.repeatReceipt) this.archivedReceipts.set(locator.evidenceId, { key: repeatRequestKey(item.request.name,
-          item.request.arguments || {}), receipt: item.repeatReceipt, arguments: item.request.arguments || {} });
       }
       const content = original?.content;
       const bytes = Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content ?? ""));
@@ -381,10 +392,9 @@ export class EvidenceManager {
     return readLedgerModule.ledgerFact(ledger, { observations, excerpts, handles, reportNow });
   }
 
-  /** Receipts of identical reads this input carries, including reads whose
-   * bodies were since projected or archived. */
+  /** Receipts of identical reads whose bodies this input still carries. */
   repeatReceipts(history: Chat) {
-    return repeatReceiptCandidates(history, this.archivedReceipts);
+    return repeatReceiptCandidates(history);
   }
 
   isArchiveRepage = (value: Record<string, unknown>) => this.repagedPages.has(archivePageKey(value));
@@ -410,6 +420,8 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
 export type ReadScreening = {
   messages: Array<ChatMessage>; replaced: number; redundant: number; duplicatedChars: number; repages: number;
   newDeliveries: number; readResults: number; failedReads: number; otherResults: number; focusedReads: number;
+  /** Hidden bodies this execution had already restored once, restored again. */
+  repeatRestores: number;
   pending: Array<{ request: ToolCallRequest; toolCallId: string; content: string | null; facts: ReadFacts; repeatReceipt: string }>;
   /** Results whose body entered the working history as an UNCHANGED fact. */
   suppressedCallIds: string[];
@@ -425,12 +437,13 @@ function archivePageKey(value: Record<string, unknown>) {
 
 export type RepeatReceipt = { receipt: string; arguments: Record<string, unknown> };
 
-/** Receipts of successful identical reads in this input. A read whose body
- * was projected or archived still names it: the server answers "no new
- * information" only while the source is unchanged, and that answer becomes
- * the UNCHANGED fact with the archive locator. */
-export function repeatReceiptCandidates(history: Chat,
-  archived: Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }> = new Map()): Map<string, RepeatReceipt> {
+/** Receipts of successful identical reads whose body is still verbatim in this
+ * input: the server answers "no new information" only while the source is
+ * unchanged, and that answer becomes the UNCHANGED fact. A projected or
+ * archived read carries no receipt, so repeating it returns the body the
+ * model asked for instead of a locator it must page in further rounds
+ * (2026-10-25 run: two or three extra rounds per archived file). */
+export function repeatReceiptCandidates(history: Chat): Map<string, RepeatReceipt> {
   const present = new Map<string, RepeatReceipt>();
   const index = workingContextModule.exchangeIndex(history);
   history.getMessagesArray().forEach((message, mi) => {
@@ -439,21 +452,16 @@ export function repeatReceiptCandidates(history: Chat,
       const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
       if (!request || !value || value.ok === false) return;
       const kind = String(value.kind || "");
-      if (["archived_tool_result_projection", "historical_evidence_range"].includes(kind)) {
-        const stored = archived.get(String(value.archiveRef?.evidenceId || value.evidenceId || ""));
-        if (stored) present.set(stored.key, { receipt: stored.receipt, arguments: stored.arguments });
-        return;
-      }
-      if (kind === "historical_evidence_index" || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
+      if (["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(kind)
+        || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
       present.set(repeatRequestKey(request.name, request.arguments || {}), { receipt: value.repeatReceipt, arguments: request.arguments || {} });
     });
   });
   return present;
 }
 
-export function presentRepeatReceipts(history: Chat,
-  archived?: Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }>): Map<string, string> {
-  return new Map([...repeatReceiptCandidates(history, archived)].map(([key, value]) => [key, value.receipt]));
+export function presentRepeatReceipts(history: Chat): Map<string, string> {
+  return new Map([...repeatReceiptCandidates(history)].map(([key, value]) => [key, value.receipt]));
 }
 
 

@@ -136,9 +136,19 @@ export const UTF8_BYTES_PER_TOKEN_ESTIMATE = 2.5;
 export const POST_TOOL_REQUEST_TOKENS = 2048;
 /** Working space kept above the mandatory floor when compaction can afford it. */
 export const MIN_WORKING_SPACE_TOKENS = 6000;
-/** Context-proportional watermarks used by workingInputScaling="auto". */
-export const SCALED_TRIGGER_RATIO = 0.6;
-export const SCALED_TARGET_RATIO = 0.45;
+/** Context-proportional watermarks used by workingInputScaling="auto". The
+ * trigger is still capped below the hard ceiling by one round's tool results
+ * (BudgetBroker safeTrigger). Raised from 0.6/0.45: at an 84K context a
+ * 13-file review needed about 20K tokens of bodies next to about 20K of
+ * system, schema and guidance, and the old 40K/56K window kept compacting them
+ * (2026-10-25 runs). */
+export const SCALED_TRIGGER_RATIO = 0.86;
+export const SCALED_TARGET_RATIO = 0.65;
+/** Share of the low-water input the current turn's working set (the latest
+ * reads it is still reasoning about) may keep verbatim through projection. */
+export const PINNED_WORKING_SET_SHARE = 0.3;
+/** The working-set budget never drops below the edit-only default. */
+export const PINNED_WORKING_SET_MIN_CHARS = 6144;
 
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery"

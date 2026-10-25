@@ -3308,7 +3308,7 @@ test("archive-only raw recovery exposes the verified Git source catalogue and re
   // pressure, so this remains an archive recovery scenario under the new policy.
   model.countTokens = async text => calls > 0 && String(text).length > 20000
     ? 20000 : Math.ceil(String(text).length / 4);
-  const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", workingInputScaling: "fixed",
     workingInputTargetTokens: 10000, workingInputTriggerTokens: 12048,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [sourceTool]);
@@ -3428,7 +3428,7 @@ test("raw Git replan keeps the archive reader beside the public source reader an
   // pressure, so this remains an archive recovery scenario under the new policy.
   model.countTokens = async text => calls > 0 && String(text).length > 20000
     ? 20000 : Math.ceil(String(text).length / 4);
-  const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", workingInputScaling: "fixed",
     workingInputTargetTokens: 12000, workingInputTriggerTokens: 16000,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [archiveSourceTool, { name: "git_changed_files", pluginIdentifier: "mcp/unreal-agent",
@@ -5512,8 +5512,10 @@ function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
   ctl.abortSignal = abort.signal;
   ctl.guardAbort = () => { if (abort.signal.aborted) throw abort.signal.reason; };
   const config = readConfig(ctl);
+  // The hybrid loop exposes the archive reader, a read tool, so its watermarks
+  // carry a read reservation; the fixture measures them the same way.
   const water = new BudgetBroker(config).watermarks({ contextLength: 38912, outputReserve: config.maxOutputReserve,
-    inputTokens: 0, exact: true }, 0, false, 0);
+    inputTokens: 0, exact: true }, 0, true, 0);
   const events = () => ctl.debugValues.filter(e => e.event === 'design_guidance_input');
   return { ctl, systems, water, events };
 }
@@ -5729,8 +5731,10 @@ function proseAndReadRun({ rounds, proseChars, readLines, contextLength = 38912,
           totalLines: readLines, lineNumbers: true, content }) }] }));
       options.onRoundEnd(); throw options.signal.reason;
     } };
+  // Round numbers below are scripted against the 22,000/16,500 watermarks the
+  // configured values give at this context; fixed scaling keeps them there.
   const ctl = fakeController(Chat.from([{ role: 'user', content: '전투 코드를 검토해' }]), model,
-    { contextManagementMode: 'hybrid', ...overrides }, [tool]);
+    { contextManagementMode: 'hybrid', workingInputScaling: 'fixed', ...overrides }, [tool]);
   const byRound = event => ctl.debugValues.filter(e => e.event === event);
   return { ctl, inputs, byRound };
 }

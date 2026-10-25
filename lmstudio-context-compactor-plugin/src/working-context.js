@@ -16,7 +16,7 @@ const { canonicalTranscript } = require("./transcript-canonical.js");
 const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
 const { sourceOutline } = require("./source-outline.js");
-const { ReadLedger, readFacts, pathKey } = require("./read-ledger.js");
+const { ReadLedger, archivePageFacts, readFacts, pathKey } = require("./read-ledger.js");
 
 const CANONICAL_MESSAGE_HASH_LIMIT = 512;
 
@@ -88,15 +88,39 @@ function rawExposureKey(request, result, originalEnvelope) {
   return hash([request.name, request.arguments || {}, String(result.toolCallId || ""), originalEnvelope]);
 }
 
-// The working set being edited (Claude Code re-attaches the files it modified
-// most recently after compaction): the latest successful read of each file that
-// a successful mutation in this history touched stays verbatim, newest first,
-// within a small budget, so the next exact-oldText edit needs no re-read.
-const PINNED_MAX_FILES = 3;
+// The working set (Claude Code re-attaches the files it touched most recently
+// after compaction) stays verbatim, newest first, within a budget. In a turn
+// with edits it is the latest read of each edited file, so the next
+// exact-oldText edit needs no re-read. A read-only turn (a review) keeps its
+// latest reads of distinct files instead, cited ones first, so it does not
+// re-page what it is still reasoning about (2026-10-25 run: 43 archive pages
+// of 13 files the review had already read in full).
+const PINNED_MAX_EDITED_FILES = 3;
+const PINNED_DEFAULT_MAX_CHARS = 6144;
+// The body fields evidenceBodyView reads: Unreal returns content, Unity text.
+const READ_BODY_FIELDS = ["content", "text", "body", "code"];
+const EDIT_PROVIDERS = ["mcp/unity-tools", "mcp/unreal-agent"];
 
+/** A completed edit under the rules of the provider that returned it. With no
+ * known provider either published rule decides: a Unity edit carries an
+ * operation but no ok, which a guess from the operation field read as an
+ * Unreal result and missed. */
+function completedEdit(parsed, provider) {
+  return (provider ? [provider] : EDIT_PROVIDERS)
+    .some(name => ["applied", "no_change"].includes(resultSemantics(parsed, name).effect));
+}
+
+/** Result key ("message:result") -> message index of each pinned read. A
+ * source read and an archive page that restored one are both reads of that
+ * file (2026-10-25 run: nine rounds of restored pages were cut by the next
+ * compaction and restored again). Each returned page is its own candidate
+ * (Unity reads a file in pages); only pages of the file's newest version are
+ * kept. metadata.readUse(pathKey) ranks files the turn already went back to. */
 function pinnedWorkingSet(messages, index, metadata = {}) {
-  const budget = Math.max(0, Number(metadata.pinnedWorkingSetMaxChars ?? 6144));
-  const edited = new Set(), reads = new Map();
+  const budget = Math.max(0, Number(metadata.pinnedWorkingSetMaxChars ?? PINNED_DEFAULT_MAX_CHARS));
+  const pinned = new Map();
+  if (!budget) return pinned;
+  const edited = new Set(), reads = new Map(), versions = new Map();
   let sequence = 0;
   const turnStart = messages.findLastIndex(message => message.getRole() === "user");
   messages.forEach((message, messageIndex) => message.getToolCallResults().forEach((result, resultIndex) => {
@@ -106,21 +130,36 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
     const envelope = serializedResultContent(result.content);
     const parsed = decodeToolResultRecord(envelope).value;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.ok === false) return;
-    const project = parsed.canonicalProject || parsed.activeProject || request.arguments?.project || "";
-    const paths = [parsed.path, ...(Array.isArray(parsed.files) ? parsed.files.map(file => file?.path) : [])]
-      .filter(value => typeof value === "string" && value)
-      .map(value => `${project}|${value.replace(/^project:\/\//, "").replace(/\\/g, "/")}`);
-    const effect = resultSemantics(parsed, parsed.operation ? "mcp/unreal-agent" : "mcp/unity-tools").effect;
-    if (["applied", "no_change"].includes(effect)) paths.forEach(value => edited.add(value));
-    else if (typeof parsed.content === "string" && paths[0] && Number.isInteger(parsed.startLine)
-      && Number.isInteger(parsed.endLine) && parsed.endLine - parsed.startLine < 120)
-      reads.set(paths[0], { key: `${messageIndex}:${resultIndex}`, size: envelope.length, sequence: sequence++ });
+    if (completedEdit(parsed, metadata.toolProviders?.[request.name])) {
+      [parsed.path, ...(Array.isArray(parsed.files) ? parsed.files.map(file => file?.path) : [])]
+        .filter(value => typeof value === "string" && value).forEach(value => edited.add(pathKey(value)));
+      return;
+    }
+    if (!READ_BODY_FIELDS.some(field => typeof parsed[field] === "string")) return;
+    const facts = parsed.kind === "historical_evidence_range" ? archivePageFacts(parsed) : readFacts(parsed);
+    if (!facts || (!facts.lines && !facts.bytes)) return;
+    const key = `${facts.key}\u0000${JSON.stringify([facts.lines, facts.bytes])}`;
+    reads.delete(key);
+    reads.set(key, { file: facts.key, version: facts.sourceVersion,
+      key: `${messageIndex}:${resultIndex}`, messageIndex, size: envelope.length, sequence: sequence++ });
+    versions.set(facts.key, facts.sourceVersion);
   }));
-  const pinned = new Set();
+  const cited = edited.size ? new Map() : citedLineRanges(messages.slice(turnStart + 1));
+  const isCited = file => {
+    const own = fileKey(file), stem = fileStem(own);
+    return [...cited.keys()].some(key => key.startsWith("stem:") ? namesMatch(key.slice(5), stem) : namesMatch(key, own));
+  };
+  const useOf = file => Number(metadata.readUse?.(file)) || 0;
+  const candidates = [...reads.values()]
+    .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file)))
+    .map(read => ({ ...read, cited: isCited(read.file), use: useOf(read.file) }))
+    .sort((a, b) => Number(b.cited) - Number(a.cited) || b.use - a.use || b.sequence - a.sequence);
+  const pinnedFiles = new Set();
   let used = 0;
-  for (const [file, read] of [...reads].sort((a, b) => b[1].sequence - a[1].sequence)) {
-    if ((edited.size && !edited.has(file)) || pinned.size >= PINNED_MAX_FILES || used + read.size > budget) continue;
-    pinned.add(read.key); used += read.size;
+  for (const read of candidates) {
+    if (edited.size && pinnedFiles.size >= PINNED_MAX_EDITED_FILES && !pinnedFiles.has(read.file)) continue;
+    if (used + read.size > budget) continue;
+    pinned.set(read.key, read.messageIndex); pinnedFiles.add(read.file); used += read.size;
   }
   return pinned;
 }
@@ -439,6 +478,22 @@ class WorkingContext {
     return [...output];
   }
 
+  /** Message indexes of the current turn's pinned working-set reads, which a
+   * compaction candidate keeps when its target still allows them. */
+  pinnedResultIndexes(history, maxChars) {
+    const index = exchangeIndex(history);
+    if (index.ambiguous) return [];
+    return [...new Set(pinnedWorkingSet(history.getMessagesArray(), index,
+      { pinnedWorkingSetMaxChars: maxChars, readUse: key => this.readUse(key) }).values())];
+  }
+
+  /** How often this conversation went back to a file (re-reads, UNCHANGED
+   * repeats, archive pages): the reads it evidently still needs. */
+  readUse(key) {
+    return this.readLedger.entries().filter(entry => entry.key === key)
+      .reduce((total, entry) => total + Math.max(0, entry.deliveries - 1) + entry.archivePages + entry.redundant, 0);
+  }
+
   /** Degrade path for an input that still omits pending results: release
    * them from first-consumer tracking (they stay pinned and rehydratable
    * through the archive) instead of failing the whole execution. */
@@ -592,7 +647,7 @@ class WorkingContext {
     const projected = Chat.empty();
     let changed = false, archiveFailed = false, preservedFirstConsumer = false;
     const messages = history.getMessagesArray();
-    const pinned = pinnedWorkingSet(messages, index, metadata);
+    const pinned = pinnedWorkingSet(messages, index, { readUse: key => this.readUse(key), ...metadata });
     const citations = citedLineRanges(messages);
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
       const message = messages[messageIndex];
@@ -753,7 +808,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or path alone for the newest archived body of that file, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -768,6 +823,7 @@ class WorkingContext {
             description: "Whole serialized JSON response budget, including metadata and escaping. Default 4096. Keep fixed while paging; do not subtract already-read content." } },
         anyOf: [ { required: ["evidenceId", "version"], properties: { action: { const: "read" } } },
           { required: ["readHandle"], properties: { action: { const: "read" } } },
+          { required: ["path"], properties: { action: { const: "read" } } },
           { required: ["action"], properties: { action: { const: "catalog" } } } ] },
       implementation: async (args, ctx) => {
         if (ctx.signal.aborted) throw ctx.signal.reason;
@@ -783,10 +839,13 @@ class WorkingContext {
           || args.symbol !== undefined && args.startLine !== undefined) return { ok: false, errorCode: "pagination_conflict" };
         const lines = args.symbol !== undefined ? { symbol: String(args.symbol) }
           : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
+        const maxChars = args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars;
         const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
-          args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars, args.view ?? "body", lines, args.path)
-          : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars,
-            args.view ?? (lines ? "body" : "envelope"), lines);
+          args.startOffset ?? 0, maxChars, args.view ?? "body", lines, args.path)
+          : args.evidenceId === undefined && args.version === undefined && typeof args.path === "string"
+            ? this.archive.readByPath(args.path, args.startOffset ?? 0, maxChars, args.view ?? "body", lines)
+            : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, maxChars,
+              args.view ?? (lines ? "body" : "envelope"), lines);
         return this.explainArchiveError(result);
       } });
   }
