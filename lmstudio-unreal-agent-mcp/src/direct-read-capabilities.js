@@ -11,7 +11,7 @@ const { success, failure } = require("./direct-response.js");
 const { registerReadSnapshot, unavailableReadSnapshot: unavailable } = require("./direct-read-snapshot.js");
 const { clamp, isBinary, statOrNull, statSignature } = require("./direct-runtime-shared.js");
 const { isSourceLikeExt } = require("./write-guards.js");
-
+const { lineRangeSha256 } = require("./line-range-hash.js");
 const { lexicalDeclarationWindow, lexicalSymbolWindow } = require("./direct-symbol-extraction.js");
 const { LINE_NUMBER_FORMAT, numberLines } = require("../../shared-tool-core/line-numbering.js");
 
@@ -163,22 +163,22 @@ function createReadCapabilities(context) {
     }
     if (!initialStat.isFile()) return unavailable(resolution, "NOT_A_FILE", `Not a file: ${args.path}`);
     const explicitWindow = args.offsetBytes !== undefined || args.maxBytes !== undefined;
-    // Source is located first at any size; only small non-source files read whole.
+    const engineFile = resolution.resolvedRootType === "installed_engine", sourceFile = isSourceLikeExt(path.extname(resolution.absolutePath));
+    // Small project source reads whole as the numbered read_file_range 1..N payload (2026-10-20 audit: refused
+    // headers and 100-line pages split the code the model compared); engine and larger source are located first.
+    if (!explicitWindow && !engineFile && sourceFile && initialStat.size <= limits.wholeSourceReadMaxBytes) return readFileRange({ ...args, startLine: 1, endLine: Number.MAX_SAFE_INTEGER, lineNumbers: true }, requestContext);
     const wholeReadRefusal = explicitWindow ? null
-      : resolution.resolvedRootType === "installed_engine" ? "engine source requires a targeted read"
-        : isSourceLikeExt(path.extname(resolution.absolutePath)) ? "source files are located first, not read whole"
+      : engineFile ? "engine source requires a targeted read"
+        : sourceFile ? `source files are located first, not read whole, above ${limits.wholeSourceReadMaxBytes} bytes`
           : initialStat.size > limits.wholeReadMaxBytes ? `files over ${limits.wholeReadMaxBytes} bytes require a targeted read` : null;
     if (wholeReadRefusal) {
+      const counted = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes), totalLines = counted.ok ? counted.content.split(/\r?\n/).length : undefined;
       return unavailable(resolution, "WHOLE_READ_TOO_LARGE",
-        `${args.path} is ${initialStat.size} bytes; ${wholeReadRefusal}. `
+        `${args.path} is ${initialStat.size} bytes${totalLines ? ` (${totalLines} lines)` : ""}; ${wholeReadRefusal}. `
         + "Search the symbol with context lines, read its declaration or body, or read the exact line range.", {
-          retryAllowed: true, retryMode: "different_arguments",
-          suggestion: locateAlternatives(args)[0],
-          details: { size: initialStat.size, alternatives: [
-            ...locateAlternatives(args),
-            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) },
-          ] },
-        });
+          retryAllowed: true, retryMode: "different_arguments", suggestion: locateAlternatives(args)[0],
+          details: { size: initialStat.size, ...(totalLines ? { totalLines } : {}), alternatives: [...locateAlternatives(args),
+            { tool: "read_file_range", argsTemplate: projectScopedSuggestionArgs(args, { path: args.path, startLine: "<first>", endLine: "<last>" }) }] } });
     }
     const stableRead = await readStableFileWindow(resolution.absolutePath, offset, maxBytes);
     if (!stableRead.ok) {
@@ -240,7 +240,7 @@ function createReadCapabilities(context) {
       content: (numbered ? numberLines(lines.slice(start - 1, end), start) : lines.slice(start - 1, end)).join("\n"),
       ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
-      endLine: end,
+      endLine: end, rangeSha256: lineRangeSha256(lines, start, end),
       totalLines: lines.length,
       sha256: read.hash,
       // truncated: the requested range was not returned whole. A file that
@@ -322,7 +322,7 @@ function createReadCapabilities(context) {
       content: (numbered ? numberLines(allLines.slice(start - 1, returnedEnd), start) : allLines.slice(start - 1, returnedEnd)).join("\n"),
       ...(numbered ? { lineNumbers: true, lineNumberFormat: LINE_NUMBER_FORMAT, lineNumbersAreDisplayOnly: true } : { lineNumbers: false }),
       startLine: start,
-      endLine: returnedEnd,
+      endLine: returnedEnd, rangeSha256: lineRangeSha256(allLines, start, returnedEnd),
       requestedEndLine: end,
       nextStartLine: returnedEnd < end ? returnedEnd + 1 : null,
       hasMore: returnedEnd < end,

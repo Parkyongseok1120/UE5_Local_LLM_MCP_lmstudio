@@ -22,7 +22,8 @@ const MAX_STORED_NOTES = 128;
 const NOTE_INSTRUCTION = [
   "You may append a private continuity note only when a decision, rejected hypothesis, or open question materially changes.",
   "Use only these optional JSON arrays: decisions [{id?, status?, statement, rationale, supersedes?, refs?}], rejectedHypotheses [{id?, status?, hypothesis, reason, supersedes?, refs?}], openQuestions [{id?, status?, question, supersedes?, refs?}]. status is open, resolved, or superseded. Reuse an injected item's id for an explicit status update; supersedes contains prior item ids. No other keys. refs may contain only tool-call:<id> values copied exactly from the [Available tool-call refs] list when it is present (never invent ids); omit uncertain refs.",
-  "Write the normal user-facing answer first. Then append this footer with only your JSON object between the tags:",
+  "Write any visible text first. Then append this footer with only your JSON object between the tags, in a final answer or in a round that also requests tools.",
+  "During research, record a finding as soon as returned source confirms or rejects it, so later rounds reuse it instead of re-deriving it; do not re-examine a recorded item unless new evidence contradicts it.",
   "<!-- direct-continuity-note-v1 -->",
   "<continuity-note>",
   "{}",

@@ -1905,7 +1905,8 @@ def test_powershell_file_command_bypasses_restricted_process_policy(tmp_path: Pa
     blocked = subprocess.run(
         [powershell, "-NoProfile", "-File", str(script)],
         capture_output=True,
-        text=True,
+        # Windows PowerShell localizes this error using the host code page.
+        # This control checks the exit code, so keep its diagnostic bytes raw.
         env=environment,
         check=False,
     )

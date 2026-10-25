@@ -97,6 +97,8 @@ export type DirectConfig = {
   maxToolResultChars: number;
   toolStagnationAction: StagnationAction;
   toolStagnationRounds: number;
+  /** Tool rounds of reads with no new path, version or range before report_now. */
+  noNewEvidenceRounds: number;
   maxResearchRounds: number;
   generationRepetitionAction: StagnationAction;
   generationRepeatCount: number;
@@ -141,7 +143,7 @@ export const SCALED_TARGET_RATIO = 0.45;
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery"
   | "research_round_limit" | "context_budget" | "research_recovery_complete"
-  | "research_recovery_exhausted";
+  | "research_recovery_exhausted" | "research_no_new_evidence";
 
 export type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
 

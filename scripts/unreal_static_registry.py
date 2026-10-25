@@ -41,6 +41,9 @@ from unreal_static_model import (
     SOURCE_ONLY_SUFFIXES,
     Finding,
 )
+from unreal_static_network import (
+    validate_doreplifetime_parameter_name,
+)
 from unreal_static_reflection import (
     validate_blueprint_native_event_declarations,
     validate_blueprintpure_missing_const,
@@ -69,6 +72,11 @@ from unreal_static_threading import (
     merge_overlapping_cleanup_findings,
     validate_subsystem_contracts,
     validate_thread_contracts,
+)
+from unreal_static_visibility import (
+    validate_complete_type_includes,
+    validate_first_include_is_own_header,
+    validate_plugin_type_declarations,
 )
 
 
@@ -189,6 +197,7 @@ def _run_per_file_validators(
         findings.extend(validate_project_uobject_type_visibility(path, text, root, include_index))
         findings.extend(validate_required_includes(path, text, root))
         findings.extend(validate_component_registration_includes(path, text, root))
+        findings.extend(validate_plugin_type_declarations(path, text, root, include_index))
     if path.suffix.lower() in SOURCE_ONLY_SUFFIXES:
         findings.extend(validate_editor_only_runtime_includes(path, text, root))
         findings.extend(validate_enhanced_input(path, text, root, build_text_value))
@@ -207,6 +216,9 @@ def _run_per_file_validators(
     if path.suffix.lower() in CPP_SOURCE_SUFFIXES:
         findings.extend(validate_required_includes(path, text, root))
         findings.extend(validate_component_registration_includes(path, text, root))
+        findings.extend(validate_complete_type_includes(path, text, root, include_index))
+        findings.extend(validate_first_include_is_own_header(path, text, root, include_index, build_text_value))
+        findings.extend(validate_doreplifetime_parameter_name(path, text, root))
         findings.extend(validate_constructor_lifecycle_usage(path, text, root))
         findings.extend(validate_newobject_outer(path, text, root))
         findings.extend(validate_component_timer_manager(path, text, root, bases))

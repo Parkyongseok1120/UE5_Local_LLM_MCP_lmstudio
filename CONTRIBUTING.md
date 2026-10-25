@@ -9,7 +9,7 @@
 ```powershell
 python -m pip install -r requirements-dev.txt ruff
 python -m compileall -q install.py installer scripts skills tools
-python -m pytest -q --tb=short
+python scripts/ci/run_ci_suite.py portable_direct portable_release windows_direct windows_release
 python scripts/verify_encoding.py
 ruff check scripts/ tests/ --select=E,F,W --ignore=E501,E402,F401
 node --test scripts/chat_history_trim.test.js scripts/stage_campaign_verify.test.js
@@ -20,10 +20,16 @@ node --test scripts/chat_history_trim.test.js scripts/stage_campaign_verify.test
 ```powershell
 npm --prefix lmstudio-unreal-agent-mcp ci --no-fund --no-audit
 npm --prefix lmstudio-unreal-agent-mcp test
+npm --prefix lmstudio-unity-mcp ci --no-fund --no-audit
+npm --prefix lmstudio-unity-mcp test
 npm --prefix lmstudio-context-compactor-plugin ci --no-fund --no-audit
 npm --prefix lmstudio-context-compactor-plugin test
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\installer_support\Verify-Oss-Ready.ps1
 ```
+
+CI의 Python 파일 목록은 `scripts/ci/ci_suites.py`에서 관리합니다. `portable_direct`와 `portable_release`는 Windows·Linux·macOS에서 실행하며, `windows_direct`와 `windows_release`는 Windows 전용 작업에서 추가합니다. Windows 전용 작업이 portable suite 전체를 다시 실행하지는 않습니다. 별도의 `direct_repetition`은 동시성·원자적 갱신 경로를 세 번 반복하는 의도적인 중복 검사입니다.
+
+새 Direct 회귀를 추가하면 해당 suite에도 편입해야 합니다. LM Studio 실행 분석기와 빌드 실패 코퍼스의 합성 검사는 `portable_direct`에 포함됩니다. 실제 엔진 코퍼스 검사는 `UE_CORPUS_ENGINE_ROOT`를 명시한 장비에서만 추가 실행하며, 엔진 없는 CI에서는 제외됩니다. 전체 루트 테스트를 추가 조사하려면 `python -m pytest -q --tb=short`로 실행할 수 있지만, 이 명령의 선택 범위는 CI suite와 다릅니다.
 
 자동 검사와 실제 장비에서 실행한 결과를 구분해서 적어야 합니다. 실제 실행 결과에는 장비·엔진·프로젝트·명령과 결과를 남깁니다.
 

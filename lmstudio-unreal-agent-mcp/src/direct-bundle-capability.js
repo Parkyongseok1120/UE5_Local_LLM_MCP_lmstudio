@@ -2,7 +2,7 @@
 const { withBundleChangeEvidence } = require("./direct-change-evidence");
 
 const path = require("node:path");
-const { calculateReplacement, calculateReplacements } = require("./safe-write");
+const { calculatePatch } = require("./safe-write");
 const { applyDirectEditBundle, validateBundleLimits } = require("./direct-edit-bundle");
 const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
 const { readStableTextFile } = require("./direct-file-snapshot");
@@ -92,13 +92,13 @@ function createBundleCapability(context) {
         throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
       }
       patch.expectedHash = version.expectedHash;
-      const next = patch.edits ? calculateReplacements({ priorContent: read.content, edits: patch.edits }) : calculateReplacement({
-        priorContent: read.content,
-        oldText: patch.oldText,
-        newText: patch.newText,
-        expectedOccurrences: patch.expectedOccurrences,
-      });
-      if (!next.ok) throw validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
+      const next = calculatePatch(read.content, patch, { maxRangeTextChars: limits.maxPatchOldTextChars, maxPatchChars: limits.maxPatchChars });
+      if (!next.ok) {
+        const error = validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
+        // A stale line range answers with what is there now, as replace_in_file does.
+        if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange };
+        throw error;
+      }
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });
     }
     const semanticAdvisories = [];
@@ -137,7 +137,7 @@ function createBundleCapability(context) {
       return failure(
         error.code || "BUNDLE_VALIDATION_FAILED",
         message,
-        { retryAllowed: true, retryMode: "different_arguments" },
+        { retryAllowed: true, retryMode: "different_arguments", ...(error.details ? { details: error.details } : {}) },
       );
     }
     const { resolutions, semanticAdvisories, targetIdentities } = validation;
@@ -185,6 +185,9 @@ function createBundleCapability(context) {
         },
       );
     }
+    context.buildChanges.record(activeProject, Object.entries(result.postWriteHashes || {})
+      .filter(([filePath, hash]) => hash !== result.preChangeHashes?.[filePath])
+      .map(([filePath]) => resolutions.get(filePath)?.relativePath || filePath));
     const files = [];
     for (const [filePath, hash] of Object.entries(result.postWriteHashes || {})) {
       const resolution = resolutions.get(filePath)

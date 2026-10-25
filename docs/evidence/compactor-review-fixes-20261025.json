@@ -1,0 +1,146 @@
+{
+  "existing": [
+    "WorkingContext owns scoped persistence and Archive membership.",
+    "ReadLedger owns delivered version/range state; EvidenceManager applies screening and runtime facts.",
+    "prediction-loop owns progression/finalization and separates visible transcript from working input.",
+    "RecoveryProgress already distinguishes restored working evidence from historical novelty.",
+    "composeModelHistory owns injected runtime data slots; internal-data-output and prediction-stream own filtered visible output."
+  ],
+  "doNotDuplicate": [
+    "Reuse existing Archive record/version/membership checks.",
+    "Reuse existing WorkingContext persistence and source availability/recovery progress.",
+    "Preserve original visible tool results and mutation/read contracts.",
+    "Do not add a second ledger or treat model self-declared proof/analysis text as independent verification."
+  ],
+  "invariants": [
+    "Delivered, visible, observed source version and verified claim are separate facts.",
+    "Rejected/structural-only packets cannot establish factual verification.",
+    "New SHA/range and needed current-input restoration remain readable.",
+    "Every suppressed body must have a usable recovery locator for the intended range.",
+    "Source version transitions include reversion to a previously delivered hash.",
+    "Failed reads remain unresolved, not unchanged or complete.",
+    "Current no-op duplicate control still converges to a report.",
+    "Internal runtime budget data remains available to the model without being mislabeled as reasoning or emitted as an ordinary report.",
+    "Visible/durable output filtering must preserve real answer text, code fences and user-requested quotations/explanations.",
+    "A dry run is not an update; installed ID and currently loaded ID are independently reported."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/read-ledger.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/reference-context.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/resume-facts.ts",
+    "source-reacquisition/prediction-loop/reference-context/recovery/budget/contract tests",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+    "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "UPDATE.bat execution and installer verification; no batch source change proposed",
+    "scripts/build_integrated_package.py",
+    "tests/test_integrated_package.py"
+  ],
+  "validationPlan": [
+    "Existing archived0ace TypeScript compile and949 plugin tests passed.",
+    "Existing24 Python analyzer/trace tests passed.",
+    "Independent16 synthetic cases:6 controls pass,10 required-behavior assertions fail.",
+    "Cover nine user-specified cases plus failed/unknown proof, unseen ranges, stale claim provenance, A-B-A, locator scope, failed read recovery and episode reset.",
+    "After implementation keep baseline tests passing and turn defect assertions green, then use fixed project/model/prompt settings with at least3 actual audits per candidate.",
+    "If candidate fails install/contract checks, retain or restore the pre-install backup; do not alter running user conversations.",
+    "F6 direct composer/filter probe confirms assistant-slot injection, absence from privateDataParts and output pass-through even if supplied in privateDataParts manually (4 assertions).",
+    "Add streaming/fallback/cancel/report-only-echo and ordinary-quotation controls before implementing F6.",
+    "For final deployment, back up plugin/configs, verify UPDATE.bat --dry-run targets, run UPDATE.bat with process-local UPDATE_NO_PAUSE=1 and managed Python/PATH, record exit/logs, verify source/dist/production IDs and unchanged bindings.",
+    "Check active requests before update/restart; do not force-stop user work. Distinguish installed from loaded until a safe LM Studio restart and direct_runtime_identity confirmation."
+  ],
+  "mode": "codegen",
+  "baseRef": "0acefab991acc32e7e56cabe223bc9c25cfcaf4d",
+  "proposed": [
+    "Implemented approved F1-F6 corrections in existing owners; no new MCP/Archive schema.",
+    "Include read-ledger.js in the explicit portable runtime allowlist after a reproduced install failure."
+  ],
+  "claims": [
+    {
+      "id": "implemented-offline-regressions",
+      "claim": "F1-F6 synthetic regressions pass while original visible tool bodies, new source versions/ranges, focused recovery and genuine no-progress convergence remain covered. This is not a post-fix real-model audit result.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/source-reacquisition.test.cjs",
+          "observation": "Provenance, A-B-A, locator coverage and focused/visible restoration fixtures."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "Focused progress and failed reads do not force tool removal; genuine duplicate control remains."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/internal-data-output.test.cjs",
+          "observation": "Owned protocol echo filtering, user literals, split/cancel and non-report classification."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/implementation-plugin-final.log",
+          "observation": "963 passed, zero failed; TypeScript build included."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:237",
+          "symbol": "acceptedValidatePackets"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:268",
+          "symbol": "source read availability and locator screening"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:219",
+          "symbol": "version/range-scoped assistant claim"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:77",
+          "symbol": "owned runtime protocol output boundary"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "tests/test_integrated_package.py",
+          "observation": "Full package suite has 19 passing tests and one preexisting VERSIONING link failure. Actual portable compilation and installation checks pass after the read-ledger allowlist fix."
+        }
+      ],
+      "unknowns": [
+        "No post-fix long-running model audit or repeated A/B performance trial.",
+        "New execution loadedBuildId telemetry has not been observed after host restart.",
+        "Model paraphrases outside recognized owned metadata and endless failed recovery attempts remain possible."
+      ]
+    }
+  ],
+  "localUpdate": {
+    "dryRunExit": 0,
+    "actualUpdateExit": 0,
+    "installedBuildId": "ef-build-v2-ec5a32513f4a375db26b6b7ce1bb16d6086021406bfe8b37d54648795bf507bd",
+    "installedSourceDistProductionIdsMatch": true,
+    "fiveConfigsUnchanged": true,
+    "hostRestarted": true,
+    "executionLoadedIdObserved": false,
+    "postFixModelAuditRun": false,
+    "backup": "%USERPROFILE%/.evidence-first/backups/compactor-review-fixes-20261025-031825"
+  }
+}

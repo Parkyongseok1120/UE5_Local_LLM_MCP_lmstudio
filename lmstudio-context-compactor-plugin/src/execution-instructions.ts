@@ -3,7 +3,9 @@
 export const REASONING_RECOVERY_INSTRUCTION = [
   "The previous generation exhausted its output limit in reasoning without producing an answer or a tool request.",
   "Its unfinished reasoning is not an implemented change or an accepted decision. Restart from the user's original constraints and the verified evidence in this input.",
+  "Framework or engine behavior stated in that unfinished reasoning is not evidence either way; before rating a finding on it, check it against the engine contracts in this input or the engine source.",
   "Choose the next small useful step. Avoid re-deriving the whole design or drafting the entire implementation in reasoning.",
+  "When the continuity note protocol is available, record the findings already confirmed or rejected in it before further analysis, instead of re-deriving them.",
   "Keep reasoning brief: state the conclusion or the next tool request first, then only the essential justification.",
   "If an operation is needed, use the registered structured tool interface with a small coherent batch and inspect its results before further work.",
   "If a user constraint prevents choosing a correct implementation, ask one concise clarification; do not reinterpret a prohibition as permission.",
@@ -42,7 +44,7 @@ export const OUTPUT_RECOVERY_FINAL_INSTRUCTION = [
 
 export const READ_ONLY_BATCH_INSTRUCTION = [
   "When a registered tool is exposed, use the host SDK's structured tool-call interface; never print XML, pseudo-XML, JSON, or other tool syntax as assistant text.",
-  "For independent read-only investigation, request a reasonable batch and consume its results before planning the next batch.",
+  "For independent read-only investigation, request a reasonable batch and consume its results before planning the next batch. Group independent file reads in one batch (for example several headers with their sources) rather than one or two per prediction.",
   "Use the published read tool's limit, byteBudget, page, and cursor contract. Reserve the complete returned envelope for the next model input across the whole batch; after results arrive, the host will remeasure the exact template before another prediction.",
   "For large multi-file work, avoid generating an unnecessarily large set of tool arguments in one prediction.",
   "Do not repeat an already successful read unless the required range or source version is different, or the current question needs text that read returned and this input no longer contains.",

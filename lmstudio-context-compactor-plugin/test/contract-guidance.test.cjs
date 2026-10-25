@@ -136,8 +136,10 @@ test("a build diagnostic brings the claim policies into the model input", async 
   assert.ok(candidates[0].ids.includes("unreal/verification"));
   const result = await f.admit(candidates);
   assert.match(result.assembled.history.toString(), /policy\.claims\.build-evidence/);
+  // The claim policies are a reserved role in auto mode, with or without a
+  // diagnostic: an audit judged without them repeated known misreadings.
   const quiet = autoGuidanceCandidates("debugging", undefined, scope, snapshotFor("5.7.4"));
-  assert.ok(!quiet[0].ids.includes("unreal/verification"));
+  assert.ok(quiet[0].ids.includes("unreal/verification"));
 });
 
 test("bundled sections list the contract ids their generated block delivers", () => {
@@ -185,7 +187,7 @@ test("a closed version gate is named in the omission reasons", () => {
 
 test("a same-major unvalidated engine gets the contract facts annotated, not omitted", async () => {
   const f = budgetFixture(body => Math.ceil(body.length / 20));
-  for (const version of ["5.3.2", "5.7.4", "5.9"]) {
+  for (const version of ["5.3.2", "5.6.1", "5.9"]) {
     const [first] = autoGuidanceCandidates("lifecycle", undefined, scope, snapshotFor(version));
     assert.ok(first.ids.includes("unreal/lifetime"), version);
     assert.ok(first.omissionReasons.includes("contract_sections_engine_version_unvalidated_annotated"), version);
@@ -195,17 +197,19 @@ test("a same-major unvalidated engine gets the contract facts annotated, not omi
     assert.ok(input.includes(`[unvalidated for unreal ${version}; validated on ${contracts.validatedEngineVersions.join(", ")}]`), version);
     assert.ok(input.includes("ue.actor.lifecycle"), version);
   }
-  const validated = autoGuidanceCandidates("lifecycle", undefined, scope, snapshotFor("5.8.1"))[0];
-  assert.ok(!(validated.omissionReasons || []).includes("contract_sections_engine_version_unvalidated_annotated"));
-  const lifetime = validated.instruction.split("[reference id=unreal/lifetime ")[1].split("[reference id=")[0];
-  assert.doesNotMatch(lifetime, /\[unvalidated for/);
+  for (const version of ["5.8.1", "5.7.4"]) {
+    const validated = autoGuidanceCandidates("lifecycle", undefined, scope, snapshotFor(version))[0];
+    assert.ok(!(validated.omissionReasons || []).includes("contract_sections_engine_version_unvalidated_annotated"), version);
+    const lifetime = validated.instruction.split("[reference id=unreal/lifetime ")[1].split("[reference id=")[0];
+    assert.doesNotMatch(lifetime, /\[unvalidated for/, version);
+  }
 });
 
 test("policy-only summary blocks carry no engine version label; engine-fact blocks do", () => {
   const sourceOf = id => sectionOf(id).text;
   assert.doesNotMatch(sourceOf("unreal/verification"), /소스 기준/);
   assert.match(sourceOf("unreal/verification"), /프로젝트 정책 unreal_contracts@/);
-  assert.match(sourceOf("unreal/lifetime"), /엔진 계약 unreal_contracts@\d+ \(UE 5\.8 소스 기준/);
+  assert.match(sourceOf("unreal/lifetime"), /엔진 계약 unreal_contracts@\d+ \(UE 5\.7, 5\.8 소스 기준/);
 });
 
 test("catalogue engineVersions must equal the contract file's validatedEngineVersions", () => {

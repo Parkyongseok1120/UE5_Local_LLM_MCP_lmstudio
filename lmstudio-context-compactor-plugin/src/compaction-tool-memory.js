@@ -321,6 +321,25 @@ function historicalEvidenceObservation(source) {
   });
 }
 
+/** The read a body projection stands for, in raw-read field names, when it
+ * carries a source hash and a line or byte range. Never mutation authority. */
+function projectedReadObservation(source) {
+  const facts = isRecord(source.sourceFacts) ? source.sourceFacts : {};
+  const path = isRecord(source.sourceIdentity) ? source.sourceIdentity.path : undefined;
+  const sha256 = String(source.sourceVersion || "");
+  const lines = Number.isSafeInteger(facts.startLine) && Number.isSafeInteger(facts.endLine);
+  const bytes = Number.isSafeInteger(facts.offsetBytes) && Number.isSafeInteger(facts.nextOffsetBytes);
+  if (typeof path !== "string" || !path || !/^[A-Fa-f0-9]{64}$/u.test(sha256) || (!lines && !bytes)) return {};
+  const out = { ok: true, path, sha256, operation: "observed", observationState: "observed" };
+  for (const key of ["startLine", "endLine", "totalLines", "offsetBytes", "nextOffsetBytes", "size", "hasMore"]) {
+    if (facts[key] !== undefined) out[key] = facts[key];
+  }
+  for (const key of ["canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath"]) {
+    if (isRecord(source.sourceIdentity) && source.sourceIdentity[key] !== undefined) out[key] = source.sourceIdentity[key];
+  }
+  return out;
+}
+
 function parseToolResult(content) {
   const decoded = decodeToolResultRecord(content);
   if (decoded.error === "empty") return { summary: "empty tool result" };
@@ -334,7 +353,10 @@ function parseToolResult(content) {
     const out = {};
     if (source.kind === "archived_tool_result_projection" || source.kind === "historical_evidence_range") {
       const historicalEvidence = historicalEvidenceObservation(source);
-      return historicalEvidence ? { historicalEvidence } : { summary: "invalid historical evidence reference omitted" };
+      if (!historicalEvidence) return { summary: "invalid historical evidence reference omitted" };
+      // A projected source read still proves which version and range was read:
+      // keep it as a file observation so the checkpoint says "read at sha X".
+      return { historicalEvidence, ...(source.kind === "archived_tool_result_projection" ? projectedReadObservation(source) : {}) };
     }
     // Git comparisons are repository observations, never file read/review coverage.
     if (source.kind === "git_observation" || source.action && source.comparison && source.canonicalProjectRoot) {

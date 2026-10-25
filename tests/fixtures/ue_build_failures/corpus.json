@@ -1,0 +1,841 @@
+{
+  "schemaVersion": 1,
+  "baselineRef": "f26c5f8",
+  "buildsObserved": 57,
+  "failedBuilds": 51,
+  "scope": "Selected conversation versions; 51 failed builds grouped by diagnostic cause. Minimized source variants, not full historical projects. Untargeted cases are retained in the denominator.",
+  "cases": [
+    {
+      "id": "duplicate-reflected-enum",
+      "expectedCodes": [
+        "DUPLICATE_REFLECTED_TYPE_NAME"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUENUM()\nenum class ECombatState : uint8 { Idle };\n",
+        "Source/Corpus/Public/Other.h": "#include \"Other.generated.h\"\nUENUM()\nenum class ECombatState : uint8 { Idle };\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUENUM()\nenum class ECombatState : uint8 { Idle };\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 1,
+          "diagnostic": "Source/Latency_MultiCombat/Public/Data/CombatTypes.h(11): Error: Enum 'ECombatState' shares engine name 'ECombatState' with enum 'ECombatState' in Source/Latency_MultiCombat/Public/Data/ECombatState.h(7)"
+        }
+      ]
+    },
+    {
+      "id": "shadow-PlayerStateClass",
+      "expectedCodes": [
+        "UPROPERTY_SHADOWS_BASE_MEMBER"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\nUPROPERTY()\nTSubclassOf<AActor> PlayerStateClass;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\n\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 2,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatGameMode.h(32): Error: Member variable declaration: 'PlayerStateClass' cannot be defined in 'ALatencyMultiCombatGameMode' as it is already defined in scope 'AGameModeBase' (shadowing is not allowed)"
+        }
+      ]
+    },
+    {
+      "id": "inherited-ufunction",
+      "expectedCodes": [
+        "UFUNCTION_OVERRIDE_REDECLARED"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APlayerState\n{\nGENERATED_BODY()\npublic:\nUFUNCTION()\nvirtual void OnRep_Score() override;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APlayerState\n{\nGENERATED_BODY()\npublic:\nvirtual void OnRep_Score() override;\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 3,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatPlayerState.h(47): Error: Override of UFUNCTION 'OnRep_Score' in parent 'APlayerState' cannot have a UFUNCTION() declaration above it; it will use the same parameters as the original declaration."
+        }
+      ]
+    },
+    {
+      "id": "shadow-GameStateClass",
+      "expectedCodes": [
+        "UPROPERTY_SHADOWS_BASE_MEMBER"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\nUPROPERTY()\nTSubclassOf<AActor> GameStateClass;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\n\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 4,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatGameMode.h(32): Error: Member variable declaration: 'GameStateClass' cannot be defined in 'ALatencyMultiCombatGameMode' as it is already defined in scope 'AGameModeBase' (shadowing is not allowed)"
+        }
+      ]
+    },
+    {
+      "id": "missing-repnotify",
+      "expectedCodes": [
+        "REPLICATED_USING_FUNCTION_MISSING"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APlayerState\n{\nGENERATED_BODY()\npublic:\nUPROPERTY(ReplicatedUsing=OnRep_Team)\nint Team;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APlayerState\n{\nGENERATED_BODY()\npublic:\nUPROPERTY(ReplicatedUsing=OnRep_Team)\nint Team;\nUFUNCTION()\nvoid OnRep_Team();\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 5,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatPlayerState.h(18): Error: Replication notification function 'OnRep_Team' not found"
+        }
+      ]
+    },
+    {
+      "id": "replication-macro-include",
+      "expectedCodes": [
+        "MISSING_CPP_SYMBOL_INCLUDE"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AActor\n{\nGENERATED_BODY()\npublic:\nUPROPERTY(Replicated)\nint Health;\n};\n",
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\nvoid ADemo::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const\n{\nDOREPLIFETIME(ADemo, Health);\n}\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AActor\n{\nGENERATED_BODY()\npublic:\nUPROPERTY(Replicated)\nint Health;\n};\n",
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Net/UnrealNetwork.h\"\nvoid ADemo::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const\n{\nDOREPLIFETIME(ADemo, Health);\n}\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 6,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp(22,16): error C2275: 'ALatencyMultiCombatGameState': 형식 대신 식이 필요합니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 7,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp(22,16): error C2275: 'ALatencyMultiCombatGameState': 형식 대신 식이 필요합니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 11,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp(23,16): error C2275: 'ALatencyMultiCombatGameState': 형식 대신 식이 필요합니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 13,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp(26,16): error C2275: 'ALatencyMultiCombatPlayerState': 형식 대신 식이 필요합니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 25,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(35,55): error C2275: 'ALatencyMultiCombatCharacter': 형식 대신 식이 필요합니다."
+        }
+      ]
+    },
+    {
+      "id": "const-override",
+      "expectedCodes": [
+        "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\nvirtual AActor* ChoosePlayerStart_Implementation(AController* Player) const override;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public AGameModeBase\n{\nGENERATED_BODY()\npublic:\nvirtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 8,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatGameMode.h(34,18): error C3668: 'ALatencyMultiCombatGameMode::ChoosePlayerStart_Implementation': 재정의 지정자 'override'가 있는 메서드가 기본 클래스 메서드를 재정의하지 않았습니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 9,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp(26,16): error C2662: 'AActor *AGameModeBase::ChoosePlayerStart_Implementation(AController *)': 'this' 포인터를 'const ALatencyMultiCombatGameMode'에서 'AGameModeBase &'(으)로 변환할 수 없습니다."
+        }
+      ]
+    },
+    {
+      "id": "include-Engine-InputMappingContext-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Engine/InputMappingContext.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"InputMappingContext.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 10,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(4,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'Engine/InputMappingContext.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2665-FTimerManager--SetTimer",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\t{\n\t\tAController* Captured = Controller;\n\t\tGetWorldTimerManager().SetTimer(FTimerHandle(), [this, Captured]() { RespawnPlayer(Captured); }, RespawnDelay, false);\n\t}\n}"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\t{\n\t\tAController* Captured = Controller;\n\t\tGetWorldTimerManager().SetTimer(FTimerHandle(), [this, Captured]() { RespawnPlayer(Captured); }, RespawnDelay, false);\n\t}\n}"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 12,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp(77,26): error C2665: 'FTimerManager::SetTimer': 모든 인수 형식을 변환할 수 있는 오버로드된 함수가 없습니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2664-void-AController--Possess-APawn---",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\t\tif (NewChar)\n\t\t{\n\t\t\tController->Possess(NewChar);\n\t\t}\n\t}"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\t\tif (NewChar)\n\t\t{\n\t\t\tController->Possess(NewChar);\n\t\t}\n\t}"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 14,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp(102,16): error C2664: 'void AController::Possess(APawn *)': 인수 1을(를) 'ACharacter *'에서 'APawn *'(으)로 변환할 수 없습니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C4458-Instigator",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "// AddKill, AddDeath, SetTeam are FORCEINLINE in header\n\nvoid ALatencyMultiCombatPlayerState::ApplyDamage(float Amount, AController* Instigator)\n{\n\tif (bIsDead) return;"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "// AddKill, AddDeath, SetTeam are FORCEINLINE in header\n\nvoid ALatencyMultiCombatPlayerState::ApplyDamage(float Amount, AController* Instigator)\n{\n\tif (bIsDead) return;"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 15,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp(53,77): error C4458: 'Instigator' 선언은 클래스 멤버를 숨깁니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2039-Load",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Load and enable the mapping context (asset created in editor)\n\tif (UInputMappingContext* MappingCtx = CombatMappingContext.Load())\n\t{\n\t\tEIC->AddMappingContext(MappingCtx, /*Priority=*/0);"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Load and enable the mapping context (asset created in editor)\n\tif (UInputMappingContext* MappingCtx = CombatMappingContext.Load())\n\t{\n\t\tEIC->AddMappingContext(MappingCtx, /*Priority=*/0);"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 16,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(22,62): error C2039: 'Load': 'TSoftObjectPtr<UInputMappingContext>'의 멤버가 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "member-UEnhancedInputComponent",
+      "expectedCodes": [
+        "ENGINE_MEMBER_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure(UEnhancedInputComponent* Input)\n{\nInput->AddMappingContext(nullptr, 0);\n}\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure(UEnhancedInputLocalPlayerSubsystem* Input)\n{\nInput->AddMappingContext(nullptr, 0);\n}\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 17,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(24,8): error C2039: 'AddMappingContext': 'UEnhancedInputComponent'의 멤버가 아닙니다."
+        },
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 9,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(60,5): error C2039: 'AddMappingContext': 'UEnhancedInputComponent'의 멤버가 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "include-EnhancedInputLocalPlayerSubsystem-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputLocalPlayerSubsystem.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputSubsystems.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 18,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(4,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInputLocalPlayerSubsystem.h': No such file or directory"
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 21,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(4,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInputLocalPlayerSubsystem.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "include-EnhancedInput-EnhancedInputLocalPlayerSubsystem-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInput/EnhancedInputLocalPlayerSubsystem.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputSubsystems.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 19,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(4,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInput/EnhancedInputLocalPlayerSubsystem.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "include-EnhancedInput-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInput.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputSubsystems.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 20,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerController.cpp(4,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInput.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C4430-22",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// --- Input Handlers (Enhanced Input callbacks) ---\n\tvoid Move(const FInputActionValue& Value);\n\tvoid Look(const FInputActionValue& Value);\n\tvoid Jump();"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// --- Input Handlers (Enhanced Input callbacks) ---\n\tvoid Move(const FInputActionValue& Value);\n\tvoid Look(const FInputActionValue& Value);\n\tvoid Jump();"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 22,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(77,12): error C4430: 형식 지정자가 없습니다. int로 가정합니다. 참고: C++에서는 기본 int를 지원하지 않습니다."
+        }
+      ]
+    },
+    {
+      "id": "return-override",
+      "expectedCodes": [
+        "ENGINE_OVERRIDE_SIGNATURE_MISMATCH"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APawn\n{\nGENERATED_BODY()\npublic:\nvirtual void TakeDamage(float Damage, const FDamageEvent& Event, AController* Instigator, AActor* Causer) override;\n};\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\nUCLASS()\nclass ADemo : public APawn\n{\nGENERATED_BODY()\npublic:\nvirtual float TakeDamage(float Damage, const FDamageEvent& Event, AController* Instigator, AActor* Causer) override;\n};\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 23,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(64,15): error C2555: 'ALatencyMultiCombatCharacter::TakeDamage': 'APawn::TakeDamage'과(와) 재정의 가상 함수의 반환 형식이 다르거나 공변(covariant)이 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2027-UCharacterMovementComponent",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\tPrimaryActorTick.bCanEverTick = true;\n\tbReplicates = true; SetReplicateMovement(true);\n\tGetCharacterMovement()->JumpZVelocity = 420.f;\n}\nvoid ALatencyMultiCombatCharacter::BeginPlay() { Super::BeginPlay(); ApplyCharacterStats(); ApplyWeaponStats(); }"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\tPrimaryActorTick.bCanEverTick = true;\n\tbReplicates = true; SetReplicateMovement(true);\n\tGetCharacterMovement()->JumpZVelocity = 420.f;\n}\nvoid ALatencyMultiCombatCharacter::BeginPlay() { Super::BeginPlay(); ApplyCharacterStats(); ApplyWeaponStats(); }"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 24,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(15,22): error C2027: 정의되지 않은 형식 'UCharacterMovementComponent'을(를) 사용했습니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2065-OutLifetimeProps",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\nvoid ALatencyMultiCombatCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O) const\n{ Super::GetLifetimeReplicatedProps(O); DOREPLIFETIME(ALatencyMultiCombatCharacter, CombatState); }\n\nvoid ALatencyMultiCombatCharacter::Tick(float DT)"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\nvoid ALatencyMultiCombatCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O) const\n{ Super::GetLifetimeReplicatedProps(O); DOREPLIFETIME(ALatencyMultiCombatCharacter, CombatState); }\n\nvoid ALatencyMultiCombatCharacter::Tick(float DT)"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 26,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(36,41): error C2065: 'OutLifetimeProps': 선언되지 않은 식별자입니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2027-FDamageEvent",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\tFVector S = GetMuzzleLocation(), E2 = S + GetActorForwardVector() * CurrentWeapon->Stats.MaxRange * 100.f;\n\tAActor* Hit = nullptr;\n\tif (TraceHit(S, E2, Hit)) { if (auto* HC = Cast<ACharacter>(Hit)) HC->TakeDamage(CurrentWeapon->Stats.Damage, FDamageEvent(), GetController(), this); }\n\tif (MagazineAmmo <= 0) StartReload();\n}"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\tFVector S = GetMuzzleLocation(), E2 = S + GetActorForwardVector() * CurrentWeapon->Stats.MaxRange * 100.f;\n\tAActor* Hit = nullptr;\n\tif (TraceHit(S, E2, Hit)) { if (auto* HC = Cast<ACharacter>(Hit)) HC->TakeDamage(CurrentWeapon->Stats.Damage, FDamageEvent(), GetController(), this); }\n\tif (MagazineAmmo <= 0) StartReload();\n}"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 27,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(77,124): error C2027: 정의되지 않은 형식 'FDamageEvent'을(를) 사용했습니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 29,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(77,124): error C2027: 정의되지 않은 형식 'FDamageEvent'을(를) 사용했습니다."
+        }
+      ]
+    },
+    {
+      "id": "include-GameFramework-DamageEvents-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"GameFramework/DamageEvents.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Engine/DamageEvents.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 28,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(9,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'GameFramework/DamageEvents.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "include-DamageEvents-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"DamageEvents.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Engine/DamageEvents.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 30,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(9,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'DamageEvents.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2653-FCollisionObjectTypes",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "{\n\tFCollisionQueryParams P(SCENE_QUERY_STAT(WeaponTrace), false, this); FHitResult H;\n\tif (GetWorld()->LineTraceSingleByObjectType(H, S, E, FCollisionObjectTypes::AllStatic, P)) { Out = H.GetActor(); return true; }\n\treturn false;\n}"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "{\n\tFCollisionQueryParams P(SCENE_QUERY_STAT(WeaponTrace), false, this); FHitResult H;\n\tif (GetWorld()->LineTraceSingleByObjectType(H, S, E, FCollisionObjectTypes::AllStatic, P)) { Out = H.GetActor(); return true; }\n\treturn false;\n}"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 31,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(133,55): error C2653: 'FCollisionObjectTypes': 클래스 또는 네임스페이스 이름이 아닙니다."
+        },
+        {
+          "conversation": "1790525699573",
+          "buildIndex": 32,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(134,55): error C2653: 'FCollisionObjectTypes': 클래스 또는 네임스페이스 이름이 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "first-include",
+      "expectedCodes": [
+        "FIRST_INCLUDE_NOT_OWN_HEADER"
+      ],
+      "broken": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n",
+        "Source/Corpus/Private/Demo.cpp": "#include \"CoreMinimal.h\"\n#include \"Demo.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n",
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"CoreMinimal.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 1,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatGameState.cpp(1): error: Expected LatencyMultiCombatGameState.h to be first header included."
+        },
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 2,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp(1): error: Expected LatencyMultiCombatPlayerState.h to be first header included."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2061-EInputValueType",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Builds a code-only fallback action when designer assets are not assigned (no .uasset required).\n\tUInputAction* MakeFallbackAction(const FName& Name, EInputValueType Type) const;\n};"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Builds a code-only fallback action when designer assets are not assigned (no .uasset required).\n\tUInputAction* MakeFallbackAction(const FName& Name, EInputValueType Type) const;\n};"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 3,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(106,54): error C2061: 구문 오류: 식별자 'EInputValueType'"
+        },
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 5,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(107,54): error C2061: 구문 오류: 식별자 'EInputValueType'"
+        }
+      ]
+    },
+    {
+      "id": "include-EnhancedInput-Types-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInput/Types.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"InputActionValue.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 4,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(7,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInput/Types.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2039-Health",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 6,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(34,41): error C2039: 'Health': 'FCharacterStats'의 멤버가 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2445-TObjectPtr-UInputAction-",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 7,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(47,68): error C2445: 조건식의 결과 형식이 모호합니다. 'TObjectPtr<UInputAction>' 및 'UInputAction *' 형식이 여러 공용 형식으로 변환될 수 있습니다."
+        }
+      ]
+    },
+    {
+      "id": "member-FKey",
+      "expectedCodes": [
+        "ENGINE_MEMBER_NOT_FOUND",
+        "KNOWN_INVALID_ENGINE_SYMBOL"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure() { auto Key = FKey::W; }\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure() { auto Key = EKeys::W; }\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 8,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(55,27): error C2039: 'W': 'FKey'의 멤버가 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "member-APlayerController",
+      "expectedCodes": [
+        "ENGINE_MEMBER_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure(APlayerController* Input)\n{\nInput->AddMappingContext(nullptr, 0);\n}\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "void Configure(UEnhancedInputLocalPlayerSubsystem* Input)\n{\nInput->AddMappingContext(nullptr, 0);\n}\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 10,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(62,7): error C2039: 'AddMappingContext': 'APlayerController'의 멤버가 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2065-UEnhancedInputUser",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 11,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(62,7): error C2065: 'UEnhancedInputUser': 선언되지 않은 식별자입니다."
+        }
+      ]
+    },
+    {
+      "id": "include-EnhancedInputUser-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputUser.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"EnhancedInputSubsystems.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 12,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(10,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'EnhancedInputUser.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2653-EKeyEvent",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 13,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(63,32): error C2653: 'EKeyEvent': 클래스 또는 네임스페이스 이름이 아닙니다."
+        },
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 14,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(64,32): error C2653: 'EKeyEvent': 클래스 또는 네임스페이스 이름이 아닙니다."
+        }
+      ]
+    },
+    {
+      "id": "include-KeysTypes-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"KeysTypes.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"InputCoreTypes.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 15,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(10,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'KeysTypes.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2065-LookSensitivity",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1790779366071",
+          "buildIndex": 16,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(179,91): error C2065: 'LookSensitivity': 선언되지 않은 식별자입니다."
+        }
+      ]
+    },
+    {
+      "id": "include-Engine-SoundBase-h",
+      "expectedCodes": [
+        "ENGINE_INCLUDE_NOT_FOUND"
+      ],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Engine/SoundBase.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "#include \"Demo.h\"\n#include \"Sound/SoundBase.h\"\n",
+        "Source/Corpus/Public/Demo.h": "#pragma once\n#include \"CoreMinimal.h\"\n#include \"GameFramework/Actor.h\"\n#include \"Demo.generated.h\"\n"
+      },
+      "note": "Minimized reproducer of the recorded error class; fixed variant removes that error. Other diagnostics and full-build success are not scored.",
+      "observations": [
+        {
+          "conversation": "1791346844505",
+          "buildIndex": 1,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h(7,1): fatal error C1083: 포함 파일을 열 수 없습니다. 'Engine/SoundBase.h': No such file or directory"
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2065-UInputMappingContext",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Input Mapping Context - assign in Blueprint subclass or Default__ asset\n\t// Optional mapping context for a complete set of character Enhanced Input actions.\n\tUPROPERTY(EditDefaultsOnly, Category = \"Input\")\n\tTSoftObjectPtr<UInputMappingContext> CombatMappingContext;"
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": "\n\t// Input Mapping Context - assign in Blueprint subclass or Default__ asset\n\t// Optional mapping context for a complete set of character Enhanced Input actions.\n\tUPROPERTY(EditDefaultsOnly, Category = \"Input\")\n\tTSoftObjectPtr<UInputMappingContext> CombatMappingContext;"
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1791568663377",
+          "buildIndex": 1,
+          "diagnostic": "Source/Latency_MultiCombat/Public/LatencyMultiCombatPlayerController.h(19,17): error C2065: 'UInputMappingContext': 선언되지 않은 식별자입니다."
+        }
+      ]
+    },
+    {
+      "id": "uncovered-C2065-bAutoDestroyWhenHealthLessThanOrEqualToZero",
+      "expectedCodes": [],
+      "broken": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "fixed": {
+        "Source/Corpus/Private/Demo.cpp": ""
+      },
+      "note": "Not covered by the bounded rules; compiler/type-flow proof is still required.",
+      "observations": [
+        {
+          "conversation": "1792430776115",
+          "buildIndex": 1,
+          "diagnostic": "Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp(27,2): error C2065: 'bAutoDestroyWhenHealthLessThanOrEqualToZero': 선언되지 않은 식별자입니다."
+        }
+      ]
+    }
+  ]
+}

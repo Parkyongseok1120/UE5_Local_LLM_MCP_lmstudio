@@ -1,0 +1,50 @@
+{
+  "name": "synthetic analyzer fixture",
+  "messages": [
+    {"currentlySelected": 0, "versions": [{"type": "singleStep", "role": "user", "content": [{"type": "text", "text": "Audit the sample module."}]}]},
+    {
+      "currentlySelected": 1,
+      "versions": [
+        {"type": "multiStep", "role": "assistant", "steps": []},
+        {
+          "type": "multiStep",
+          "role": "assistant",
+          "steps": [
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_runtime_identity\",\"loadedBuildId\":\"build-test-1\"}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":0,\"selectedIds\":[\"core/proof\",\"design/lifetime\"],\"reason\":\"included\",\"omissionReasons\":[\"shared_selection_bound\"]}"},
+            {"type": "contentBlock", "style": {"type": "thinking", "ended": true}, "content": [{"type": "text", "text": "Read the header first."}]},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "r1", "name": "read_file", "parameters": {"path": "project://Source/Sample/Sample.h"}},
+              {"type": "toolCallResult", "toolCallRequestId": "r1", "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"path\\\": \\\"project://Source/Sample/Sample.h\\\", \\\"startLine\\\": 1, \\\"endLine\\\": 40, \\\"totalLines\\\": 40, \\\"content\\\": \\\"// synthetic line 1\\\\n// synthetic line 2\\\\n// synthetic line 3\\\\n// synthetic line 4\\\\n// synthetic line 5\\\\n// synthetic line 6\\\\n// synthetic line 7\\\\n// synthetic line 8\\\\n// synthetic line 9\\\\n// synthetic line 10\\\\n// synthetic line 11\\\\n// synthetic line 12\\\\n// synthetic line 13\\\\n// synthetic line 14\\\\n// synthetic line 15\\\\n// synthetic line 16\\\\n// synthetic line 17\\\\n// synthetic line 18\\\\n// synthetic line 19\\\\n// synthetic line 20\\\\n// synthetic line 21\\\\n// synthetic line 22\\\\n// synthetic line 23\\\\n// synthetic line 24\\\\n// synthetic line 25\\\\n// synthetic line 26\\\\n// synthetic line 27\\\\n// synthetic line 28\\\\n// synthetic line 29\\\\n// synthetic line 30\\\\n// synthetic line 31\\\\n// synthetic line 32\\\\n// synthetic line 33\\\\n// synthetic line 34\\\\n// synthetic line 35\\\\n// synthetic line 36\\\\n// synthetic line 37\\\\n// synthetic line 38\\\\n// synthetic line 39\\\\n// synthetic line 40\\\"}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":0,\"finishReason\":\"toolCalls\",\"predictionStats\":{\"promptTokensCount\":1000,\"predictedTokensCount\":100},\"predictionUsage\":{\"reasoningTokensCount\":50},\"modelPrefillMs\":2000,\"modelGenerationElapsedMs\":3000,\"executionCost\":{\"executionElapsedMs\":5500}}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":1,\"selectedIds\":[\"core/proof\",\"design/lifetime\"],\"reason\":\"sticky_kept\",\"omissionReasons\":[]}"},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "r2", "name": "read_file_range", "parameters": {"path": "project://Source/Sample/Sample.h", "startLine": 31, "endLine": 50}},
+              {"type": "toolCallRequest", "toolCallRequestId": "r3", "name": "read_symbol", "parameters": {"path": "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", "symbol": "AActor::Tick"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "r4", "name": "read_symbol", "parameters": {"path": "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp", "symbol": "AActor::Missing"}},
+              {"type": "toolCallResult", "toolCallRequestId": "r2", "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"path\\\": \\\"project://Source/Sample/Sample.h\\\", \\\"range\\\": {\\\"unit\\\": \\\"line\\\", \\\"start\\\": 31, \\\"end\\\": 40, \\\"total\\\": 40}, \\\"content\\\": \\\"// synthetic line 31\\\\n// synthetic line 32\\\\n// synthetic line 33\\\\n// synthetic line 34\\\\n// synthetic line 35\\\\n// synthetic line 36\\\\n// synthetic line 37\\\\n// synthetic line 38\\\\n// synthetic line 39\\\\n// synthetic line 40\\\"}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "r3", "content": "[{\"type\": \"text\", \"text\": \"{\\\"ok\\\": true, \\\"path\\\": \\\"engine://Engine/Source/Runtime/Engine/Private/Actor.cpp\\\", \\\"startLine\\\": 100, \\\"endLine\\\": 129, \\\"content\\\": \\\"// synthetic line 100\\\\n// synthetic line 101\\\\n// synthetic line 102\\\\n// synthetic line 103\\\\n// synthetic line 104\\\\n// synthetic line 105\\\\n// synthetic line 106\\\\n// synthetic line 107\\\\n// synthetic line 108\\\\n// synthetic line 109\\\\n// synthetic line 110\\\\n// synthetic line 111\\\\n// synthetic line 112\\\\n// synthetic line 113\\\\n// synthetic line 114\\\\n// synthetic line 115\\\\n// synthetic line 116\\\\n// synthetic line 117\\\\n// synthetic line 118\\\\n// synthetic line 119\\\\n// synthetic line 120\\\\n// synthetic line 121\\\\n// synthetic line 122\\\\n// synthetic line 123\\\\n// synthetic line 124\\\\n// synthetic line 125\\\\n// synthetic line 126\\\\n// synthetic line 127\\\\n// synthetic line 128\\\\n// synthetic line 129\\\"}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "r4", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"SYMBOL_NOT_FOUND\\\"}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":1,\"finishReason\":\"toolCalls\",\"predictionStats\":{\"promptTokensCount\":2000,\"predictedTokensCount\":5000},\"predictionUsage\":{\"reasoningTokensCount\":4500},\"modelPrefillMs\":4000,\"modelGenerationElapsedMs\":20000,\"executionCost\":{\"executionElapsedMs\":30000}}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"reasoning_recovery_scheduled\",\"attempt\":1}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"working_context_projection\",\"roundIndex\":2,\"changed\":true,\"reason\":\"measured_input_pressure\",\"inputTokens\":3000}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"working_context_projection\",\"roundIndex\":2,\"changed\":false,\"reason\":\"below_trigger\",\"inputTokens\":3000}"},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"design_guidance_input\",\"roundIndex\":2,\"selectedIds\":[\"core/proof\",\"unreal/responsibility\"],\"reason\":\"included\",\"omissionReasons\":[\"returned_project_target\"]}"},
+            {"type": "contentBlock", "content": [
+              {"type": "toolCallRequest", "toolCallRequestId": "w1", "name": "replace_in_file", "parameters": {"path": "project://Source/Sample/Sample.cpp"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "w2", "name": "replace_in_file", "parameters": {"path": "project://Source/Sample/Sample.cpp"}},
+              {"type": "toolCallRequest", "toolCallRequestId": "b1", "name": "build_unreal_project", "parameters": {}},
+              {"type": "toolCallResult", "toolCallRequestId": "w1", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"STALE_RECEIPT\\\"}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "w2", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":true}\"}]"},
+              {"type": "toolCallResult", "toolCallRequestId": "b1", "content": "[{\"type\":\"text\",\"text\":\"{\\\"ok\\\":false,\\\"errorCode\\\":\\\"BUILD_FAILED\\\"}\"}]"}
+            ]},
+            {"type": "debugInfoBlock", "debugInfo": "{\"event\":\"direct_round_observation\",\"roundIndex\":2,\"finishReason\":\"eosFound\",\"predictionStats\":{\"promptTokensCount\":3000,\"predictedTokensCount\":200},\"predictionUsage\":{\"reasoningTokensCount\":100},\"modelPrefillMs\":6000,\"modelGenerationElapsedMs\":1000,\"executionCost\":{\"executionElapsedMs\":42000}}"},
+            {"type": "contentBlock", "content": [{"type": "text", "text": "Sample audit 완료."}]}
+          ]
+        }
+      ]
+    }
+  ]
+}

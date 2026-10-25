@@ -12,8 +12,12 @@ const REPLACE_FILE_FIELDS = new Set([
   "expectedHash",
   "fileVersionReceipt",
   "edits",
+  "startLine",
+  "endLine",
+  "expectedRangeSha256",
 ]);
 const MAX_EDITS_PER_FILE = 8;
+const RANGE_FIELDS = ["startLine", "endLine", "expectedRangeSha256"];
 
 function mutationArgumentError(args, allowedFields, label) {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
@@ -62,7 +66,31 @@ function editsArgumentError(args) {
   return "";
 }
 
+// {startLine, endLine, expectedRangeSha256, newText}: whole lines proven by
+// their range hash. It replaces, never accompanies, oldText and edits[].
+function rangeArgumentError(args) {
+  if (["oldText", "expectedOccurrences", "edits"].some((field) => args[field] !== undefined)) {
+    return "Use either startLine/endLine/expectedRangeSha256 or oldText/edits[], not both.";
+  }
+  const missing = RANGE_FIELDS.find((field) => args[field] === undefined);
+  if (missing) return `${missing} is required for a line-range replacement.`;
+  if (!Number.isInteger(args.startLine) || args.startLine < 1) return "startLine must be an integer >= 1.";
+  if (!Number.isInteger(args.endLine) || args.endLine < args.startLine) return "endLine must be an integer >= startLine.";
+  if (typeof args.expectedRangeSha256 !== "string" || !/^[A-Fa-f0-9]{64}$/u.test(args.expectedRangeSha256)) {
+    return "expectedRangeSha256 must be the 64-hex rangeSha256 returned by read_file_range or read_symbol.";
+  }
+  return requiredStringError(args, "newText", { allowEmpty: true });
+}
+
 function replaceFileArgumentError(args) {
+  if (args && typeof args === "object" && !Array.isArray(args) && RANGE_FIELDS.some((field) => args[field] !== undefined)) {
+    return mutationArgumentError(args, REPLACE_FILE_FIELDS, "replace_in_file")
+      || requiredStringError(args, "path")
+      || optionalStringError(args, "project")
+      || optionalStringError(args, "expectedHash")
+      || optionalStringError(args, "fileVersionReceipt")
+      || rangeArgumentError(args);
+  }
   if (args && typeof args === "object" && !Array.isArray(args) && args.edits !== undefined) {
     return mutationArgumentError(args, REPLACE_FILE_FIELDS, "replace_in_file")
       || requiredStringError(args, "path")

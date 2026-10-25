@@ -23,6 +23,10 @@ KINDS = frozenset({"engine_fact", "project_policy"})
 TOPICS = frozenset({"lifecycle", "subsystem", "threading", "networking", "verification"})
 _CONTRACT_KEYS = {"id", "revision", "kind", "topic", "applicability", "statement", "preconditions",
                   "exceptions", "evidenceRefs", "guidanceRefs"}
+# claimMarkers: short patterns naming report wording that depends on this
+# engine fact. Runtime claim checks compile them with JavaScript (flags "iu"),
+# so only syntax shared by Python re and JavaScript RegExp is accepted.
+_OPTIONAL_CONTRACT_KEYS = {"claimMarkers"}
 _LIFECYCLE_KEYS = {"description", "parents", "overrides", "alternatives", "extraOverrideCandidates",
                    "invalidOverrideNames", "contractRefs"}
 
@@ -71,7 +75,8 @@ def _validate_lifecycle(value: Any) -> None:
 
 
 def _validate_contract(value: Any, versions: list[str], engine: str) -> None:
-    _require(isinstance(value, dict) and set(value) == _CONTRACT_KEYS, f"contract has unexpected keys: {value!r}"[:200])
+    _require(isinstance(value, dict) and _CONTRACT_KEYS <= set(value) <= _CONTRACT_KEYS | _OPTIONAL_CONTRACT_KEYS,
+             f"contract has unexpected keys: {value!r}"[:200])
     cid = value["id"]
     _require(isinstance(cid, str) and cid and cid == cid.strip(), "contract id must be a non-empty string")
     _require(type(value["revision"]) is int and value["revision"] >= 1, f"{cid}: revision must be a positive int")
@@ -91,11 +96,35 @@ def _validate_contract(value: Any, versions: list[str], engine: str) -> None:
     refs = value["evidenceRefs"]
     _require(isinstance(refs, list), f"{cid}: evidenceRefs must be a list")
     for ref in refs:
-        _require(isinstance(ref, dict) and {"path", "symbol"} <= set(ref) <= {"path", "symbol", "line"},
-                 f"{cid}: evidence ref needs path and symbol")
+        _require(isinstance(ref, dict) and {"path", "symbol"} <= set(ref) <= {"path", "symbol", "line", "lines"}
+                 and not {"line", "lines"} <= set(ref), f"{cid}: evidence ref needs path and symbol, and line or lines")
         _require(isinstance(ref["path"], str) and ref["path"].startswith("Engine/" if engine == "unreal" else "Data/") and ".." not in ref["path"] and "\\" not in ref["path"],
                  f"{cid}: evidence path must be engine-root relative")
         _require("line" not in ref or (type(ref["line"]) is int and ref["line"] >= 1), f"{cid}: bad evidence line")
+        # lines: the cited line on each validated engine version it was checked on.
+        lines = ref.get("lines")
+        _require(lines is None or (isinstance(lines, dict) and lines and all(
+            version in versions and type(number) is int and number >= 1 for version, number in lines.items())),
+            f"{cid}: evidence lines must map validated engine versions to line numbers")
+    if "claimMarkers" in value:
+        _require(value["kind"] == "engine_fact", f"{cid}: only an engine fact carries claimMarkers")
+        for marker in _string_list(value["claimMarkers"], f"{cid}: claimMarkers"):
+            _require(not re.search(r"\(\?P|\(\?<(?![=!])|\(\?[aiLmsux]", marker),
+                     f"{cid}: claim marker uses syntax JavaScript and Python read differently")
+            try:
+                re.compile(marker)
+            except re.error as exc:
+                raise ContractError(f"{cid}: invalid claim marker {marker!r}: {exc}") from exc
+
+
+def evidence_line(ref: dict[str, Any], version: str | None = None) -> int | None:
+    """The cited line on a version: from lines, else the single legacy line."""
+    lines = ref.get("lines")
+    if isinstance(lines, dict):
+        if version is not None:
+            return lines.get(version)
+        return lines[max(lines, key=lambda v: tuple(int(p) for p in v.split(".")))]
+    return ref.get("line")
 
 
 def validate_contracts(data: Any, expected_engine: str | None = None) -> dict[str, Any]:
@@ -206,5 +235,5 @@ def engine_version_tier(data: dict[str, Any], version: str | None) -> str:
 
 __all__ = [
     "CONTRACTS_PATH", "ContractError", "contract_by_id", "contract_revision", "contracts_for_topic",
-    "engine_version_tier", "engine_version_validated", "load_contracts", "load_contracts_or_none", "related_contracts", "render_contract_text", "validate_contracts",
+    "engine_version_tier", "engine_version_validated", "evidence_line", "load_contracts", "load_contracts_or_none", "related_contracts", "render_contract_text", "validate_contracts",
 ]

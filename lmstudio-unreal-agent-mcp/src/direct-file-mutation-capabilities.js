@@ -5,9 +5,9 @@ const fsp = fs.promises;
 const path = require("node:path");
 const {
   assertMutationActive,
-  calculateReplacement,
-  calculateReplacements,
+  calculatePatch,
   createExclusive,
+  isLineRangePatch,
   replaceWithCAS,
   sha256Text,
 } = require("./safe-write");
@@ -141,6 +141,7 @@ function createFileMutationCapabilities(context) {
       });
     }
     const hash = sha256Text(content);
+    context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
     const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
     return withChangeEvidence(success({
       operation: "created",
@@ -167,7 +168,9 @@ function createFileMutationCapabilities(context) {
       });
     }
     const edits = args.edits;
-    const regions = edits || [{ oldText: args.oldText, newText: args.newText }];
+    const range = isLineRangePatch(args)
+      ? { startLine: args.startLine, endLine: args.endLine, expectedRangeSha256: args.expectedRangeSha256.toLowerCase() } : null;
+    const regions = edits || [{ oldText: args.oldText ?? "", newText: args.newText }];
     const oldText = regions[0].oldText;
     const tooLarge = regions.findIndex(({ oldText: before, newText: after }) => before.length > limits.maxPatchOldTextChars
       || after.length > limits.maxPatchNewTextChars
@@ -188,7 +191,10 @@ function createFileMutationCapabilities(context) {
     const version = resolveVersionEvidence(context, resolution, args, requestContext);
     // A failed or unproven edit names the lines around its own target, read
     // from the current file; the version proof still comes only from that read.
-    const aimed = (content, target = oldText) => regionSuggestion(args, locateOldText(content, target), projectScopedSuggestionArgs);
+    // A line range is aimed at its own lines, with the same margin.
+    const aimed = (content, target = oldText) => regionSuggestion(args, range
+      ? { candidateLines: [range.startLine], startLine: Math.max(1, range.startLine - 10), endLine: range.endLine + 10 }
+      : locateOldText(content, target), projectScopedSuggestionArgs);
     if (!version.ok) {
       const current = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
       const located = current.ok ? aimed(current.content) : {};
@@ -200,14 +206,16 @@ function createFileMutationCapabilities(context) {
     if (read.hash.toLowerCase() !== version.expectedHash) {
       return versionConflict(version, read.hash, aimed(read.content));
     }
-    const prospective = edits
-      ? calculateReplacements({ priorContent: read.buffer, edits })
-      : calculateReplacement({
-        priorContent: read.buffer,
-        oldText,
-        newText: args.newText,
-        expectedOccurrences: args.expectedOccurrences,
-      });
+    const prospective = calculatePatch(read.buffer, args, { maxRangeTextChars: limits.maxPatchOldTextChars, maxPatchChars: limits.maxPatchChars });
+    if (!prospective.ok && range) {
+      // Like an occurrence mismatch, a stale range answers with what is there now.
+      const located = aimed(read.content);
+      return failure(prospective.errorCode, prospective.error, { retryAllowed: true, retryMode: "different_arguments",
+        ...located,
+        details: { ...located.details, currentSha256: read.hash,
+          ...(prospective.currentRange ? { currentRange: prospective.currentRange } : {}),
+          ...(prospective.totalLines ? { totalLines: prospective.totalLines } : {}) } });
+    }
     if (!prospective.ok) {
       const failed = edits ? edits[prospective.editIndex] || edits[0] : regions[0];
       const located = aimed(read.content, failed.oldText);
@@ -238,6 +246,7 @@ function createFileMutationCapabilities(context) {
           oldText,
           newText: args.newText,
           edits,
+          range,
           expectedOccurrences: args.expectedOccurrences,
           readHash: version.expectedHash,
         });
@@ -266,6 +275,7 @@ function createFileMutationCapabilities(context) {
       });
     }
     const nextHash = sha256Text(locked.result.updated);
+    if (nextHash !== read.hash) context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
     const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
     return withChangeEvidence(success({
       operation: "replaced",
@@ -279,7 +289,7 @@ function createFileMutationCapabilities(context) {
       ...(semanticAdvisory ? {
         semanticAdvisories: [{ ...semanticAdvisory, path: `project://${resolution.relativePath}` }],
       } : {}),
-    }), edits
+    }), edits || range
       ? { schemaVersion: 1, previousSha256: locked.result.preHash, sha256: nextHash,
         status: locked.result.preHash === nextHash ? "no_change" : "changed",
         coverage: "complete_changed_regions", hunks: locked.result.regions }

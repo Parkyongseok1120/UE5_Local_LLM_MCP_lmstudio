@@ -1,0 +1,533 @@
+{
+  "mode": "architecture",
+  "reviewRef": "0acefab991acc32e7e56cabe223bc9c25cfcaf4d",
+  "comparisonRef": "3cec9733fd2847106594b5ad29b0ee47361ff4e2",
+  "existing": [
+    "WorkingContext owns scoped persistence and Archive membership.",
+    "ReadLedger owns delivered version/range state; EvidenceManager applies screening and runtime facts.",
+    "prediction-loop owns progression/finalization and separates visible transcript from working input.",
+    "RecoveryProgress already distinguishes restored working evidence from historical novelty.",
+    "composeModelHistory owns injected runtime data slots; internal-data-output and prediction-stream own filtered visible output."
+  ],
+  "proposed": [
+    "Repair F1/F4 provenance and latest-observation semantics first.",
+    "Repair F2 progress classification using existing recovery/availability facts and bounded loop policy.",
+    "Repair F3/F5 locator coverage and exact focused-repeat handling without blocking legitimate rechecks.",
+    "Add minimal synthetic regressions, then perform controlled same-model comparison after a candidate exists.",
+    "Add F6 budget-runtime-data echo suppression at the model-input/output boundary while preserving actual user quotations and model budget guidance.",
+    "After implementation and offline checks, the agent runs repository UPDATE.bat --dry-run and then UPDATE.bat, checks install IDs/settings, and verifies loaded ID after a safe LM Studio restart."
+  ],
+  "doNotDuplicate": [
+    "Reuse existing Archive record/version/membership checks.",
+    "Reuse existing WorkingContext persistence and source availability/recovery progress.",
+    "Preserve original visible tool results and mutation/read contracts.",
+    "Do not add a second ledger or treat model self-declared proof/analysis text as independent verification."
+  ],
+  "invariants": [
+    "Delivered, visible, observed source version and verified claim are separate facts.",
+    "Rejected/structural-only packets cannot establish factual verification.",
+    "New SHA/range and needed current-input restoration remain readable.",
+    "Every suppressed body must have a usable recovery locator for the intended range.",
+    "Source version transitions include reversion to a previously delivered hash.",
+    "Failed reads remain unresolved, not unchanged or complete.",
+    "Current no-op duplicate control still converges to a report.",
+    "This plan-writing turn makes no product source/installation changes or extra real-model run; future update execution is explicitly included by the user.",
+    "Internal runtime budget data remains available to the model without being mislabeled as reasoning or emitted as an ordinary report.",
+    "Visible/durable output filtering must preserve real answer text, code fences and user-requested quotations/explanations.",
+    "A dry run is not an update; installed ID and currently loaded ID are independently reported."
+  ],
+  "impactedSurfaces": [
+    "lmstudio-context-compactor-plugin/src/read-ledger.js",
+    "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+    "lmstudio-context-compactor-plugin/src/working-context.js",
+    "lmstudio-context-compactor-plugin/src/prediction-loop.ts",
+    "lmstudio-context-compactor-plugin/src/reference-context.ts",
+    "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+    "lmstudio-context-compactor-plugin/src/execution-config.ts",
+    "lmstudio-context-compactor-plugin/src/resume-facts.ts",
+    "source-reacquisition/prediction-loop/reference-context/recovery/budget/contract tests",
+    "lmstudio-context-compactor-plugin/src/context-manager.ts",
+    "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
+    "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+    "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/delivery-controller.ts",
+    "UPDATE.bat execution and installer verification; no batch source change proposed"
+  ],
+  "validationPlan": [
+    "Existing archived0ace TypeScript compile and949 plugin tests passed.",
+    "Existing24 Python analyzer/trace tests passed.",
+    "Independent16 synthetic cases:6 controls pass,10 required-behavior assertions fail.",
+    "Cover nine user-specified cases plus failed/unknown proof, unseen ranges, stale claim provenance, A-B-A, locator scope, failed read recovery and episode reset.",
+    "After implementation keep baseline tests passing and turn defect assertions green, then use fixed project/model/prompt settings with at least3 actual audits per candidate.",
+    "If candidate fails install/contract checks, retain or restore the pre-install backup; do not alter running user conversations.",
+    "F6 direct composer/filter probe confirms assistant-slot injection, absence from privateDataParts and output pass-through even if supplied in privateDataParts manually (4 assertions).",
+    "Add streaming/fallback/cancel/report-only-echo and ordinary-quotation controls before implementing F6.",
+    "For final deployment, back up plugin/configs, verify UPDATE.bat --dry-run targets, run UPDATE.bat with process-local UPDATE_NO_PAUSE=1 and managed Python/PATH, record exit/logs, verify source/dist/production IDs and unchanged bindings.",
+    "Check active requests before update/restart; do not force-stop user work. Distinguish installed from loaded until a safe LM Studio restart and direct_runtime_identity confirmation."
+  ],
+  "claims": [
+    {
+      "id": "F1",
+      "claim": "검증 요청·자기 선언만으로 미확인 claim을 verified로 승격할 수 있다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:229",
+          "observation": "validatePackets extracts requests, not validator results."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1118",
+          "observation": "recordChecks runs before quote and engine gap handling."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:674",
+          "observation": "Only literal Proposed is excluded; missing/invalid levels survive."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:205",
+          "observation": "Cited line/version provenance is not checked before recording on latest SHA."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
+          "observation": "Rejected packet is shown as verified; progress-exit-independent-root.log also reproduces unseen lines and stale-SHA binding."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:229",
+          "symbol": "validatePackets"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1120",
+          "symbol": "recordChecks"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/reference-context.ts:674",
+          "symbol": "auditChecksFromPacket"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:205",
+          "symbol": "recordCheck"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:321",
+          "symbol": "ledgerFact verified/Remaining"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "Literal Proposed and ambiguous/unobserved paths are excluded. A new SHA does not itself copy old checks."
+        }
+      ],
+      "unknowns": [
+        "The real log has a schema-only accepted packet and an engine-evidence gap; factual correctness is not established by its ok=true."
+      ]
+    },
+    {
+      "id": "F2",
+      "claim": "정상적인 집중 재확인·현재 입력 복구·실패한 새 읽기가 정체 종료 조건으로 묶인다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:252",
+          "observation": "Focused reads keep bodies but do not increment newDeliveries."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1157",
+          "observation": "no-new-evidence ignores failedReads and restoredWorkingEvidenceUnits."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1474",
+          "observation": "Second trigger removes further research tools."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/resume-facts.ts:83",
+          "observation": "The fact asserts files unchanged even for failed observations."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/progress-exit-independent-root.log",
+          "observation": "Distinct focused spans and distinct budget-failed reads both force finalization; exact duplicate control still terminates correctly."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:177",
+          "symbol": "screenReturnedReads"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1161",
+          "symbol": "noNewEvidence"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1166",
+          "symbol": "reportNowTriggers"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1474",
+          "symbol": "finishResearch"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:387",
+          "symbol": "tool-free report input"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "The supplied real run only triggered the advisory once and subsequently obtained new engine evidence before natural eosFound. Execution-wide trigger counting is documented design, separately assessed as policy risk."
+        }
+      ],
+      "unknowns": [
+        "Reasoning text novelty alone cannot prove meaningful progress. Fix needs evidence/availability/check provenance and bounded loop protection."
+      ]
+    },
+    {
+      "id": "F3",
+      "claim": "집중 읽기가 넓은 coverage의 유일한 Archive 참조를 덮어써 억제 결과의 복구 범위가 부족하다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:167",
+          "observation": "attachArchiveRef overwrites sole locator without coverage comparison."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:285",
+          "observation": "Every pending returned read attaches its record."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:238",
+          "observation": "Suppression accepts any readable locator, not one covering requested lines."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
+          "observation": "full1-100 -> focused50-52 -> full supplies a handle that cannot read1-5 and reports available50-52."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:285",
+          "symbol": "recordReturnedReads"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:167",
+          "symbol": "attachArchiveRef"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:238",
+          "symbol": "archiveLocator"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:269",
+          "symbol": "unchangedFact"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "The original complete archive record remains accessible and direct MCP reads can recover missing lines. No source loss is claimed."
+        }
+      ],
+      "unknowns": [
+        "The supplied real run does not itself establish that this locator-overwrite sequence occurred."
+      ]
+    },
+    {
+      "id": "F4",
+      "claim": "SHA가 A에서 B로 바뀐 뒤 A로 복귀하면 최근 관찰을 B로 유지할 수 있다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:123",
+          "observation": "classify checks historical version coverage before latest version transition."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:180",
+          "observation": "noteRedundant does not advance latest observation ordering."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:791",
+          "observation": "Archive mismatch explanation consults latestFor."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
+          "observation": "Tool observes SHA A after A-B-A, while ledger latest remains SHA B."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:233",
+          "symbol": "classify fresh result"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:123",
+          "symbol": "classify historic A covered"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:180",
+          "symbol": "noteRedundant without latest update"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:111",
+          "symbol": "latestFor returns B"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "An unseen hash is handled correctly. Missing old locator causes record fallback that refreshes ordering."
+        }
+      ],
+      "unknowns": [
+        "No actual source mutation/reversion was observed in the supplied read-only run."
+      ]
+    },
+    {
+      "id": "F5",
+      "claim": "전체 읽기 뒤 동일 집중 범위를 반복해도 매번 narrower로 분류하여 본문을 다시 전달한다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:128",
+          "observation": "Narrowness is always compared with merged broad coverage."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:250",
+          "observation": "All narrower results keep source bodies."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/independent-ledger-probes-root.log",
+          "observation": "Repeated50-52 after full1-100 stays narrower instead of exact duplicate; first focused read control passes."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:233",
+          "symbol": "screenSourceRead"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:128",
+          "symbol": "merged coverage narrower"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:142",
+          "symbol": "record"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:258",
+          "symbol": "body retained in model input"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "The first focused read is required and intentionally allowed. Loop finalization limits eventual retries but does not distinguish focused duplicates."
+        }
+      ],
+      "unknowns": [
+        "A needed re-read after visibility loss must remain allowed."
+      ]
+    },
+    {
+      "id": "N1",
+      "claim": "정상 WorkingContext manifest 저장/복원 경로는 read ledger를 명시적으로 저장하고 load한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:945",
+          "observation": "readLedger.toJSON included in digest-protected manifest."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1052",
+          "observation": "readLedger.load after restore validity checks."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [],
+      "unknowns": [
+        "No separate valid-restore ledger-clearing defect reproduced; semantic provenance flaws can persist even when serialization works."
+      ]
+    },
+    {
+      "id": "F6",
+      "claim": "내부 예산 안내가 일반 assistant 입력에 포함되고 출력 필터에서 제외돼 일반 채팅으로 재출력될 수 있다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:225",
+          "observation": "readBudgetFeedback constructs the runtime budget instruction."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:864",
+          "observation": "Feedback is retained as runtimeFacts, not a showDebugInfo-only event."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:301",
+          "observation": "Injected assistant data includes facts, but privateDataParts only selects refs/derived protocols."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:15",
+          "observation": "Filter recognizes refs/derived headers, not runtime budget data."
+        },
+        {
+          "kind": "runtime",
+          "location": "1792862138948.conversation.json message3 step97",
+          "observation": "The user-supplied budget array appears in a normal content block with no thinking style; related outputs occur at steps69,82,108,119."
+        },
+        {
+          "kind": "test",
+          "location": "%USERPROFILE%/.evidence-first/diagnostics/compactor-independent-review-20261025/budget-echo-probe.log",
+          "observation": "Four assertions confirm assistant injection, missing private selection, current echo passthrough, and passthrough even when budget is manually supplied as a private part."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:225",
+          "symbol": "readBudgetFeedback"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:866",
+          "symbol": "runtimeFacts.set budget"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:297",
+          "symbol": "assistant runtime data slot"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:72",
+          "symbol": "unrecognized runtime protocol passes output filter"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:138",
+          "symbol": "ordinary output instead of reasoning block"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:300",
+          "observation": "Injected facts are model-input-only and not directly persisted into source history. No dedicated direct budget-to-chat append path was found; the reproduced issue is output echo visibility."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:49",
+          "observation": "Existing filter deliberately preserves literal fenced/quoted user content; that protection must remain."
+        }
+      ],
+      "unknowns": [
+        "Changing injected metadata placement may alter prefill caching; preserve current data-slot placement unless a separate proven need arises.",
+        "Do not treat rewritten numbers in a model echo as authoritative budget telemetry."
+      ]
+    }
+  ],
+  "futureUpdateExecutionRequested": true,
+  "currentTurnScope": "Review and plan amendment only; product source and installation unchanged."
+}

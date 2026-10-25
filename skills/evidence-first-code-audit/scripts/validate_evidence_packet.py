@@ -26,6 +26,7 @@ from evidence_packet_contract import (
     PROOF_LEVELS,
     SEVERITIES,
     VERDICTS,
+    VALIDATION_REPORT_NOTE,
     VERIFIED_PROOF_LEVELS,
     validation_result_summary,
     validation_scope_metadata,
@@ -205,6 +206,15 @@ def validate_packet(packet: Any) -> dict[str, Any]:
             errors.append(
                 f"{path} framework_semantics claim needs framework_source or official_docs evidence"
             )
+        elif critical and not evidence_kinds.intersection({"framework_source", "official_docs"}):
+            # The claim type is the author's choice, so a framework-dependent
+            # P0/P1 filed as behavior or wiring would otherwise pass on project
+            # source alone. Advisory: project-only defects are common.
+            warnings.append(
+                f"{path} P0/P1 claim cites no framework_source or official_docs; if it depends on framework or "
+                "runtime dispatch, scheduling, lifecycle or a base-class path, cite that source or use claimType "
+                "framework_semantics"
+            )
 
         required_kinds = PROOF_EVIDENCE_REQUIREMENTS.get(proof)
         if required_kinds and not evidence_kinds.intersection(required_kinds):
@@ -253,10 +263,23 @@ def validate_packet(packet: Any) -> dict[str, Any]:
         for field in MODE_OBLIGATIONS["codegen"]:
             if not _nonempty_list(packet.get(field)):
                 errors.append(f"codegen packet needs non-empty {field}")
+        # A planned framework call is only checked by the build otherwise, one
+        # error at a time. Advisory: plans that use no framework API are common.
+        cited = any(
+            isinstance(item, dict) and item.get("kind") in {"framework_source", "official_docs"}
+            for claim in claims if isinstance(claim, dict)
+            for item in (claim.get("evidence") if isinstance(claim.get("evidence"), list) else [])
+        )
+        if not cited:
+            warnings.append(
+                "codegen packet cites no framework_source or official_docs: a planned framework API, header or "
+                "member without a declaration source is first checked by the build; cite the declarations it relies on"
+            )
 
     return {
         "ok": not errors,
         "summary": validation_result_summary(not errors),
+        "reportAs": VALIDATION_REPORT_NOTE,
         **validation_scope_metadata(),
         "mode": mode,
         "claimCount": len(claims),

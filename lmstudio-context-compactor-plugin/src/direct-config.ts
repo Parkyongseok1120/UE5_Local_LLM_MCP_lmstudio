@@ -126,6 +126,7 @@ export const directConfigSchematics = createConfigSchematics()
   }, "warn")
   .field("maxResearchRounds", "numeric", { displayName: "Maximum tool rounds", subtitle: "Tool rounds in one response before a tool-free report from the evidence collected. 0 removes the limit." }, NUMERIC_FIELDS.maxResearchRounds.default)
   .field("toolStagnationRounds", "numeric", { displayName: "Tool repetition threshold", subtitle: "Equivalent consecutive tool rounds before warning or pausing." }, NUMERIC_FIELDS.toolStagnationRounds.default)
+  .field("noNewEvidenceRounds", "numeric", { displayName: "No-new-evidence rounds", subtitle: "Consecutive duplicate-read rounds without needed source recovery before a report reminder; a second reminder in the same stalled episode ends research. New progress or a failed read resets the episode." }, NUMERIC_FIELDS.noNewEvidenceRounds.default)
   .field("generationRepetitionAction", "select", {
     displayName: "Within-generation repetition",
     subtitle: "Warn or pause when a substantial generated text block repeats consecutively.",

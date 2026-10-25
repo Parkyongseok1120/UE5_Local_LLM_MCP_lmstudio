@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const { Chat } = require("@lmstudio/sdk");
 const { designGuidanceMode, selectDesignGuidance, designGuidanceCandidates } = require("../dist/design-guidance");
 const { bundledDesignGuidance } = require("../dist/generated-design-guidance");
-const { renderBundle } = require("../scripts/build-design-guidance.cjs");
+const { loadContractSets, renderBundle } = require("../scripts/build-design-guidance.cjs");
 const { readConfig } = require("../dist/execution-config");
 const { ContextManager, createInputAssembler } = require("../dist/context-manager");
 const { BudgetBroker } = require("../dist/budget-broker");
@@ -20,7 +20,7 @@ test("guidance is opt-in, numeric allowance is bounded, and selection does not i
   assert.equal(designGuidanceMode("arbitrary-path"), "off");
   const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
   assert.equal(config.designGuidanceMode, "off");
-  assert.equal(config.designGuidanceMaxTokens, 2048);
+  assert.equal(config.designGuidanceMaxTokens, 6144);
   assert.deepEqual(selectDesignGuidance("off", scope("unreal")), []);
   for (const source of ["available_tools", "ambiguous"]) {
     assert.deepEqual(selectDesignGuidance("multiplayer", scope("unreal", source)).map(d => d.id), ["core", "multiplayer"]);
@@ -44,7 +44,7 @@ test("engine selection is per execution and never imports the audited project's 
 test("generated deployment content is derived exactly from canonical Markdown", () => {
   const plugin = path.resolve(__dirname, "..");
   assert.equal(fs.readFileSync(path.join(plugin, "src/generated-design-guidance.ts"), "utf8").replace(/\r\n/g, "\n"),
-    renderBundle(path.resolve(plugin, "../docs/model-guidance")));
+    renderBundle(path.resolve(plugin, "../docs/model-guidance"), loadContractSets(path.resolve(plugin, "../config"))));
 });
 
 test("fallbacks retain whole documents and deduplicate references", () => {
@@ -194,7 +194,7 @@ test("documents delivery omits unknown/other-major sections and annotates same-m
   const same = unreal("5.3.1");
   assert.ok(same.text.includes(lifetime.text));
   assert.ok(same.text.includes(timer.text));
-  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.8]"));
+  assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7, 5.8]"));
   assert.ok(same.text.includes("[unvalidated for unreal 5.3.1; validated on 5.7]"));
   for (const version of [undefined, "4.27.2"]) {
     const doc = unreal(version);

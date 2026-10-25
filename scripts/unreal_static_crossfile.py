@@ -398,7 +398,39 @@ def validate_multifile_callsite_drift(root: Path) -> list[Finding]:
                     )
     return findings
 
+_REFLECTED_TYPE_DEFINITION = re.compile(
+    r"\b(UENUM|USTRUCT|UCLASS|UINTERFACE)\s*\((?:[^()]|\([^()]*\))*\)\s*"
+    r"(?:enum\s+class|enum|struct|class)\s+(?:[A-Z0-9_]+_API\s+)?([A-Za-z_]\w*)")
+
+
+def validate_duplicate_reflected_type_names(root: Path, texts: dict[Path, str],
+                                            targets: list[Path] | None = None) -> list[Finding]:
+    """UHT rejects two reflected types with one name anywhere in the project."""
+    seen: dict[str, list[tuple[Path, int]]] = {}
+    for path, text in texts.items():
+        if path.suffix.lower() not in CPP_HEADER_SUFFIXES:
+            continue
+        for match in _REFLECTED_TYPE_DEFINITION.finditer(mask_comments_and_strings(text)):
+            seen.setdefault(match.group(2), []).append((path, line_number(text, match.start(2))))
+    wanted = {p.resolve() for p in targets} if targets is not None else None
+    findings: list[Finding] = []
+    for name, places in sorted(seen.items()):
+        if len({path for path, _ in places}) < 2:
+            continue
+        locations = ", ".join(f"{str(p.relative_to(root)).replace(chr(92), '/')}:{line}" for p, line in places)
+        for path, line in places:
+            if wanted is not None and path.resolve() not in wanted:
+                continue
+            findings.append(Finding(
+                "error", str(path.relative_to(root)).replace("\\", "/"), line, "DUPLICATE_REFLECTED_TYPE_NAME",
+                f"Reflected type '{name}' is defined more than once ({locations}); UnrealHeaderTool rejects duplicate names. "
+                "Keep one definition and include its header.",
+                metadata={"ruleId": "DUPLICATE_REFLECTED_TYPE_NAME", "analysisKind": "lexical", "confidence": "high"}))
+    return findings
+
+
 __all__ = [
+    'validate_duplicate_reflected_type_names',
     '_normalize_signature_params',
     '_header_has_matching_signature',
     '_normalize_return_type',

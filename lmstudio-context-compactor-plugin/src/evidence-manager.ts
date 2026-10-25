@@ -4,11 +4,12 @@ import {
   ChatMessage,
   type ToolCallRequest
 } from "@lmstudio/sdk";
-import { inputAvailability, toolMemory, workingContextModule } from "./context-ports";
+import { inputAvailability, readLedgerModule, toolMemory, workingContextModule, type ArchiveLocator, type LedgerEntry,
+  type ReadFacts, type ReadLedgerLike } from "./context-ports";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
 import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
-import { emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
+import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics } from "./tool-result-semantics.js";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
@@ -111,7 +112,8 @@ export class EvidenceManager {
   }
   observe(messages: Array<ChatMessage>, roundId?: string) {
     if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
-    const progress = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools);
+    const progress = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
+      this.isArchiveRepage);
     Object.freeze(progress);
     this.boundProgress();
     if (roundId) {
@@ -129,6 +131,7 @@ export class EvidenceManager {
   }
   captureExposure(history: Chat, modelInputId: string, completed = false) {
     this.currentCoverage = seedRecoveryProgress(history, this.tools).coverage;
+    this.updateReadVisibility(history);
     this.store?.captureExposure(history, modelInputId, completed);
   }
   captureReturned(messages: Array<ChatMessage>, executionId: string, batchId = "") {
@@ -155,6 +158,237 @@ export class EvidenceManager {
     }, { executionId, proofLevel: "returned_tool_result",
       toolProviders: Object.fromEntries(this.tools.map(t => [t.name, t.pluginIdentifier || "local"])) }) || 0;
   }
+  private readonly localLedger = new readLedgerModule.ReadLedger();
+  /** The per-file read ledger: the working window's (persisted with it), or
+   * this execution's own when no working context exists. */
+  get ledger(): ReadLedgerLike { return this.store?.readLedger || this.localLedger; }
+  // Execution-local: the receipt of a read whose body later left the input,
+  // by the archive record it was captured as, and archive pages this
+  // execution saw re-deliver a version the ledger already held.
+  private readonly archivedReceipts = new Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }>();
+  private readonly repagedPages = new Set<string>();
+  // The delivered path each receipt this execution may send back stands for.
+  private readonly receiptPaths = new Map<string, string>();
+  private readonly handleCache = new Map<string, string | null>();
+  private visibleReads = new Map<string, { line: Array<[number, number]>; utf8_byte: Array<[number, number]> }>();
+
+  private updateReadVisibility(history: Chat) {
+    const observations = inputAvailability.currentRawObservations(history.getMessagesArray().map(message =>
+      ({ toolResults: message.getToolCallResults() })) as unknown as Parameters<typeof inputAvailability.currentRawObservations>[0]);
+    this.visibleReads = readLedgerModule.visibleRanges(observations);
+    for (const message of history.getMessagesArray()) for (const result of message.getToolCallResults()) {
+      const page = readLedgerModule.archivePageFacts(toolMemory.decodeToolResultRecord(result.content).value);
+      if (page?.bodyVerified) this.rememberVisibleRead(page);
+    }
+  }
+
+  private visibleRead(facts: ReadFacts) {
+    const shown = this.visibleReads.get(`${facts.key}\u0000${facts.sourceVersion}`);
+    const covered = (ranges: Array<[number, number]> | undefined, target: [number, number] | null) =>
+      Boolean(target && ranges?.some(([s, e]) => s <= target[0] && e >= target[1]));
+    return covered(shown?.line, facts.lines) || covered(shown?.utf8_byte, facts.bytes);
+  }
+
+  private rememberVisibleRead(facts: ReadFacts) {
+    const id = `${facts.key}\u0000${facts.sourceVersion}`;
+    const shown = this.visibleReads.get(id) || { line: [], utf8_byte: [] };
+    if (facts.lines) shown.line = inputAvailability.normalizeRanges([...shown.line, facts.lines]) as Array<[number, number]>;
+    if (facts.bytes) shown.utf8_byte = inputAvailability.normalizeRanges([...shown.utf8_byte, facts.bytes]) as Array<[number, number]>;
+    this.visibleReads.set(id, shown);
+    while (this.visibleReads.size > 64) this.visibleReads.delete(this.visibleReads.keys().next().value!);
+  }
+
+  /** Before returned results enter the working history: a same-hash read of
+   * an already delivered range becomes an UNCHANGED fact with the archive
+   * locator of that version, unless it is a narrower read or no readable
+   * record of the version exists. A different hash always keeps its body. */
+  screenReturnedReads(messages: Array<ChatMessage>, roundIndex: number): ReadScreening {
+    const screening: ReadScreening = { messages: [...messages], replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, focusedReads: 0,
+      newDeliveries: 0, readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] };
+    const history = Chat.empty(); for (const message of messages) history.append(message);
+    const pairs = workingContextModule.exchangeIndex(history);
+    if (pairs.ambiguous) return screening;
+    const round = roundIndex + 1;
+    messages.forEach((message, mi) => {
+      const results = message.getToolCallResults();
+      if (!results.length) return;
+      let changed = false;
+      const copies = results.map((result, ri) => {
+        const request = pairs.matches.get(`${mi}:${ri}`);
+        const tools = this.tools.filter(tool => tool.name === request?.name);
+        if (!request || tools.length !== 1 || !isObservationOnlyToolCall(tools[0], request)) { screening.otherResults++; return result; }
+        const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
+        if (request.name === "evidence_first_read_context") {
+          const page = readLedgerModule.archivePageFacts(value);
+          if (value?.ok === false || value?.errorCode) { screening.readResults++; screening.failedReads++; }
+          else if (!page) screening.otherResults++;
+          else {
+            screening.readResults++;
+            if (this.ledger.notePage(page, round)) { screening.repages++; this.repagedPages.add(archivePageKey(value!)); }
+            else screening.newDeliveries++;
+            if (page.bodyVerified) this.rememberVisibleRead(page);
+          }
+          return result;
+        }
+        if (!readLedgerModule.SOURCE_READ_TOOLS.has(request.name)) { screening.otherResults++; return result; }
+        screening.readResults++;
+        if (!value || sourceObservationFailed(value)) { screening.failedReads++; return result; }
+        const content = this.screenSourceRead(request, String(result.toolCallId), value, round, screening);
+        if (content === null) return result;
+        changed = true;
+        if (screening.suppressedCallIds.includes(String(result.toolCallId))) screening.replaced++;
+        return { ...result, content };
+      });
+      if (changed) screening.messages[mi] = ChatMessage.from({ role: "tool",
+        content: copies.map(result => ({ type: "toolCallResult", ...result })) } as Parameters<typeof ChatMessage.from>[0]);
+    });
+    return screening;
+  }
+
+  private screenSourceRead(request: ToolCallRequest, toolCallId: string, value: Record<string, any>, round: number,
+    screening: ReadScreening): string | null {
+    const ledger = this.ledger;
+    // The server's own repeat cache answered: the identical read against unchanged state.
+    if (value.duplicate === true && value.status === "no_new_information") {
+      const path = request.arguments?.path, receipt = request.arguments?.repeatReceipt;
+      const receiptPath = typeof receipt === "string" ? this.receiptPaths.get(receipt) : undefined;
+      const entry = (receiptPath && ledger.latestFor(receiptPath)) || (typeof path === "string" ? ledger.latestFor(path) : null);
+      if (!entry) return null;
+      ledger.noteRedundant(entry, round, 0, { source: "server_repeat_receipt" });
+      screening.redundant++; screening.suppressedCallIds.push(toolCallId);
+      return JSON.stringify(this.unchangedFact(entry, null, value, this.store?.archiveLocator(entry.archiveRef, true) || null));
+    }
+    const facts = readLedgerModule.readFacts(value);
+    if (!facts) { screening.otherResults++; screening.readResults--; return null; }
+    const verdict = ledger.classify(facts);
+    const pending = (content: string | null) => {
+      screening.pending.push({ request, toolCallId, content, facts, repeatReceipt: typeof value.repeatReceipt === "string" ? value.repeatReceipt : "" });
+      return content;
+    };
+    const restoringFocused = verdict.status === "redundant" && !facts.complete && !this.visibleRead(facts);
+    if (verdict.status === "redundant" && verdict.entry && !restoringFocused) {
+      const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
+      ledger.noteRedundant(verdict.entry, round, facts.chars, locator ? {} : { bodyKept: "no_archive_locator" });
+      screening.redundant++; screening.duplicatedChars += facts.chars;
+      if (locator) {
+        screening.suppressedCallIds.push(toolCallId);
+        return JSON.stringify(this.unchangedFact(verdict.entry, facts, value, locator));
+      }
+      // No readable record of this version is left: this body becomes its locator.
+      ledger.record(facts, { round, toolName: request.name });
+      this.rememberVisibleRead(facts);
+      return pending(null);
+    }
+    const prior = verdict.entry;
+    ledger.record(facts, { round, toolName: request.name });
+    this.rememberVisibleRead(facts);
+    if (verdict.status === "narrower" || restoringFocused) screening.focusedReads++;
+    else screening.newDeliveries++;
+    if (!prior || verdict.status === "new_version") return pending(null);
+    // Same hash as an earlier delivery: say so, so "modified" can only come from a hash change.
+    return pending(JSON.stringify({ ...value, unchangedSince: unchangedSince(prior),
+      unchangedNotice: `Same sha ${prior.sourceVersion.slice(0, 8)} as the version delivered in ${unchangedSince(prior)}: the file is unchanged.` }));
+  }
+
+  private rememberReceipt(receipt: string, path: string) {
+    this.receiptPaths.delete(receipt); this.receiptPaths.set(receipt, path);
+    while (this.receiptPaths.size > 256) this.receiptPaths.delete(this.receiptPaths.keys().next().value!);
+  }
+
+  private unchangedFact(entry: LedgerEntry, facts: ReadFacts | null, value: Record<string, any>, locator: ArchiveLocator | null) {
+    if (typeof value.repeatReceipt === "string") this.rememberReceipt(value.repeatReceipt, entry.path);
+    const identityFields = ["canonicalProject", "canonicalProjectRoot", "projectIdentity", "canonicalPath", "activeProject",
+      "resolvedRootType", "projectRelativePath"];
+    return { kind: "redundant_source_read", ok: true, status: "unchanged_already_delivered",
+      path: entry.path, sha256: entry.sourceVersion,
+      ...Object.fromEntries(identityFields.filter(key => value[key] !== undefined).map(key => [key, value[key]])),
+      ...(facts?.lines ? { startLine: facts.lines[0], endLine: facts.lines[1] } : {}),
+      ...(entry.totalLines ? { totalLines: entry.totalLines } : {}),
+      ...(facts?.bytes ? { offsetBytes: facts.bytes[0], nextOffsetBytes: facts.bytes[1] + 1 } : {}),
+      ...(entry.size !== null ? { size: entry.size } : {}),
+      unchangedSince: unchangedSince(entry), deliveredRanges: readLedgerModule.deliveredText(entry),
+      readCoverageState: entry.complete ? "complete" : "partial", bodyOmitted: true, omittedBodyChars: facts?.chars ?? 0,
+      ...(locator ? { archiveRef: { evidenceId: locator.evidenceId, version: locator.version, readHandle: locator.readHandle, view: "body" } } : {}),
+      ...(locator?.outline ? { sourceOutline: { entries: locator.outline, approximate: true } } : {}),
+      ...(typeof value.repeatReceipt === "string" ? { repeatReceipt: value.repeatReceipt } : {}),
+      notice: readLedgerModule.unchangedReadNotice(entry, locator) };
+  }
+
+  /** After the returned results were archived: bind each delivered version to
+   * its archive record, remember receipts and result sizes. */
+  recordReturnedReads(screening: ReadScreening) {
+    for (const item of screening.pending) {
+      const result = { toolCallId: item.toolCallId, content: item.content ?? undefined };
+      const original = screening.messages.flatMap(message => message.getToolCallResults())
+        .find(candidate => String(candidate.toolCallId) === item.toolCallId);
+      const locator = this.store?.archiveRefFor(item.request, original || result) || null;
+      if (item.repeatReceipt) this.rememberReceipt(item.repeatReceipt, item.facts.path);
+      if (locator) {
+        this.ledger.attachArchiveRef(item.facts, locator);
+        this.handleCache.set(locator.evidenceId, locator.readHandle);
+        if (item.repeatReceipt) this.archivedReceipts.set(locator.evidenceId, { key: repeatRequestKey(item.request.name,
+          item.request.arguments || {}), receipt: item.repeatReceipt, arguments: item.request.arguments || {} });
+      }
+      const content = original?.content;
+      const bytes = Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content ?? ""));
+      if (item.facts.complete || item.request.name !== "read_file") this.ledger.rememberResultSize(
+        repeatRequestKey(item.request.name, item.request.arguments || {}), bytes);
+    }
+  }
+
+  /** Bytes the same request returned before, while its version is unchanged. */
+  knownResultBytes = (name: string, args: Record<string, unknown>): number | undefined =>
+    this.ledger.knownResultBytes(repeatRequestKey(name, args));
+
+  /** Accepted packet claims tied to observed source ranges. Acceptance and
+   * source coverage do not independently verify the assistant's statement. */
+  recordChecks(packet: unknown, roundIndex: number, accepted = false): number {
+    if (!accepted) return 0;
+    let recorded = 0;
+    for (const item of auditChecksFromPacket(packet))
+      if (this.ledger.recordCheck(item.location, item.check, roundIndex + 1, item.claim, item.sourceVersion)) recorded++;
+    return recorded;
+  }
+
+  /** The ledger as a runtime fact for the input being assembled. */
+  readLedgerFact(history: Chat, reportNow = false): string | null {
+    const ledger = this.ledger;
+    if (!ledger.size) return null;
+    const messages = history.getMessagesArray();
+    const observations = inputAvailability.currentRawObservations(messages.map(message =>
+      ({ toolResults: message.getToolCallResults() })) as unknown as Parameters<typeof inputAvailability.currentRawObservations>[0]);
+    const excerpts = new Set<string>(), handles = new Map<string, string>();
+    const id = (path: unknown, version: unknown) => `${readLedgerModule.pathKey(path)}\u0000${String(version || "").toLowerCase()}`;
+    for (const message of messages) for (const result of message.getToolCallResults()) {
+      const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
+      const projected = readLedgerModule.projectionFacts(value);
+      if (projected) {
+        excerpts.add(id(projected.path, projected.sourceVersion));
+        if (typeof value?.archiveRef?.readHandle === "string") handles.set(id(projected.path, projected.sourceVersion), value.archiveRef.readHandle);
+      } else if (value?.kind === "redundant_source_read" && typeof value.archiveRef?.readHandle === "string")
+        handles.set(id(value.path, value.sha256), value.archiveRef.readHandle);
+    }
+    for (const entry of ledger.entries()) {
+      const key = id(entry.path, entry.sourceVersion);
+      if (handles.has(key) || !entry.archiveRef) continue;
+      let handle = this.handleCache.get(entry.archiveRef.evidenceId);
+      if (handle === undefined) {
+        handle = this.store?.archiveLocator(entry.archiveRef)?.readHandle || null;
+        this.handleCache.set(entry.archiveRef.evidenceId, handle);
+      }
+      if (handle) handles.set(key, handle);
+    }
+    return readLedgerModule.ledgerFact(ledger, { observations, excerpts, handles, reportNow });
+  }
+
+  /** Receipts of identical reads this input carries, including reads whose
+   * bodies were since projected or archived. */
+  repeatReceipts(history: Chat) {
+    return repeatReceiptCandidates(history, this.archivedReceipts);
+  }
+
+  isArchiveRepage = (value: Record<string, unknown>) => this.repagedPages.has(archivePageKey(value));
+
   view(value: Record<string, unknown>, provider: string): ContentView {
     const kind = String(value.kind || "observation");
     const projected = kind === "archived_tool_result_projection", archived = ["historical_evidence_range", "historical_evidence_index"].includes(kind);
@@ -173,23 +407,55 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
   }
 }
 
-/** repeatReceipts of successful results still verbatim in this input (not
- * projected or archived). An identical read may send one; the server answers
- * "no new information" only while the source is unchanged. */
-export function presentRepeatReceipts(history: Chat): Map<string, string> {
-  const present = new Map<string, string>();
+export type ReadScreening = {
+  messages: Array<ChatMessage>; replaced: number; redundant: number; duplicatedChars: number; repages: number;
+  newDeliveries: number; readResults: number; failedReads: number; otherResults: number; focusedReads: number;
+  pending: Array<{ request: ToolCallRequest; toolCallId: string; content: string | null; facts: ReadFacts; repeatReceipt: string }>;
+  /** Results whose body entered the working history as an UNCHANGED fact. */
+  suppressedCallIds: string[];
+};
+
+function unchangedSince(entry: LedgerEntry) {
+  return entry.firstTurn === "earlier" ? "an earlier turn" : entry.firstRound === null ? "an earlier round" : `round ${entry.firstRound}`;
+}
+
+function archivePageKey(value: Record<string, unknown>) {
+  return JSON.stringify([value.evidenceId, value.version, value.returnedRange]);
+}
+
+export type RepeatReceipt = { receipt: string; arguments: Record<string, unknown> };
+
+/** Receipts of successful identical reads in this input. A read whose body
+ * was projected or archived still names it: the server answers "no new
+ * information" only while the source is unchanged, and that answer becomes
+ * the UNCHANGED fact with the archive locator. */
+export function repeatReceiptCandidates(history: Chat,
+  archived: Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }> = new Map()): Map<string, RepeatReceipt> {
+  const present = new Map<string, RepeatReceipt>();
   const index = workingContextModule.exchangeIndex(history);
   history.getMessagesArray().forEach((message, mi) => {
     message.getToolCallResults().forEach((result, ri) => {
       const request = index.matches.get(`${mi}:${ri}`);
       const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
-      if (!request || !value || value.ok === false || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
-      if (["archived_tool_result_projection", "historical_evidence_index", "historical_evidence_range"].includes(String(value.kind || ""))) return;
-      present.set(repeatRequestKey(request.name, request.arguments || {}), value.repeatReceipt);
+      if (!request || !value || value.ok === false) return;
+      const kind = String(value.kind || "");
+      if (["archived_tool_result_projection", "historical_evidence_range"].includes(kind)) {
+        const stored = archived.get(String(value.archiveRef?.evidenceId || value.evidenceId || ""));
+        if (stored) present.set(stored.key, { receipt: stored.receipt, arguments: stored.arguments });
+        return;
+      }
+      if (kind === "historical_evidence_index" || typeof value.repeatReceipt !== "string" || !value.repeatReceipt) return;
+      present.set(repeatRequestKey(request.name, request.arguments || {}), { receipt: value.repeatReceipt, arguments: request.arguments || {} });
     });
   });
   return present;
 }
+
+export function presentRepeatReceipts(history: Chat,
+  archived?: Map<string, { key: string; receipt: string; arguments: Record<string, unknown> }>): Map<string, string> {
+  return new Map([...repeatReceiptCandidates(history, archived)].map(([key, value]) => [key, value.receipt]));
+}
+
 
 export function completedRequestFingerprints(history: Chat): Set<string> {
   const completed = new Set<string>();
@@ -464,6 +730,10 @@ export type RecoveryProgress = {
   errorCount: number;
   duplicateCount: number;
   partialOverlapCount: number;
+  /** UNCHANGED facts returned for same-hash re-reads of delivered ranges. */
+  redundantRereadCount: number;
+  /** Archive pages that re-delivered lines of a version already delivered. */
+  archiveRepageCount: number;
   coverage: Array<Record<string, unknown>>;
 };
 
@@ -473,6 +743,7 @@ export function observeRecoveryProgress(
   coverageLedger: RecoveryCoverageLedger = new Map(),
   currentCoverage?: RecoveryCoverageLedger,
   tools: Array<RemoteToolLike> = [],
+  isArchiveRepage: (value: Record<string, unknown>) => boolean = () => false,
 ): RecoveryProgress {
   let newResultCount = 0;
   let newSuccessfulObservationCount = 0;
@@ -485,6 +756,8 @@ export function observeRecoveryProgress(
   let errorCount = 0;
   let duplicateCount = 0;
   let partialOverlapCount = 0;
+  let redundantRereadCount = 0;
+  let archiveRepageCount = 0;
   const coverage: Array<Record<string, unknown>> = [];
   const records = observationRecords(messages, tools);
   const observationOnly = records.length > 0 && records.every(result => !tools.length || result.trustedRead);
@@ -497,6 +770,10 @@ export function observeRecoveryProgress(
       else duplicateCount += 1;
       if (!value || typeof value !== "object") { errorCount += 1; continue; }
       if (sourceObservationFailed(value)) { errorCount += 1; continue; }
+      if (value.kind === "redundant_source_read") redundantRereadCount += 1;
+      // Paging the archive for lines already delivered restores, it does not add evidence.
+      const repage = value.kind === "historical_evidence_range" && isArchiveRepage(value);
+      if (repage) archiveRepageCount += 1;
       const descriptors = recoveryCoverageDescriptors(value);
       let resultAddedCoverage = false;
       for (const descriptor of descriptors) {
@@ -504,7 +781,7 @@ export function observeRecoveryProgress(
         if (currentCoverage && recordRecoveryCoverage(currentCoverage, descriptor).uncovered.length) {
           restoredWorkingEvidenceUnits++;
         }
-        if (delta.uncovered.length) {
+        if (delta.uncovered.length && !repage) {
           resultAddedCoverage = true;
           if (descriptor.category === "source") newSourceUnits += 1;
           else newArchiveUnits += 1;
@@ -528,6 +805,7 @@ export function observeRecoveryProgress(
     observationOnly,
     newResultCount, newResponseFingerprintCount: newResultCount, newSuccessfulObservationCount,
     newSourceUnits, newArchiveUnits, currentInputAvailabilityGain, restoredWorkingEvidenceUnits,
-    usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount, coverage
+    usefulProgress: progressed, progressed, errorCount, duplicateCount, partialOverlapCount,
+    redundantRereadCount, archiveRepageCount, coverage
   };
 }

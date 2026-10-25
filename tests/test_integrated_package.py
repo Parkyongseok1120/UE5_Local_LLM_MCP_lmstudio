@@ -139,7 +139,7 @@ def test_staged_local_engine_lookup_imports_only_packaged_runtime(tmp_path: Path
         shutil.copy2(ROOT / relative, destination)
     result = subprocess.run([sys.executable, "-I", "-c",
         "import sys; sys.path.insert(0, sys.argv[1]); import direct_rag_engine_local; "
-        "import engine_header_evidence; import project_name_resolver; "
+        "import engine_header_evidence; import project_name_resolver; import unreal_static_engine_rules; "
         "assert direct_rag_engine_local.engine_local_symbol; print('staged local lookup imported')",
         str(tmp_path / "scripts")], cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
@@ -356,6 +356,7 @@ def test_package_builder_requires_the_direct_compactor_runtime_surface() -> None
         "lmstudio-context-compactor-plugin/src/round-loop.ts",
         "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
         "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
+        "lmstudio-context-compactor-plugin/src/read-ledger.js",
         "lmstudio-context-compactor-plugin/src/tool-scope.ts",
         "lmstudio-context-compactor-plugin/src/attachment-tools.ts",
         "lmstudio-context-compactor-plugin/src/direct-compaction-core.js",
@@ -518,11 +519,16 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
     }
     assert unexpected == set()
     assert len(inventory) == len(package_manifest["inventory"])
+    product = json.loads((output / "installer/manifest.json").read_text(encoding="utf-8"))
+    release_notes = f"docs/Release_Notes_{product['productVersion'].replace('.', '_')}.md"
+    assert release_notes in inventory
+    assert (output / release_notes).is_file()
     for language_readme, source_template in (
         ("README.md", "README.portable.md"),
     ):
         packaged_readme = (output / language_readme).read_text(encoding="utf-8")
         assert packaged_readme == (ROOT / source_template).read_text(encoding="utf-8")
+        assert f"]({release_notes})" in packaged_readme
         assert "Enable transparent compaction" not in packaged_readme
         assert "단일 스위치" in packaged_readme
         assert "기본 `ON`" in packaged_readme

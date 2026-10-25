@@ -34,6 +34,8 @@ WORLD_GET_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+SET_TIMER_TEMPORARY_HANDLE_RE = re.compile(r"\bSetTimer\s*\(\s*FTimerHandle\s*(?:\(\s*\)|\{\s*\})")
+
 SPAWN_ACTOR_TRANSFORM_POINTER_RE = re.compile(
     r"\bSpawnActor\s*(?:<[^;{}]+?>)?\s*\([^;{}]*?,\s*&\s*[A-Za-z_]\w*Transform\b",
     re.DOTALL,
@@ -130,6 +132,19 @@ def validate_known_bad_api_patterns(path: Path, text: str, root: Path) -> list[F
                 line_number(text, match.start()),
                 "INVENTED_DELTA_TIME_API",
                 "GetCurrentDeltaTime() is not an Unreal Actor/Component API. Use the TickComponent DeltaTime parameter or GetWorld()->GetDeltaSeconds().",
+            )
+        )
+    for match in SET_TIMER_TEMPORARY_HANDLE_RE.finditer(masked):
+        findings.append(
+            Finding(
+                "error",
+                rel,
+                line_number(text, match.start()),
+                "SET_TIMER_TEMPORARY_HANDLE",
+                (
+                    "FTimerManager::SetTimer takes the handle by non-const reference, so a temporary "
+                    "FTimerHandle() matches no overload (C2665). Pass a member FTimerHandle so the timer can be cleared."
+                ),
             )
         )
     pawn_names = {match.group("name") for match in PAWN_DECL_RE.finditer(masked)}

@@ -1644,6 +1644,25 @@ test("bounded audit exposes read-only research tools and gives the same model on
   assert.equal(finalMeasurement.outputReserve, 4096);
 });
 
+for (const [request, expected, profile] of [
+  ["캐릭터 RPC 계약에서 잘못된 것들을 찾아서 정리해줘.", ["read_file"], "read_only_review"],
+  ["캐릭터 RPC 계약을 찾아서 고쳐줘.", ["read_file", "write_file"], "full"],
+]) test(`a ${profile} request exposes ${expected.join(", ")} without bounded audit limits`, async () => {
+  const tools = [
+    { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" },
+    { name: "write_file", description: "Write source", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" }];
+  const seen = [];
+  const model = { identifier: "qwen/qwen3.8-27b", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+    async act(_chat, actTools, options) { seen.push(actTools.map(tool => tool.name)); completeRecoveryReply(options, "Report."); } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: request }]), model, {}, tools);
+  await handlePredictionLoop(ctl);
+  assert.deepEqual(seen, [expected]);
+  const identity = ctl.debugValues.find(value => value.event === "direct_runtime_identity");
+  assert.equal(identity.toolProfile, profile);
+  assert.equal(ctl.debugValues.some(value => value.event === "bounded_audit_finalization"), false);
+});
+
 test("bounded audit converts research output exhaustion into one tool-free final report", async () => {
   const history = Chat.from([{ role: "user", content: "Audit until the research output limit." }]);
   const readTool = { name: "read_file", description: "Read source", parametersJsonSchema: { type: "object" },
@@ -3344,7 +3363,8 @@ test("deterministic working context projects a completed large result and expose
   assert.equal(result.viewMode, "body_first_bounded");
   assert.equal(result.bodyField, "body");
   assert.ok(result.omittedBodyRanges[0][1] > result.projectedBodyRanges[0][1]);
-  assert.deepEqual(result.projectedRawRanges, []);
+  // A body view provides no raw envelope range; it omits the empty array.
+  assert.equal(result.projectedRawRanges?.length ?? 0, 0);
   assert.ok(receivedTools.some(tool => tool.name === "evidence_first_read_context"));
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.workingContext.projectionApplied, true);
@@ -4684,7 +4704,7 @@ test('reasoning recovery retains partial-result notices and read handles after f
   await createPredictionLoopHandler()(ctl);
   assert.equal(observations.length, 2);
   assert.deepEqual(observations[1].handles, observations[0].handles);
-  assert.equal(observations[0].summaryPresent, false);
+  assert.equal(observations[0].summaryPresent, true, 'the round that compacts a body must already list it');
   assert.equal(observations[1].summaryPresent, true, 'new projection guidance must reach the same-anchor retry');
 });
 
@@ -5068,7 +5088,7 @@ test('documents guidance uses the returned engine identity on the next predictio
       calls++;
       const text = chat.toString();
       if (calls === 2) {
-        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.8\]/);
+        assert.match(text, /\[unvalidated for unreal 5\.3\.2; validated on 5\.7, 5\.8\]/);
         assert.doesNotMatch(text, /\[omitted unreal\/lifetime:/);
         completeRecoveryReply(options, 'The version was observed; these engine rules remain unvalidated for it.'); return;
       }
@@ -5405,18 +5425,28 @@ test('focused final delivery omits references and makes no extra model call', as
   assert.equal(calls, 2);
 });
 
+// A reasoning recovery round selects no new focused material, but it keeps the
+// reference the failed round already had: the 2026-10-24 audit retried without
+// its engine contracts and reversed a correct Client RPC conclusion.
 for (const delivery of ['documents', 'focused']) test(`${delivery} follows its explicit reasoning recovery reference policy`, async () => {
-  let calls = 0;
+  let calls = 0, firstReference;
+  const reference = text => text.slice(text.indexOf('[Optional design reference]'), text.indexOf('[End optional design reference]'));
   const model = reasoningModel(async (chat, _tools, options) => {
-    if (++calls === 1) { assert.match(chat.toString(), /Optional design reference/); emitReasoningLimit(options); return; }
+    if (++calls === 1) {
+      assert.match(chat.toString(), /Optional design reference/);
+      firstReference = reference(chat.toString()); emitReasoningLimit(options); return;
+    }
     assert.equal(calls, 2);
-    if (delivery === 'focused') assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
-    else assert.match(chat.toString(), /Optional design reference/);
+    assert.match(chat.toString(), /Optional design reference/);
+    assert.equal(reference(chat.toString()), firstReference);
+    if (delivery === 'focused') assert.doesNotMatch(chat.toString(), /Derived reference data/);
     completeRecoveryReply(options, 'Continued under the existing recovery policy.');
   });
-  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
-    { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' }));
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Inspect the supplied source.' }]), model,
+    { designGuidanceMode: 'debugging', designGuidanceDelivery: delivery, maxOutputReserve: 8192, reasoningRecoveryMode: 'on', outputRecoveryMode: 'off' });
+  await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
+  if (delivery === 'focused') assert.equal(ctl.debugValues.filter(e => e.event === 'design_guidance_input').at(-1).reason, 'sticky_kept');
 });
 
 for (const delivery of ['documents', 'focused']) test(`Auto uses a bounded focused pack with saved ${delivery} delivery and no extra act call`, async () => {
@@ -5489,22 +5519,311 @@ function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
 }
 const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
 
-test('admitted guidance keeps one system text across rounds, and a drop is final for the execution', async () => {
+test('admitted guidance keeps one system text across rounds, and a dropped one returns unchanged under low water', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   assert.ok(high - low > 1000);
   const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
   await handlePredictionLoop(run.ctl);
   const events = run.events();
-  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
-  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
-  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_readmitted', 'sticky_kept']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'low_water', undefined]);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'included', 'included']);
   assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
+  assert.deepEqual(events[3].selectedIds, events[0].selectedIds);
   assert.equal(run.systems.length, 5);
   assert.match(run.systems[0], /\[Optional design reference\]/);
   assert.equal(run.systems[1], run.systems[0]);
   assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
+  assert.equal(run.systems[3], run.systems[0]);
+  assert.equal(run.systems[4], run.systems[0]);
+});
+
+// 2026-10-20 run: dropping the instruction alone rebuilt a 55.7k prompt (71.7s)
+// one round before a projection rebuilt it again. One rewrite now does both.
+test('a retained instruction that would cross high water is kept by projecting evidence in the same round', async () => {
+  const { REASONING_SEPARATOR } = require('../dist/context-budget');
+  const systems = [], inputs = [];
+  let calls = 0;
+  const tool = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const latest = (ctl, event) => ctl.debugValues.filter(e => e.event === event).at(-1);
+  const lineChars = 50;
+  let ctl;
+  const model = { identifier: 'sticky-projection', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt()).getText());
+      inputs.push(chat.toString());
+      if (n === 2) { completeRecoveryReply(options, 'Done.'); return; }
+      let lines = 400;
+      if (n === 1) {
+        // Size the second read so the next base input sits under high water by
+        // less than the retained instruction costs.
+        const high = latest(ctl, 'context_low_water').effectiveHighWaterTokens;
+        const { baseInputTokens, addedTokens } = latest(ctl, 'design_guidance_input');
+        assert.ok(addedTokens > 200);
+        // A JSON-escaped line is two chars longer (tab, newline); the new exchange adds ~120 tokens.
+        lines = Math.max(1, Math.floor((high - addedTokens / 2 - 120 - baseInputTokens) * 4 / (lineChars + 2)));
+      }
+      const request = { type: 'function', id: `sp-${n}`, name: 'read_file_range', arguments: { path: `project://Source/A${n}.cpp` } };
+      await options.guardToolCall(0, 7500 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      // Round 0 leaves a long reasoning note; the projecting round trims it.
+      const reasoning = n === 0 ? [{ type: 'text', text: `${'OLD_REASONING '.repeat(700)}${REASONING_SEPARATOR}Reading.` }] : [];
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [...reasoning, { type: 'toolCallRequest', toolCallRequest: request }] }));
+      const content = Array.from({ length: lines }, (_, i) => `${i + 1}\tvoid L${n}_${i}() {}`.padEnd(lineChars - 1, ' ')).join('\n');
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `project://Source/A${n}.cpp`, startLine: 1, endLine: lines,
+          lineNumbers: true, content }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  ctl = fakeController(Chat.from([{ role: 'user', content: '멀티플레이 RPC 코드를 감사해' }]), model,
+    { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
+  await handlePredictionLoop(ctl);
+  const events = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_kept']);
+  const projection = ctl.debugValues.find(e => e.event === 'working_context_projection' && e.roundIndex === 2);
+  assert.equal(projection?.changed, true);
+  assert.equal(projection.reasoningBounded, true);
+  assert.equal(systems[2], systems[0]);
+  assert.match(inputs[1], /OLD_REASONING/);
+  assert.doesNotMatch(inputs[2], /OLD_REASONING/);
+  assert.match(inputs[2], /Reading\./);
+  assert.match(inputs[2], /sp-0/);
+});
+
+test('a dropped guidance stays out between low and high water instead of alternating', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const mid = Math.floor((low + high) / 2);
+  const run = stickyGuidanceRun({ bases: [low - 2000, high - 100, mid, mid] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.equal(run.systems[2], run.systems[1]);
+  assert.equal(run.systems[3], run.systems[1]);
+});
+
+test('a validated packet quoting code the returned source lacks reaches the next input and the answer footer', async () => {
+  const inputs = [];
+  let calls = 0;
+  const read = { type: 'function', id: 'quote-read', name: 'read_file_range', arguments: { path: 'project://Source/A.cpp' } };
+  const validate = { type: 'function', id: 'quote-validate', name: 'evidence_first_validate', arguments: { packet: { mode: 'audit',
+    claims: [{ claim: 'sync load', evidence: [{ kind: 'project_source', location: 'Source/A.cpp:12',
+      observation: 'UGameplayStatics::PlaySound2D(this, Sound.LoadSynchronous())' }] }] } } };
+  const results = {
+    'quote-read': JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, path: 'project://Source/A.cpp',
+      projectRelativePath: 'Source/A.cpp', lineNumbers: true, startLine: 11, endLine: 12,
+      content: '11\tif (Sound)\n12\t\tUGameplayStatics::PlaySoundAtLocation(this, Sound.LoadSynchronous(), Start);' }) }]),
+    'quote-validate': JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, summary: 'structure_valid; facts_not_verified',
+      validationScope: 'packet_structure_and_record_consistency', factualEvidenceVerified: false }) }]),
+  };
+  const model = { identifier: 'quote-check', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      inputs.push(chat.toString());
+      if (n === 2) { completeRecoveryReply(options, 'Report.'); return; }
+      const request = n === 0 ? read : validate;
+      await options.guardToolCall(0, 7400 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: results[request.id] }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const tools = [
+    { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent', parametersJsonSchema: { type: 'object' } },
+    { name: 'evidence_first_validate', description: 'Validate', pluginIdentifier: 'mcp/evidence-first', parametersJsonSchema: { type: 'object' } }];
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '사운드 로딩을 감사해 줘' }]), model,
+    { contextManagementMode: 'hybrid' }, tools);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 3);
+  assert.doesNotMatch(inputs[1], /the last evidence packet quotes/);
+  assert.match(inputs[2], /the last evidence packet quotes 1 code name\(s\)/);
+  assert.match(inputs[2], /PlaySound2D appears in no source text returned in this execution; returned text there: 12: UGameplayStatics::PlaySoundAtLocation/);
+  const check = ctl.debugValues.find(e => e.event === 'quote_anchoring_check');
+  assert.deepEqual(check.mismatches.map(m => m.missingTokens), [['PlaySound2D']]);
+  assert.ok(ctl.blocks.some(block => /\[인용 대조\].*1건/s.test(block.text)));
+});
+
+// Engine observations per round drive the selection scope while bases move the
+// input between low and high water (stickyGuidanceRun's charging scheme).
+function scopedGuidanceRun({ bases, engines, guidanceTokens = 300 }) {
+  const project = 'C:/Projects/Net/Net.uproject';
+  const lookup = { name: 'unreal_symbol_lookup', description: 'Engine symbol', pluginIdentifier: 'mcp/unreal-rag',
+    parametersJsonSchema: { type: 'object', properties: { symbol: { type: 'string' } } } };
+  const read = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const engine = version => ({ ok: true, canonicalProject: project, sourceMode: 'engine_local',
+    observedEngineIdentity: { status: 'observed', engineRoot: `C:/Engines/UE_${version}`, version, hashScope: 'file', sha256: 'e'.repeat(64) } });
+  const original = Chat.from([{ role: 'user', content: 'Which engine version does the project use?' }]);
+  original.append(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: {
+    type: 'function', id: 'prior-engine', name: lookup.name, arguments: { symbol: 'AActor' } } }] }));
+  original.append(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'prior-engine',
+    content: JSON.stringify(engine('5.8')) }] }));
+  original.append('assistant', 'The installed engine is Unreal Engine 5.8.');
+  original.append('user', 'Review whether this Client RPC replication is a defect.');
+  const systems = [];
+  let calls = 0;
+  const model = { identifier: 'scoped-guidance', async getContextLength() { return 38912; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) {
+      const round = text.split('SCOPE_RESULT_').length - 1;
+      return bases[Math.min(round, bases.length - 1)] + (text.includes('[Optional design reference]') ? guidanceTokens : 0);
+    },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      systems.push(chat.getMessagesArray().find(m => m.isSystemPrompt())?.getText() || '');
+      if (n >= bases.length - 1) { completeRecoveryReply(options, 'Reviewed.'); return; }
+      // An engine version observes engine identity; null reads project source only.
+      const request = engines[n] ? { type: 'function', id: `scope-${n}`, name: lookup.name, arguments: { symbol: `S${n}` } }
+        : { type: 'function', id: `scope-${n}`, name: read.name, arguments: { path: `project://Source/R${n}.cpp` } };
+      await options.guardToolCall(0, 7600 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'toolCallRequest', toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify(engines[n] ? { ...engine(engines[n]), marker: `SCOPE_RESULT_${n}` }
+          : { ok: true, canonicalProject: project, path: `project://Source/R${n}.cpp`, startLine: 1, endLine: 1, totalLines: 1,
+            lineNumbers: true, content: `1	void R${n}(); // SCOPE_RESULT_${n}`, sha256: 'c'.repeat(64) }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(original, model, { projectEngine: 'unreal', projectIdentity: project, designGuidanceMode: 'auto',
+    designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [lookup, read]);
+  const events = () => ctl.debugValues.filter(e => e.event === 'design_guidance_input');
+  return { ctl, systems, events };
+}
+
+const ENGINE_DEFAULTS = 'unreal-networking/engine-defaults';
+
+// Review of 7043e1a: guidance dropped for budget came back unchanged after a
+// 4.27 observation made its 5.8 engine defaults inapplicable, for one round.
+// Each round adds visible prose and one large read; length/4 token counting.
+function proseAndReadRun({ rounds, proseChars, readLines, contextLength = 38912, overrides = {} }) {
+  let calls = 0;
+  const inputs = [];
+  const tool = { name: 'read_file_range', description: 'Read', pluginIdentifier: 'mcp/unreal-agent',
+    parametersJsonSchema: { type: 'object', properties: { path: { type: 'string' } } } };
+  const model = { identifier: 'projection-depth', async getContextLength() { return contextLength; },
+    async applyPromptTemplate(chat, options) { return chat.toString() + JSON.stringify(options.toolDefinitions); },
+    async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, _tools, options) {
+      const n = calls++;
+      inputs.push(chat.toString());
+      if (n >= rounds) { completeRecoveryReply(options, 'Reviewed.'); return; }
+      const request = { type: 'function', id: `depth-${n}`, name: tool.name, arguments: { path: `project://Source/D${n}.cpp` } };
+      await options.guardToolCall(0, 7700 + n, { toolCallRequest: request,
+        allow() {}, allowAndOverrideParameters() {}, deny(reason) { assert.fail(reason); } });
+      options.onPredictionCompleted({ stats: { stopReason: 'toolCalls' } });
+      options.onMessage(ChatMessage.from({ role: 'assistant', content: [
+        { type: 'text', text: `NOTE_${n} ${'analysis '.repeat(Math.floor(proseChars / 9))}` },
+        { type: 'toolCallRequest', toolCallRequest: request }] }));
+      const content = Array.from({ length: readLines }, (_, i) => `${i + 1}\tvoid D${n}_${i}() { Work(${i}); } // body`).join('\n');
+      options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: `project://Source/D${n}.cpp`, startLine: 1, endLine: readLines,
+          totalLines: readLines, lineNumbers: true, content }) }] }));
+      options.onRoundEnd(); throw options.signal.reason;
+    } };
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '전투 코드를 검토해' }]), model,
+    { contextManagementMode: 'hybrid', ...overrides }, [tool]);
+  const byRound = event => ctl.debugValues.filter(e => e.event === event);
+  return { ctl, inputs, byRound };
+}
+
+// Review of e55663b (plan B2): a projection that left the input between low and
+// high water stopped there, and the next round rewrote the prompt again.
+test('a round that projects its input below high water but above low water reaches the target in the same rewrite', async () => {
+  const run = proseAndReadRun({ rounds: 10, proseChars: 6000, readLines: 220 });
+  await handlePredictionLoop(run.ctl);
+  const lows = new Map(run.byRound('context_low_water').map(e => [run.byRound('context_low_water').indexOf(e), e]));
+  const projected = run.byRound('working_context_projection').filter(e => e.changed).map(e => e.roundIndex);
+  assert.deepEqual(projected, [6, 8]);
+  const r8 = lows.get(8);
+  assert.ok(r8.beforeExactInputTokens > r8.effectiveLowWaterTokens && r8.beforeExactInputTokens <= r8.effectiveHighWaterTokens);
+  assert.equal(r8.compactionRequested, true);
+  assert.notEqual(r8.selectedCandidate, 'unchanged');
+  assert.ok(r8.finalExactInputTokens <= r8.effectiveLowWaterTokens);
+  assert.equal(r8.disposition, 'compacted_to_low');
+  // Rounds that did not rewrite their input were not compacted or changed.
+  for (const round of [0, 1, 2, 3, 4, 5, 7, 9]) {
+    assert.equal(lows.get(round).compactionRequested, false, `round ${round}`);
+    assert.equal(lows.get(round).selectedCandidate, 'unchanged', `round ${round}`);
+  }
+  // The round's unconsumed result and its request stay whole and paired.
+  assert.match(run.inputs[8], /void D7_219\(\) \{ Work\(219\); \}/);
+  assert.match(run.inputs[8], /NOTE_7/);
+  // Projected bodies stay recoverable from the archive.
+  assert.match(run.inputs[8], /readHandle=h_|"readHandle":"h_/);
+});
+
+test('a projection that already lands under low water changes nothing more, and no projection means no new compaction', async () => {
+  const run = proseAndReadRun({ rounds: 7, proseChars: 6000, readLines: 220 });
+  await handlePredictionLoop(run.ctl);
+  const lows = run.byRound('context_low_water');
+  const r6 = lows[6];
+  assert.ok(r6.beforeExactInputTokens <= r6.effectiveLowWaterTokens);
+  assert.equal(r6.selectedCandidate, 'unchanged');
+  assert.equal(r6.canRun, true);
+  assert.equal(run.byRound('conversation_prose_archived').length, 0);
+});
+
+test('retained guidance is still admitted within budget after a projection round reaches the target', async () => {
+  const run = proseAndReadRun({ rounds: 10, proseChars: 6000, readLines: 220,
+    overrides: { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 } });
+  await handlePredictionLoop(run.ctl);
+  const guidance = run.byRound('design_guidance_input');
+  const lows = run.byRound('context_low_water');
+  const projectedRounds = run.byRound('working_context_projection').filter(e => e.changed).map(e => e.roundIndex);
+  assert.ok(projectedRounds.length > 0);
+  for (const round of projectedRounds) {
+    const low = lows[round], admitted = guidance.find(e => e.roundIndex === round);
+    assert.ok(low.finalExactInputTokens <= low.effectiveLowWaterTokens, `round ${round} reached the target`);
+    assert.equal(admitted.outcome, 'included', `round ${round}`);
+    assert.ok(admitted.finalInputTokens <= low.effectiveHighWaterTokens, `round ${round} guidance within high water`);
+  }
+  const measurement = run.byRound('direct_context_measurement');
+  assert.ok(measurement.every(e => e.finalFit !== false));
+});
+
+test('a dropped instruction is not readmitted for a changed scope; the current candidates are selected', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, low - 2000, low - 2000], engines: ['5.8', '4.27', '4.27'] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
+    ['sticky_dropped', 'scope_changed:budget_omitted'], ['included', 'scope_changed'], ['sticky_kept', undefined]]);
+  assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.match(run.systems[0], /reference id=unreal-networking\/engine-defaults/);
+  assert.ok(!events[2].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.doesNotMatch(run.systems[2], /reference id=unreal-networking\/engine-defaults/);
+  assert.ok(events[2].omissionReasons.includes('contract_sections_engine_version_unvalidated'));
+  // The kept round reports the instruction it actually reused.
+  assert.deepEqual(events[3].selectedIds, events[2].selectedIds);
+  assert.deepEqual(events[3].omissionReasons, events[2].omissionReasons);
   assert.equal(run.systems[3], run.systems[2]);
-  assert.equal(run.systems[4], run.systems[2]);
+});
+
+test('a rescope that does not fit leaves no stale instruction and selects the new scope when the input allows', async () => {
+  const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
+  const mid = Math.floor((low + high) / 2);
+  const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, mid, low - 2000, low - 2000], engines: ['4.27', null, null, null] });
+  await handlePredictionLoop(run.ctl);
+  const events = run.events();
+  assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
+    ['sticky_dropped', 'scope_changed:budget_omitted'], ['sticky_dropped', 'dropped_earlier'],
+    ['sticky_readmitted', 'low_water'], ['sticky_kept', undefined]]);
+  for (const index of [1, 2]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
+  assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.ok(events[3].selectedIds.length > 0);
+  assert.ok(!events[3].selectedIds.includes(ENGINE_DEFAULTS));
+  assert.doesNotMatch(run.systems[3], /reference id=unreal-networking\/engine-defaults/);
+  assert.deepEqual(events[4].selectedIds, events[3].selectedIds);
+  assert.deepEqual(events[4].omissionReasons, events[3].omissionReasons);
 });
 
 test('the next user turn selects again, and a canceled execution leaves no retained guidance behind', async () => {
@@ -5512,7 +5831,7 @@ test('the next user turn selects again, and a canceled execution leaves no retai
   const handler = createPredictionLoopHandler();
   const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
   await handler(dropped.ctl);
-  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_readmitted']);
   const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
   await handler(next.ctl);
   assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);
@@ -5869,4 +6188,90 @@ test("the research path that ends on unexecuted tool text delivers an evidence-b
   assert.ok(delivered, JSON.stringify(ctl.debugValues.map(event => event.event)));
   assert.equal(delivered.reason, "raw_tool_intent_not_retried");
   assert.ok(ctl.blocks.some(block => /부분 조사 보고/u.test(block.text)));
+});
+
+// Run 1792842246501: the same unchanged file was read again and again. Each
+// repeat enters the input as an UNCHANGED fact; after K rounds with no new
+// file, version or range the model is told to report now, and the second time
+// research ends with one tool-free report.
+test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then a tool-free report", async () => {
+  const history = Chat.from([{ role: "user", content: "Audit the character code." }]);
+  const tool = { name: "read_file", description: "Read", parametersJsonSchema: { type: "object" }, pluginIdentifier: "mcp/unreal-agent" };
+  const filePath = "project://Source/Game/LedgerCharacter.cpp";
+  const body = Array.from({ length: 60 }, (_, i) => `// line ${i + 1} ${"q".repeat(40)}`).join("\n");
+  let calls = 0; const inputs = [], toolCounts = [];
+  const model = { identifier: "ledger-fixture", async getContextLength() { return 65536; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(text.length / 4); },
+    async act(chat, tools, options) {
+      inputs.push(chat.toString()); toolCounts.push(tools.length); calls++;
+      if (!tools.length) {
+        options.onMessage(ChatMessage.from({ role: "assistant", content: "Final report from the delivered evidence." }));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound" } }); return;
+      }
+      const request = { id: `ledger-${calls}`, type: "function", name: "read_file", arguments: { path: filePath } };
+      await options.guardToolCall(0, 7, { toolCallRequest: request, allow() {}, allowAndOverrideParameters() {}, deny() {} });
+      options.onToolCallRequestFinalized(0, 7, { toolCallRequest: request });
+      options.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+      options.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: request.id,
+        content: JSON.stringify({ ok: true, path: filePath, canonicalProject: "C:/Fixture/Fixture.uproject", sha256: "3c".repeat(32),
+          startLine: 1, endLine: 60, totalLines: 60, content: body }) }] }));
+      options.onRoundEnd(0); throw options.signal.reason;
+    } };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", toolStagnationAction: "warn",
+    toolStagnationRounds: 20, noNewEvidenceRounds: 3, maxResearchRounds: 30 }, [tool]);
+  await handlePredictionLoop(ctl);
+  const ledger = ctl.debugValues.filter(value => value.event === "read_ledger");
+  assert.equal(ledger[0].newDeliveries, 1);
+  assert.equal(ledger[1].redundantRereads, 1);
+  assert.equal(ledger[1].bodiesReplaced, 1);
+  assert.deepEqual(ledger[1].replacedCallIds, ["ledger-2"], "the analyzer learns which transcript bodies the model did not get");
+  assert.match(inputs[2], /UNCHANGED: project:\/\/Source\/Game\/LedgerCharacter\.cpp sha 3c3c3c3c is the same version already returned in round 1/);
+  assert.equal(inputs[2].split("// line 17 ").length - 1, 1, "the body is delivered once");
+  const reportNow = ctl.debugValues.filter(value => value.event === "report_now");
+  assert.deepEqual(reportNow.map(value => [value.roundIndex, value.trigger, value.finalize]), [[3, 1, false], [6, 2, true]]);
+  assert.match(inputs[4], /Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
+  assert.match(inputs[4], /Runtime read ledger \(kept across compaction\)/);
+  assert.equal(calls, 8);
+  assert.equal(toolCounts.at(-1), 0, "the second trigger ends research with a tool-free report");
+  assert.ok(ctl.debugValues.some(value => value.event === "research_recovery_finalization" && value.trigger === "research_no_new_evidence"));
+});
+
+// Independent regression fixtures: meaningful work must not be a duplicate-read episode.
+const auditReadValue=(which='A',start=1,end=60)=>({ok:true,kind:'workspace_file_observation',canonicalProject:'C:/Fixture/Fixture.uproject',path:'project://Source/Game/ReviewA.cpp'.replace('ReviewA',`Review${which}`),sha256:(which==='A'?'3c':'4d').repeat(32),startLine:start,endLine:end,totalLines:60,content:Array.from({length:end-start+1},(_,i)=>`// ${which} line ${start+i} source`).join('\n')});
+async function runProgressScenario(values,extra={}) {
+  let calls=0; const inputs=[],toolCounts=[];
+  const tool={name:'read_file',description:'Read',parametersJsonSchema:{type:'object'},pluginIdentifier:'mcp/unreal-agent'};
+  const model={identifier:'independent-review',async getContextLength(){return 65536;},async applyPromptTemplate(chat){return chat.toString();},async countTokens(text){return Math.ceil(text.length/4);},
+    async act(chat,tools,options){
+      inputs.push(chat.toString());toolCounts.push(tools.length);calls++;
+      if(!tools.length || calls>values.length){options.onMessage(ChatMessage.from({role:'assistant',content:'Report with unresolved items marked.'}));options.onPredictionCompleted({stats:{stopReason:'eosFound'}});return;}
+      const value=values[calls-1];const request={id:`review-${calls}`,type:'function',name:'read_file',arguments:{path:value.path,startLine:value.startLine??calls,endLine:value.endLine??calls}};
+      await options.guardToolCall(0,7,{toolCallRequest:request,allow(){},allowAndOverrideParameters(){},deny(){}});
+      options.onToolCallRequestFinalized(0,7,{toolCallRequest:request});
+      options.onMessage(ChatMessage.from({role:'assistant',content:[{type:'text',text:`Derived distinct contract conclusion ${calls} using source already supplied.`},{type:'toolCallRequest',toolCallRequest:request}]}));
+      options.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:request.id,content:JSON.stringify(value)}]}));options.onRoundEnd(0);throw options.signal.reason;
+    }};
+  const ctl=fakeController(Chat.from([{role:'user',content:'Audit the source and verify each function.'}]),model,{contextManagementMode:'hybrid',toolStagnationAction:'warn',toolStagnationRounds:20,noNewEvidenceRounds:3,maxResearchRounds:30,...extra},[tool]);
+  await handlePredictionLoop(ctl);return {calls,inputs,toolCounts,events:ctl.debugValues,reportNow:ctl.debugValues.filter(e=>e.event==='report_now')};
+}
+
+
+test("distinct focused source checks keep tools until the planned report", async () => {
+  const values = [auditReadValue(), ...Array.from({length:9},(_,i)=>auditReadValue('A',2+i*3,3+i*3))];
+  const r = await runProgressScenario(values);
+  assert.equal(r.calls, 11);
+  assert.ok(r.toolCounts.every(n=>n>0));
+  assert.equal(r.events.filter(e=>e.event==='report_now').length,0);
+});
+test("budget-failed new source reads remain unresolved instead of unchanged and force-complete", async () => {
+  const values = [auditReadValue(), ...Array.from({length:7},(_,i)=>({ok:false,path:`project://Source/Game/Other${i}.cpp`,errorCode:'READ_BUDGET_EXCEEDED'}))];
+  const r = await runProgressScenario(values);
+  assert.equal(r.events.filter(e=>e.event==='report_now').length,0);
+  assert.ok(r.toolCounts.every(n=>n>0));
+  assert.ok(!r.inputs.join('\n').includes('the files are unchanged'));
+});
+test("genuine new evidence ends the previous duplicate-read episode", async () => {
+  const r=await runProgressScenario([auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue('B'),auditReadValue('B'),auditReadValue('B'),auditReadValue('B')]);
+  assert.deepEqual(r.events.filter(e=>e.event==='report_now').map(e=>[e.trigger,e.finalize]),[[1,false],[1,false]]);
+  assert.ok(r.toolCounts.every(n=>n>0));
 });

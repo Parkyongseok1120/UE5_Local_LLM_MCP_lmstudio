@@ -5,8 +5,8 @@ const fs = require("node:fs");
 const fsp = fs.promises;
 const { atomicWriteText } = require("./atomic-io");
 const {
-  calculateReplacement,
-  calculateReplacements,
+  calculatePatch,
+  isLineRangePatch,
   replaceWithCAS,
   sha256Text,
   assertMutationActive,
@@ -144,12 +144,9 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     const original = baseline.get(relativePath);
     if (!target || !original) throw new Error(`Unknown patch path: ${relativePath}`);
     const priorContent = await fsp.readFile(target.absolutePath, "utf8");
-    const planned = item.edits ? calculateReplacements({ priorContent, edits: item.edits }) : calculateReplacement({
-      priorContent,
-      oldText: item.oldText,
-      newText: item.newText,
-      expectedOccurrences: item.expectedOccurrences,
-    });
+    const planned = calculatePatch(priorContent, item);
+    const range = isLineRangePatch(item)
+      ? { startLine: item.startLine, endLine: item.endLine, expectedRangeSha256: item.expectedRangeSha256 } : undefined;
     if (!planned.ok) throw patchFailure(planned, relativePath, item);
     const priorHash = sha256Text(priorContent);
     const postHash = sha256Text(planned.updated);
@@ -184,6 +181,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
         ? priorHash
         : (item.expectedHash || original.preHash || null),
       edits: item.edits,
+      range,
     });
     if (!result.ok) throw patchFailure(result, relativePath, item);
     if (sha256Text(result.updated) !== postHash) {
@@ -205,7 +203,7 @@ async function commitBundle(bundle, targets, baseline, journal, stateRoot, hooks
     postWriteHashes[relativePath] = postHash;
     // This optional calculation never throws into the transaction rollback.
     if (result.preHash === original.preHash) {
-      const evidence = item.edits
+      const evidence = item.edits || range
         ? { schemaVersion: 1, previousSha256: result.preHash, sha256: postHash,
           status: result.preHash === postHash ? "no_change" : "changed", coverage: "complete_changed_regions", hunks: result.regions }
         : committedChange(result.priorContent, result.updated, result.preHash, postHash);
