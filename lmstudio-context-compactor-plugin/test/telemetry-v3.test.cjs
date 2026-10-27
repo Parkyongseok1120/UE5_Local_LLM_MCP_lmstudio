@@ -20,3 +20,24 @@ test('v3 note schema fields cannot schedule missing report findings',()=>{
  register.attach(index);
  assert.deepEqual(register.missing('').map(row=>row.identifier),['ApplyDamage']);
 });
+test('v4 prefix metrics reuse exact template strings without serializing or retokenizing them',async()=>{
+ const {measureContext}=require('../dist/context-manager'),{configFor}=require('./helpers/v4.cjs');
+ let variant=0, counts=0;const events=[];
+ const source={async getContextLength(){return 84224;},async applyPromptTemplate(chat){return `<template-${variant}>`+chat.toString();},
+  async countTokens(text){counts++;return Math.ceil(text.length/4);}};
+ const history=Chat.from([{role:'system',content:'SENSITIVE_SYSTEM_FIXTURE'},{role:'user',content:'request'}]);
+ const tracker=new SystemPrefixTelemetry(),ctl={debug:event=>events.push(event)};
+ const first=await measureContext(source,history,configFor());
+ tracker.record(ctl,{executionId:'e',modelInputId:'e:0',roundIndex:0},history.getMessagesArray(),first,[]);
+ variant=1;const second=await measureContext(source,history,configFor());
+ tracker.record(ctl,{executionId:'e',modelInputId:'e:1',roundIndex:1},history.getMessagesArray(),second,['projection']);
+ assert.equal(counts,2,'telemetry does not tokenize');
+ assert.deepEqual(events.map(e=>e.event),['system_prefix_fingerprint','prefix_reuse','system_prefix_fingerprint','prefix_reuse']);
+ assert.equal(events[3].commonPrefixChars,'<template-'.length);
+ assert.equal(events[3].previousInputChars,first.templatedPrompt.length);
+ assert.equal(events[3].systemChanged,false);assert.deepEqual(events[3].rewriteCauses,['projection']);
+ assert.equal(JSON.stringify([events,first,second]).includes('SENSITIVE_SYSTEM_FIXTURE'),false);
+ assert.equal(Object.keys(first).includes('templatedPrompt'),false);
+ const fresh=new SystemPrefixTelemetry();fresh.record(ctl,{executionId:'next',modelInputId:'next:0',roundIndex:0},history.getMessagesArray(),second,[]);
+ assert.equal(events.at(-1).previousInputChars,null);
+});

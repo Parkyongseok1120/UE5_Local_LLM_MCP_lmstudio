@@ -76,6 +76,7 @@ export async function measureContext(
     ? "estimate" : "none";
   let templatedInputFingerprint: string | null = null;
   let exact = false;
+  let templatedPrompt: string | undefined;
   try {
     if (typeof source.getContextLength === "function") {
       if (cost) cost.contextLengthCalls++;
@@ -96,6 +97,7 @@ export async function measureContext(
       inputTokens = counted;
       promptMeasurementSource = "templated_model_count";
       exact = true;
+      templatedPrompt = String(prompt);
       if (toolSchemaChars > 0) {
         try {
           if (cost) cost.tokenCountCalls++;
@@ -116,7 +118,7 @@ export async function measureContext(
   const outputReserve = numeric(options.outputReserve, config.maxOutputReserve, 0, 131072);
   const remainingTokens = contextLength - inputTokens - outputReserve - config.safetyMarginTokens;
   if (cost) cost.measurementMs += Date.now() - started;
-  return {
+  const result: ContextMeasurement = {
     contextLength, contextLengthSource, promptMeasurementSource, templatedInputChars,
     inputTokens,
     toolSchemaChars,
@@ -130,6 +132,8 @@ export async function measureContext(
     messageCount: history.length,
     fit: remainingTokens >= 0 ? (exact ? true : null) : false,
   };
+  if (templatedPrompt !== undefined) Object.defineProperty(result, "templatedPrompt", { value: templatedPrompt });
+  return result;
 }
 
 export function buildCompactedHistory(
@@ -855,10 +859,13 @@ export async function prepareWorkingInput(options: {
   const compactionAppliedModes: Array<string> = [];
   let compactionCheckpoint: CheckpointResult | null = null;
   let compactionRetention: Record<string, unknown> | null = null;
+  let reasoningBounded = false;
   if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const counter = tokenSource as { countTokens?: (text: string) => Promise<number> };
     if (config.pastReasoningTokens > 0 && counter.countTokens) {
-      workingHistory = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
+      const bounded = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
+      reasoningBounded = bounded !== workingHistory;
+      workingHistory = bounded;
       modelHistory = workingHistory;
       before = await measureContext(tokenSource,
         composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled).history,
@@ -867,7 +874,7 @@ export async function prepareWorkingInput(options: {
   }
   if (config.contextManagementMode !== "legacy") return {
     before, modelHistory, workingHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-    compactionCheckpoint, compactionRetention,
+    compactionCheckpoint, compactionRetention, reasoningBounded,
   };
   if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const hard = before.remainingTokens <= config.hardRemainingTokens;
@@ -955,6 +962,6 @@ export async function prepareWorkingInput(options: {
 
   return {
 before, modelHistory, workingHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-    compactionCheckpoint, compactionRetention
+    compactionCheckpoint, compactionRetention, reasoningBounded
 };
 }

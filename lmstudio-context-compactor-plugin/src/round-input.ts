@@ -95,11 +95,12 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   const measureRoundInput = (history: Chat) => measureContext(tokenSource, history, config, roundTools,
     { outputReserve: roundOutputReserve });
   let { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-    compactionCheckpoint, compactionRetention } = await prepareWorkingInput({ tokenSource, config,
+    compactionCheckpoint, compactionRetention, reasoningBounded: initialReasoningBounded } = await prepareWorkingInput({ tokenSource, config,
     checkpointOptions: contextManager.checkpointOptions,
     workingHistory, activeNote, noteEnabled, roundScopeInstructions, roundTools, roundOutputReserve,
     beforeInput, measureRoundInput, ctl, executionId, roundIndex });
   workingHistory = modelHistory;
+  if (initialReasoningBounded) { rewriteCauses.add("reasoning_bound"); rewritingInput = true; }
   const assembleModelInput = createInputAssembler({ tokenSource, config, roundTools,
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
@@ -366,7 +367,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // execution already admitted stays: dropping it would rewrite the system
   // message and take away the engine contracts the failed round reasoned with.
   const recoveryReuse = focused && options.referenceRecovery ? options.guidanceRetention?.kept : undefined;
-  if (lowWater.canRun && !config.observeOnly && (!finalizing || options.guidanceRetention?.kept) && config.designGuidanceMode !== "off"
+  const explainWithoutTopic = options.objective?.kind === "explain"
+    && !options.guidanceIntent?.reason.startsWith("explicit_task_topic");
+  if (!explainWithoutTopic && lowWater.canRun && !config.observeOnly && (!finalizing || options.guidanceRetention?.kept) && config.designGuidanceMode !== "off"
     && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery || recoveryReuse)) {
     let candidates: GuidanceCandidate[] = [];
     let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
@@ -483,7 +486,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         selectionObservationIds: selection.observationIds } : {}), ...telemetry });
   } else if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
     configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
-    effectiveDelivery: focused ? "focused" : "documents", outcome: "not_attempted",
+    effectiveDelivery: focused ? "focused" : "documents", outcome: explainWithoutTopic ? "omitted" : "not_attempted",
+    ...(explainWithoutTopic ? { omissionReasons: ["objective_explain_without_topic"] } : {}),
     reason: config.observeOnly ? "observe_only" : config.designGuidanceMode === "off" ? "disabled"
       : config.designGuidanceMaxTokens <= 0 ? "zero_allowance" : finalizing ? "finalization"
         : options.referenceRecovery ? "recovery_policy" : "input_unavailable",

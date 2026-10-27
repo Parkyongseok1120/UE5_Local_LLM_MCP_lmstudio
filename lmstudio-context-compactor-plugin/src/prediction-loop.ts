@@ -22,7 +22,7 @@ import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
-import { classifyObjective } from "./tool-capability-registry";
+import { classifyObjective, hasMutationCapability } from "./tool-capability-registry";
 import { continuationStatusText } from "./prediction-ui";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
@@ -703,8 +703,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             minimumReadResultTokens(roundTools.filter(hasReadCapability)));
         const reservationIds = new Map<string, string>();
         const roundModelStartedAt = Date.now();
-        if (config.showDebugInfo) ctl.debug({ event: "system_prefix_fingerprint", executionId, modelInputId, roundIndex,
-          ...systemPrefix.observe(modelInput.getMessagesArray()) });
+        if (config.showDebugInfo) systemPrefix.record(ctl, { executionId, modelInputId, roundIndex },
+          modelInput.getMessagesArray(), finalMeasurement, prepared.rewriteCauses);
         const captured = await runOneToolRound(
           tokenSource,
           modelInput,
@@ -1080,7 +1080,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             predictionUsage: captured.predictionUsage,
             callPurpose: finalizing
               ? reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
-              : recoveryCoordinator.mutationFocus ? "mutation_focus" : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
+              : recoveryCoordinator.mutationFocus ? "mutation_focus"
+                : ["mutate", "build"].includes(objective.kind) && roundTools.some(hasMutationCapability) ? "mutation"
+                : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
                 : researchRecoveryRound ? "read_only_research_recovery" : "research",
             roundModelElapsedMs,
             modelPrefillMs: captured.timing.promptProcessingMs,

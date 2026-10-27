@@ -94,6 +94,8 @@ export type InputAvailabilityProjection = {
 };
 
 export type ContextMeasurement = {
+  /** Non-enumerable, execution-local template used by prefix telemetry only. */
+  readonly templatedPrompt?: string;
   contextLength: number;
   contextLengthSource: "model" | "configured_fallback";
   inputTokens: number;

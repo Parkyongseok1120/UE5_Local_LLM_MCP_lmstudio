@@ -23,6 +23,12 @@ test("guidance rescope is deferred in a non-rewrite round",async()=>{
  assert.equal(system(next.result),system(f.first.result));
  assert.equal(next.events.find(e=>e.event==="design_guidance_input").stickyCause,"rescope_deferred");
 });
+test('an explain request with an explicit topic still receives that guidance',async()=>{
+ const f=await guidanceFixture();
+ const next=await prepare(history(),{...f.extra,objective:{kind:'explain',requiredEffects:new Set(['read']),mutationState:'none'}});
+ assert.ok(system(next.result).includes(f.retention.kept.instruction));
+ assert.equal(next.events.find(e=>e.event==='design_guidance_input').outcome,'included');
+});
 test("deferred rescope applies on the next rewrite round",async()=>{
  const f=await guidanceFixture();f.diagnostic();
  const deferred=await prepare(history(),{...f.extra,roundIndex:1});

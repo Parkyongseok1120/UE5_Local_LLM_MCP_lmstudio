@@ -149,6 +149,7 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
     outcome_events: list[dict[str, Any]] = []
     prefix_events: list[dict[str, Any]] = []
     context_events: list[dict[str, Any]] = []
+    reuse_events: list[dict[str, Any]] = []
     review_events: list[dict[str, Any]] = []
     report_now_events: list[dict[str, Any]] = []
     tool_calls: Counter[str] = Counter()
@@ -174,6 +175,8 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
                 prefix_events.append(event)
             elif name == "direct_context_measurement":
                 context_events.append(event)
+            elif name == "prefix_reuse":
+                reuse_events.append(event)
             elif name == "report_review_scheduled":
                 review_events.append(event)
             elif name == "report_now":
@@ -211,6 +214,13 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
     predicted_tokens = sum((r.get("predictionStats") or {}).get("predictedTokensCount") or 0 for r in rounds)
     reasoning_tokens = sum((r.get("predictionUsage") or {}).get("reasoningTokensCount") or 0 for r in rounds)
     rounds_by_index = {r.get("roundIndex"): r for r in rounds}
+    reuse_by_round = {(e.get("executionId"), e.get("roundIndex")): e for e in reuse_events}
+    round_costs = []
+    for r in rounds:
+        reuse = reuse_by_round.get((r.get("executionId"), r.get("roundIndex")), {})
+        round_costs.append({"roundIndex": r.get("roundIndex"), "prefill_ms": r.get("modelPrefillMs"),
+                            "rewriteCauses": reuse.get("rewriteCauses"), "systemChanged": reuse.get("systemChanged"),
+                            "commonPrefixChars": reuse.get("commonPrefixChars")})
 
     changed_projections = [p for p in projections if p.get("changed")]
     projection_rounds = []
@@ -296,6 +306,7 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         "rounds": len(rounds),
         "finishReasons": dict(Counter(str(r.get("finishReason")) for r in rounds)),
         "callPurposes": dict(Counter(str(r.get("callPurpose", "unknown")) for r in rounds)),
+        "roundCosts": round_costs,
         "readLedger": {
             "measuredEvents": sum("restoreRequiredReads" in e for e in ledger_events),
             "firstFocusReads": sum(e.get("firstFocusReads", 0) for e in ledger_events),
@@ -551,6 +562,12 @@ def format_report(report: dict[str, Any]) -> str:
         out.append(f"  loaded build: {', '.join(report['loadedBuildIds'])}")
     out.append(f"  rounds: {report['rounds']}  finish: {report['finishReasons']}")
     out.append(f"  call purposes: {report.get('callPurposes', {})}  system prefix changes: {report.get('systemPrefixChanges', 0)}")
+    if report.get("roundCosts"):
+        out.append("  round | prefill_ms | rewriteCauses | systemChanged | commonPrefixChars")
+        for row in report["roundCosts"]:
+            causes = ",".join(row["rewriteCauses"]) if row["rewriteCauses"] is not None else "unknown"
+            out.append(f"  {row['roundIndex']} | {row['prefill_ms']} | {causes or '-'} | "
+                       f"{row['systemChanged']} | {row['commonPrefixChars']}")
     ledger = report.get("readLedger", {})
     out.append(f"  reads: first focus {ledger.get('firstFocusReads', 0)}, required restores {ledger.get('restoreRequiredReads', 0)}, "
                f"repeat restores {ledger.get('repeatRestores', 0)}, legacy ambiguous restores {ledger.get('legacyAmbiguousRestoredReads', 0)}")

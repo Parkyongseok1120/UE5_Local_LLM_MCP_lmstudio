@@ -1,9 +1,9 @@
 import {
-  ChatMessage
+  ChatMessage, type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
-import { type ContinuityNote, type DirectConfig, type InputAvailabilityProjection } from "./execution-contracts";
+import { type ContinuityNote, type DirectConfig, type InputAvailabilityProjection, type ContextMeasurement, type RewriteCause } from "./execution-contracts";
 import type { RecoveryProgress, ReadScreening } from "./evidence-manager";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
@@ -41,9 +41,25 @@ export function inputAvailabilityTelemetry(input: { projection: InputAvailabilit
     metadataTokenMeasurement: input.availabilityMetadataTokens === null ? "unknown" : "prompt_delta" } : { mode: "off" };
 }
 
-/** Measurement only. Owned by one execution; no prompt text or cache policy. */
+/** Execution-local measurement. Only lengths/hashes escape; no cache policy. */
 export class SystemPrefixTelemetry {
   private previous: string | null = null;
+  private previousPrompt: string | undefined;
+  record(ctl: Pick<PredictionLoopHandlerController, "debug">,
+    context: { executionId: string; modelInputId: string; roundIndex: number },
+    messages: ChatMessage[], measurement: ContextMeasurement, rewriteCauses: readonly RewriteCause[]) {
+    const system = this.observe(messages);
+    ctl.debug({ event: "system_prefix_fingerprint", ...context, ...system });
+    const current = measurement.exact ? measurement.templatedPrompt : undefined, previous = this.previousPrompt;
+    let commonPrefixChars = 0;
+    if (current !== undefined && previous !== undefined)
+      while (commonPrefixChars < Math.min(current.length, previous.length)
+        && current[commonPrefixChars] === previous[commonPrefixChars]) commonPrefixChars++;
+    ctl.debug({ event: "prefix_reuse", ...context, commonPrefixChars: current === undefined ? null : commonPrefixChars,
+      previousInputChars: previous?.length ?? null, currentInputChars: current?.length ?? null,
+      systemChanged: system.changed, rewriteCauses });
+    this.previousPrompt = current;
+  }
   observe(messages: ChatMessage[]) {
     const systemHash = telemetryFingerprint(messages.filter(message => message.getRole() === "system").map(message => message.getText()));
     const event = { systemHash, previousSystemHash: this.previous, changed: this.previous !== null && this.previous !== systemHash };

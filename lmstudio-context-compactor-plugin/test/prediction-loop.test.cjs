@@ -5583,7 +5583,7 @@ test('forced final delivery omits optional design references', async () => {
       assert.doesNotMatch(chat.toString(), /Optional design reference/);
       completeRecoveryReply(options, 'Completed short report.');
     } };
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Report from the supplied facts.' }]), model,
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review the supplied facts.' }]), model,
     { designGuidanceMode: 'core', outputRecoveryMode: 'on' });
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
@@ -5771,7 +5771,7 @@ for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips
         assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
         completeRecoveryReply(options, 'Done.');
       } };
-    const ctl = fakeController(Chat.from([{ role: 'user', content: 'TASK' }]), model, {
+    const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review this project.' }]), model, {
       designGuidanceDelivery: 'focused', designGuidanceMode: variant === 'off' ? 'off' : 'design',
       observeOnly: variant === 'observe', designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192 });
     await handlePredictionLoop(ctl);
@@ -5792,7 +5792,7 @@ test('focused final delivery omits references and makes no extra model call', as
       assert.equal(tools.length, 0); assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
       completeRecoveryReply(options, 'Finished.');
     } };
-  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Report.' }]), model,
+  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Review the supplied facts.' }]), model,
     { designGuidanceMode: 'core', designGuidanceDelivery: 'focused', outputRecoveryMode: 'on' }));
   assert.equal(calls, 2);
 });
@@ -5843,7 +5843,7 @@ test('Auto core fallback without a request topic or returned observation keeps l
   const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
     async countTokens(text) { return Math.ceil(text.length / 3); },
     async act(_chat, _tools, options) { completeRecoveryReply(options, 'Summary.'); } };
-  const ctl = fakeController(Chat.from([{ role: 'user', content: '지금 프로젝트 어디야' }]), model,
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review this project.' }]), model,
     { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
   await handlePredictionLoop(ctl);
   const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
@@ -6682,6 +6682,7 @@ test('no report_review for mutate objective after applied mutation',async()=>{
   await handlePredictionLoop(ctl);
   assert.equal(ctl.debugValues.some(e=>e.event==='report_review_scheduled'),false);
   assert.equal(ctl.debugValues.find(e=>e.event==='execution_outcome').mutationState,'applied');
+  assert.ok(ctl.debugValues.some(e=>e.event==='direct_round_observation'&&e.callPurpose==='mutation'));
 });
 test('missing candidates exclude identifiers without a returned source location',()=>{
   const {ReviewRegister}=require('../dist/review-register');
