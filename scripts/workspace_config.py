@@ -53,6 +53,12 @@ def find_workspace_root(start: Path | None = None) -> Path:
     origin = Path(__file__).resolve().parent.parent if start is None else start
     resolved = origin.resolve()
     for candidate in [resolved, *resolved.parents]:
+        # A managed worktree has a .git file and an arbitrary directory name.
+        # Bind to this repository before considering a named parent checkout.
+        if ((candidate / ".git").exists()
+                and (candidate / "config" / "stable_tool_manifest.json").is_file()
+                and (candidate / "scripts" / "workspace_config.py").is_file()):
+            return candidate
         if candidate.name in WORKSPACE_DIR_NAMES:
             return candidate
         if (candidate / "config" / "workspace.json").exists():

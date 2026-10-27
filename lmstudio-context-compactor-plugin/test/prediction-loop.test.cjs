@@ -163,8 +163,17 @@ for (const objective of ["mutate", "review"]) test(`v3 ${objective === "mutate"
     reportReviewMode: "off", toolStagnationAction: "off" }, tools);
   await handlePredictionLoop(ctl);
   assert.ok(ctl.debugValues.some(e => e.event === "working_context_projection" && e.pinsReleased));
-  if (objective === "mutate") assert.equal(mutations, 1);
+  if (objective === "mutate") {
+    assert.equal(mutations, 1);
+    assert.ok(ctl.debugValues.some(e=>e.event==='direct_round_observation' && e.callPurpose==='mutation_focus'));
+    assert.ok(ctl.debugValues.some(e=>e.event==='execution_outcome' && e.objectiveKind==='mutate' && e.mutationState==='applied'));
+  }
   else assert.ok(ctl.debugValues.some(e => e.finalizationTrigger === "context_working_set_exhausted"));
+  const prefixes=ctl.debugValues.filter(e=>e.event==='system_prefix_fingerprint');
+  assert.ok(prefixes.length>1);assert.equal(prefixes[0].changed,false);
+  assert.ok(prefixes.every(e=>/^[a-f0-9]{64}$/.test(e.systemHash) && typeof e.changed==='boolean'));
+  const restore=ctl.debugValues.find(e=>e.event==='working_context_restore');
+  assert.equal(typeof restore.windowStatus,'string');assert.equal(typeof restore.ledgerStatus,'string');assert.equal(typeof restore.accessInherited,'boolean');
 });
 
 test("v3 mutation timeout final instruction declares unapplied changes", async () => {

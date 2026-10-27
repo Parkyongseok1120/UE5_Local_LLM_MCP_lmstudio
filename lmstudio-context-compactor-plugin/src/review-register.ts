@@ -46,7 +46,9 @@ const NOT_A_SUBJECT = new Set(["this", "self", "Super", "GameMode", "GameState",
   // Reflection specifiers name a property's metadata, not the property.
   "EditAnywhere", "EditDefaultsOnly", "EditInstanceOnly", "VisibleAnywhere", "VisibleDefaultsOnly", "BlueprintReadWrite",
   "BlueprintReadOnly", "BlueprintCallable", "BlueprintPure", "BlueprintAuthorityOnly", "Replicated", "ReplicatedUsing",
-  "OnRep", "NetMulticast", "Server", "Client", "Reliable", "Unreliable", "Transient", "Category", "Meta"]);
+  "OnRep", "NetMulticast", "Server", "Client", "Reliable", "Unreliable", "Transient", "Category", "Meta",
+  // Continuity-note schema fields cannot become missing code findings.
+  "openQuestions", "rejectedHypotheses", "reviewClaims", "modelNotes", "decisions", "currentTurnFindings"]);
 // Tool-call and evidence ids in backticks: long tokens mixing case and digits.
 const OPAQUE_ID = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9_-]{20,}$/u;
 const global = (pattern: RegExp) => new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");

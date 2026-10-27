@@ -1,0 +1,346 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "Prediction loop dispatches SDK rounds; EvidenceManager owns delivered facts; WorkingContext owns archived bodies and access checks; BudgetBroker owns budget arithmetic."
+  ],
+  "proposed": [
+    "Implemented C1-C8 v3 r2 contracts in T1-T8 after T0 red tests; no installation or live-model changes."
+  ],
+  "doNotDuplicate": [
+    "Reuse the existing result decoder, archive proof checks, source identity, generated contracts, checkpoint owner and recovery progress predicates."
+  ],
+  "invariants": [
+    "Only completed actual mutation results satisfy a mutation objective.",
+    "Layer A has one decision entry; layer B guards retain their established policies.",
+    "Search return, file coverage, input visibility and assistant claims remain separate.",
+    "Optional guidance cannot displace objective source pins.",
+    "Telemetry has no continuation or access authority."
+  ],
+  "impactedSurfaces": [
+    "Plugin execution, budget, capability, source ledger, working input and telemetry modules",
+    "Python RAG/evidence envelopes and analyzer",
+    "Cross-language generated contract and package allowlist",
+    "Workspace discovery and repeat-response compatibility baseline fixes"
+  ],
+  "validationPlan": [
+    "Full clean plugin build/test; four generated artifact checks",
+    "Both provider Node suites; full Python suite with UTF-8 and frozen HEAD/artifacts",
+    "Package allowlist/reproducibility and public path checks",
+    "Packet validation checks structure only; live-model W7 remains user-operated"
+  ],
+  "claims": [
+    {
+      "id": "C1",
+      "claim": "TaskObjective is execution-scoped; only returned mutation results can make it applied. Unapplied mutation finalization has a mandatory notice.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "observation": "TaskObjective is execution-scoped; only returned mutation results can make it applied. Unapplied mutation finalization has a mandatory notice."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/task-objective.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
+          "observation": "Model wording is not mutation proof; canceled or uncertain results remain unapplied."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C2",
+      "claim": "One phase-gated RecoveryCoordinator.decide owns layer A. Final measured pressure narrows a mutation objective before blocking it.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+          "observation": "One phase-gated RecoveryCoordinator.decide owns layer A. Final measured pressure narrows a mutation objective before blocking it."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/continuation-decision.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        },
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.d.ts:4290",
+          "observation": "Installed SDK 1.5.0 declares guardToolCall immediately before execution with per-call allow, parameter override and deny controls. It does not publish a total batch request count. The local synthetic tests cover the harness handling; real host scheduling remains unverified."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
+          "observation": "Layer B safeguards remain independent, with an allowlist assertion; live model success remains unmeasured."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C3",
+      "claim": "Generated capability data supplies effects, resultKind and role queries from one stable tool manifest.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "config/stable_tool_manifest.json",
+          "observation": "Generated capability data supplies effects, resultKind and role queries from one stable tool manifest."
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_cross_language_tool_contract.py",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "config/stable_tool_manifest.json",
+          "observation": "Unity provider authority is checked against its existing catalog; the Unity error dialect is unchanged."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C4",
+      "claim": "Known-size reservations use actual envelope bytes and preserve the cheapest viable next read floor without knowing batch request count.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+          "observation": "Known-size reservations use actual envelope bytes and preserve the cheapest viable next read floor without knowing batch request count."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/budget-broker-v3.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        },
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.d.ts:4290",
+          "observation": "Installed SDK 1.5.0 declares guardToolCall immediately before execution with per-call allow, parameter override and deny controls. It does not publish a total batch request count. The local synthetic tests cover the harness handling; real host scheduling remains unverified."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts",
+          "observation": "Unknown first-read margin remains 1024. A read exceeding available capacity may still be denied."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C5",
+      "claim": "Four provider dialects and SDK refusal are normalized; request-scoped retry minimum is preserved through guard reservation.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+          "observation": "Four provider dialects and SDK refusal are normalized; request-scoped retry minimum is preserved through guard reservation."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/tool-envelope-v3.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        },
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.d.ts:4290",
+          "observation": "Installed SDK 1.5.0 declares guardToolCall immediately before execution with per-call allow, parameter override and deny controls. It does not publish a total batch request count. The local synthetic tests cover the harness handling; real host scheduling remains unverified."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-result-semantics.js",
+          "observation": "Only actual guard-denial trace contributes budgetDenied; a copied SDK-shaped error cannot claim authority."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C6",
+      "claim": "ReturnedSource is projected from ReadLedger; positioned search hits and content/text/body/code bodies carry execution or conversation scope.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "ReturnedSource is projected from ReadLedger; positioned search hits and content/text/body/code bodies carry execution or conversation scope."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/returned-source-v3.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js",
+          "observation": "Search-hit return is not source coverage; bounded text loss is incomplete, not proof of absence. Claim/fact heuristic precision remains out of scope."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C7",
+      "claim": "Mutation targets survive a new checkpoint and scoped pins precede unresolved spans and optional guidance within one round allowance.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "Mutation targets survive a new checkpoint and scoped pins precede unresolved spans and optional guidance within one round allowance."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-set-v3.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js",
+          "observation": "A measured input that cannot retain pins may still reduce its allowance. An unqualified historic path cannot establish a new project identity."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    },
+    {
+      "id": "C8",
+      "claim": "Telemetry distinguishes first focus, required restore and repeated hidden spans, reports restore and objective state, and measures system hash changes.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P3",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+          "observation": "Telemetry distinguishes first focus, required restore and repeated hidden spans, reports restore and objective state, and measures system hash changes."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/telemetry-v3.test.cjs",
+          "observation": "Synthetic regression exercises this contract; results recorded in the companion implementation report and external T0/T8 logs."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts",
+          "observation": "Measurement restore history is separate from existing recovery progress state. Old restoredReads remains ambiguous in analyzer output."
+        }
+      ],
+      "unknowns": [
+        "Real LM Studio host/model behavior and end-to-end task quality require W7."
+      ]
+    }
+  ],
+  "limitations": [
+    "No installer, LM Studio restart, settings edit, or W7 real-model run.",
+    "No measured reduction percentage for re-reads or prefill.",
+    "User approved only adding cheap search_files to recovery fixture; original success/denial expectations retained.",
+    "C1 and C3 claims describe repository-owned contracts, not engine or SDK semantic behavior; framework warnings are not treated as factual validation."
+  ],
+  "validationResults": {
+    "proofScope": "local source/build/synthetic tests; no real-model W7",
+    "runtimeBuildId": "ef-build-v2-18c5f1e93c6bb49d292df81c9d62ebffd29a06565c20e6911a64e8864e89e1a8",
+    "plugin": {
+      "passed": 1131,
+      "failed": 0,
+      "skipped": 0,
+      "baselinePassed": 1059
+    },
+    "agent": {
+      "passed": 365,
+      "failed": 0,
+      "skipped": 2,
+      "baselinePassed": 364
+    },
+    "unity": {
+      "passed": 132,
+      "failed": 0,
+      "skipped": 5,
+      "baselinePassed": 132
+    },
+    "python": {
+      "passed": 1487,
+      "failed": 0,
+      "skipped": 41,
+      "baselinePassed": 1468,
+      "baselineFailed": 16,
+      "durationSeconds": 266.92
+    },
+    "generatedChecks": [
+      "tool-contract",
+      "design-guidance",
+      "unity-tool-contract",
+      "runtime-identity"
+    ],
+    "package": "allowlist, document links, isolated compile and reproducible ZIP passed in the full Python run",
+    "logs": "${DIAGNOSTICS}/harness-contract-v3-20261027/T8-*.log",
+    "packetValidation": "structure_valid; facts_not_verified",
+    "unperformed": [
+      "installation",
+      "LM Studio restart",
+      "real-model W7"
+    ]
+  }
+}

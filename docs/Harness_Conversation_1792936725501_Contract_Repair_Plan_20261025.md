@@ -217,7 +217,7 @@ schema를 바꾸면 ReadLedger의 기존 schemaVersion1 자료를 새 source ide
 - UE5.7.4 직접 헤더와 첨부의 실제 프로젝트 본문을 대조했다. UE 컴파일·PIE·네트워크 플레이는 실행하지 않았다.
 - 원본 대화는 수정하지 않았다. 분석 메타데이터의 원본 SHA는 `a79314c4e5ce339b1cbd4c173232834443a4ec381b18999984686282512ba6c0`이다.
 
-진단 산출물은 `C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501`과 `C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025`에 있다. 최종 SDK 입력 전문은 원본 대화에 없으므로 특정 재조회 전체를 불필요로 확정하지 않았다. 이번 한 실행의 시간 수치를 일반 성능 개선 예상치로 사용하지 않는다.
+진단 산출물은 `${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501`과 `${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025`에 있다. 최종 SDK 입력 전문은 원본 대화에 없으므로 특정 재조회 전체를 불필요로 확정하지 않았다. 이번 한 실행의 시간 수치를 일반 성능 개선 예상치로 사용하지 않는다.
 
 첫 구현 묶음은 **W0+W1: 보충 출력의 이력 불변성과 다음 턴 복원**으로 잡는다. 2026-10-26 심화 조사에 따라 SDK·provider 경계 수정인 **W1b/W2a/W2b**를 추가한다. 아래 14절의 순서와 완료 조건이 앞의 개괄 계획을 구체화한다. 각 묶음은 그 이전에 확인한 정상 대조군을 유지해야 한다.
 
@@ -384,7 +384,7 @@ receipt 재사용에서 `owner=null` 두 개를 같은 사용자라는 증거로
 | 변경 전 staged patch 보존 | 30,262 bytes, SHA-256 일치 | `preexisting-staged.patch` |
 | `git diff --check` | 오류 없음 | 작업 명령 결과 |
 
-위 로그는 `C:/Users/sster/.evidence-first/diagnostics/harness-contract-implementation-20261026/`에 저장했다. 수정 전 실패 로그도 같은 위치의 `pre-fix-contract-tests.log`, `pre-fix-sdk-tests.log`, `pre-fix-provider-tests.log`, `pre-fix-provider-harness-bridge.log`에 남겼다. 이 중 SDK guard denial 정상 대조군은 수정 전에도 통과했다. 독립 검토의 추가 반례와 수정 후 결과는 `C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/implementation-*-probe-result.json`에 있다.
+위 로그는 `${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/`에 저장했다. 수정 전 실패 로그도 같은 위치의 `pre-fix-contract-tests.log`, `pre-fix-sdk-tests.log`, `pre-fix-provider-tests.log`, `pre-fix-provider-harness-bridge.log`에 남겼다. 이 중 SDK guard denial 정상 대조군은 수정 전에도 통과했다. 독립 검토의 추가 반례와 수정 후 결과는 `${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/implementation-*-probe-result.json`에 있다.
 
 staged patch SHA-256은 `f333111d6983e0b8265c49c60b5ca56c8f352f05b966d0ea262c94762caa9825`다. 기존 staged 11개 파일의 내용은 그대로이며, 이번 제품 변경은 추가 unstaged 변경이다. generated source ID는 `ef-build-v2-31c4ca82362ca6b1e567e20d9edc7b424a1227d182d2175f9e906ed045256c78`다. 이는 현재 source/dist의 식별자이며 LM Studio가 현재 이 ID를 실행한다는 확인이 아니다.
 
@@ -392,11 +392,12 @@ staged patch SHA-256은 `f333111d6983e0b8265c49c60b5ca56c8f352f05b966d0ea262c947
 
 **16.2 계획 상태와 남은 검증의 구체 범위**
 
+- W3(v3 추가): 변경 목표/미해결 claim span·ref 우선 핀, 실행 수명의 직전 found 대상, sourceKey와 공유 핀 예산을 적용했다. [v3 결과](Harness_Compactor_Tool_Contract_v3_20261027.md)의 합성 회귀로 확인했으며 실제 수정 완료율은 W7에 남는다.
 - W0·W1·W1b·W2a·W2·W3: 설명한 소스 변경과 자동 회귀 적용. 실제 호스트의 모든 cancel/transport 순서와 부하 성능까지 검증한 상태는 아니다.
 - W2b: 실제 provider→하네스 byte/range/repeat 연결과 archive/receipt/CAS의 개별 경계 회귀를 확인했다. 전체 read→projection→복원→실제 수정→UE build를 하나로 연결한 실환경 검증은 W7에 남긴다.
 - W4: 원 tool profile 복귀까지 하네스 통합 fixture에서 확인. 실제 모델이 후속 수정·빌드를 완료했는지는 미검증이다.
 - W5: 형식·근거 의무·raw 출력과 권고 API/미컴파일 안내를 구현. A1~A9의 일반적인 의미 정확성을 보장하는 검증기는 구현하지 않았다. 후속 평가에서는 원 보고서의 degrees/radians, 리로드 취소, Niagara owner/API, weak owner, 초기 복제 시점을 각각 별도 정답과 반대 근거로 비교해야 한다.
 - W6: 로컬 빌드·suite·generated·패키지 검사는 수행. 실제 LM Studio 설치/재시작 후 installed/loaded identity와 다음 턴 window 복원을 확인하는 배포 검증은 남아 있다.
-- W7: 미실행. 동일 모델·설정·프로젝트 snapshot에서 감사→보충→다음 턴 수정 요청을 최소 3회 실행하고, `source_prefix_changed/mismatch`, 성공 peer 유실, 유효 receipt 유지, 복구 후 원 profile, 실제 수정·build 결과를 수집한다. 필요 시 쓰기 가능한 별도 프로젝트 사본을 사용한다. `model request`, provider dispatch, source read/hash bytes, body 전달 bytes, 신규/복원/중복 span, 취소 후 작업량과 처리 시간을 분리하여 기존 대화와 비교한다.
+- W7: v3 작업 후에도 미실행. 이번에는 설치·재시작을 수행하지 않았다. v3의 필수 후속 검증은 같은 snapshot의 감사→수정 2턴 3회이며 mutation 호출 또는 변경 미적용 고지를 확인한다. 동일 모델·설정·프로젝트 snapshot에서 감사→보충→다음 턴 수정 요청을 최소 3회 실행하고, `source_prefix_changed/mismatch`, 성공 peer 유실, 유효 receipt 유지, 복구 후 원 profile, 실제 수정·build 결과를 수집한다. 필요 시 쓰기 가능한 별도 프로젝트 사본을 사용한다. `model request`, provider dispatch, source read/hash bytes, body 전달 bytes, 신규/복원/중복 span, 취소 후 작업량과 처리 시간을 분리하여 기존 대화와 비교한다.
 
 현재 결과는 **계약 결함의 소스 수정과 자동 테스트 통과**다. 중복 body 억제가 실제 provider dispatch나 파일 read/hash I/O까지 줄였다는 실측은 없으며, 토큰·시간 절감률도 아직 제시하지 않는다. 근거 JSON 검사 결과는 계속 `structure_valid; facts_not_verified`로 취급한다.

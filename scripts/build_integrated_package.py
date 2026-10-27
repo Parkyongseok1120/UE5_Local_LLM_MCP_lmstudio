@@ -721,6 +721,8 @@ PORTABLE_CONTENT_FILES = frozenset(
         "config/workspace.example.json",
         "config/workspace.json.template",
         "docs/ARCHITECTURE.md",
+        "docs/Harness_Compactor_Tool_Contract_v3_20261027.md",
+        "docs/evidence/harness-compactor-contract-v3-20261027.json",
         "docs/Blueprint_Metadata.md",
         "docs/Build_Cs_Parser.md",
         "docs/Cline_Rider_Unreal_Agent_Setup.md",

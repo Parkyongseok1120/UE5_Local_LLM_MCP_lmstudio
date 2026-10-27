@@ -26,8 +26,8 @@
 `UPDATE.bat --dry-run`과 실제 업데이트가 종료 코드 0으로 끝났다. MCP 및 LM Studio settings 파일 해시는 유지되었다. 소스·dist·설치 소스·설치 dist·production의 ID가 일치한다.
 
 - 빌드: `ef-build-v2-68eb5ba25262e5aba2e64688d187221b44164fefd10517da62b2a158b37a0436`
-- 백업: `C:/Users/sster/.evidence-first/backups/harness-review-register-20261025-183204`
-- 진단 로그: `C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025`
+- 백업: `${USER_HOME}/.evidence-first/backups/harness-review-register-20261025-183204`
+- 진단 로그: `${USER_HOME}/.evidence-first/diagnostics/harness-review-register-20261025`
 - 실제 실행: 대화 `1792916809646`의 새 응답 버전(index 1), execution `47fccccb-6d4b-47db-be4c-c1fc80d25d7a`
 - 모델: `swift-1.5-qwen3.8-27b`, context 84,224, 원래 감사 요청 재생성
 - `direct_runtime_identity.loadedMatchesInstalled=true`를 실제 로그에서 관찰했다.

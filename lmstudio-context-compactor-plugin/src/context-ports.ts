@@ -63,7 +63,8 @@ export const workingContextModule = require("./working-context.js") as {
         history: Chat; changed: boolean; archiveFailed?: boolean; reason: string;
       };
     tool(): Tool;
-    restore(history: Chat): { history: Chat; reason: string; detail?: Record<string, unknown> };
+    restore(history: Chat): { history: Chat; reason: string; detail?: Record<string, unknown>;
+      windowStatus: string; ledgerStatus: string; accessInherited: boolean };
     commit(source: Chat, candidate: Chat, measurement: ContextMeasurement,
       expectedPrefix: string, modelFingerprint: string): boolean;
     seal(source: Chat, candidate: Chat): boolean;

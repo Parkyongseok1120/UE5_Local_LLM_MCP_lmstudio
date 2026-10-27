@@ -645,3 +645,37 @@ test("a focused range already visible through the archive is not counted as anot
   assert.equal(repeat.focusedReads, 0);
   assert.equal(resultOf(repeat).content, undefined);
 });
+
+test('v3 read telemetry separates first focus, required restore and repeated restore',()=>{
+ const {context,manager,history}=ledgerSetup();
+ try{
+  manager.captureExposure(history,'visible',true);
+  const range=readResult(SOURCE,shaOf('3c'),characterBody.split('\n').slice(199,203).join('\n'),{startLine:200,endLine:203,totalLines:420});
+  const focused=returnRound(manager,exchangeMessages('focus','read_file_range',{path:SOURCE,startLine:200,endLine:203},range),1);
+  assert.equal(focused.firstFocusReads,1);assert.equal(focused.restoreRequiredReads,0);
+  manager.captureExposure(Chat.from([{role:'user',content:'Continue'}]),'hidden',true);
+  const restored=returnRound(manager,exchangeMessages('restore','read_file',{path:SOURCE},readResult(SOURCE,shaOf('3c'),characterBody)),2);
+  assert.equal(restored.firstFocusReads,0);assert.equal(restored.restoreRequiredReads,1);assert.equal(restored.repeatRestores,0);
+  manager.captureExposure(Chat.from([{role:'user',content:'Continue'}]),'hidden-again',true);
+  const repeated=returnRound(manager,exchangeMessages('again','read_file',{path:SOURCE},readResult(SOURCE,shaOf('3c'),characterBody)),3);
+  assert.equal(repeated.restoreRequiredReads,1);assert.equal(repeated.repeatRestores,1);
+  const {readLedgerTelemetry}=require('../dist/evidence-telemetry');
+  assert.equal(readLedgerTelemetry(focused).restoredReads,0);
+  assert.equal(readLedgerTelemetry(restored).restoredReads,1);
+ }finally{context.close();}
+});
+
+test('v3 repeated hidden narrow spans are measured without changing legacy progress',()=>{
+ const {context,manager}=ledgerSetup();
+ const {readLedgerTelemetry}=require('../dist/evidence-telemetry');
+ try{
+  const range=readResult(SOURCE,shaOf('3c'),characterBody.split('\n').slice(199,203).join('\n'),{startLine:200,endLine:203,totalLines:420});
+  for(let i=0;i<2;i++) {
+   manager.captureExposure(Chat.from([{role:'user',content:'Continue'}]),`hidden-${i}`,true);
+   const value=returnRound(manager,exchangeMessages(`focus-${i}`,'read_file_range',{path:SOURCE,startLine:200,endLine:203},range),i+1);
+   assert.equal(value.restoreRequiredReads,1);assert.equal(value.focusedReads,1);
+   assert.equal(value.repeatRestores,0,'existing progress policy is unchanged');
+   assert.equal(readLedgerTelemetry(value).repeatRestores,i);
+  }
+ }finally{context.close();}
+});

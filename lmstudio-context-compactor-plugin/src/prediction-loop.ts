@@ -16,7 +16,7 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
@@ -231,6 +231,8 @@ export function createPredictionLoopHandler(
       executionId,
       mode: config.contextManagementMode,
       status: restoredWindow?.reason || "session_only",
+      windowStatus: restoredWindow?.windowStatus || "absent", ledgerStatus: restoredWindow?.ledgerStatus || "not_restored",
+      accessInherited: restoredWindow?.accessInherited === true,
       historicalReadsRebuilt,
       historicalReadsGrantAccess: false,
       ...(restoredWindow?.detail ? { detail: restoredWindow.detail } : {}),
@@ -239,6 +241,7 @@ export function createPredictionLoopHandler(
       conversationScopeVerified: Boolean(contextBoundary.scope),
     });
     let roundIndex = 0;
+    const systemPrefix = new SystemPrefixTelemetry();
     const boundedAudit = config.auditCompletionMode === "bounded";
     const researchStartedAt = Date.now();
     const researchDeadlineAt = researchStartedAt + config.auditResearchSeconds * 1000;
@@ -704,6 +707,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             minimumReadResultTokens(roundTools.filter(hasReadCapability)));
         const reservationIds = new Map<string, string>();
         const roundModelStartedAt = Date.now();
+        if (config.showDebugInfo) ctl.debug({ event: "system_prefix_fingerprint", executionId, modelInputId, roundIndex,
+          ...systemPrefix.observe(modelInput.getMessagesArray()) });
         const captured = await runOneToolRound(
           tokenSource,
           modelInput,
@@ -844,16 +849,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         evidenceManager.recordReturnedSources(captured.messages, executionId);
         const screening = config.observeOnly
           ? { messages: captured.messages, replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, newDeliveries: 0,
-            readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, repeatRestores: 0, pending: [], suppressedCallIds: [] }
+            readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, firstFocusReads: 0, restoreRequiredReads: 0, repeatRestores: 0, pending: [], suppressedCallIds: [] }
           : evidenceManager.screenReturnedReads(captured.messages, roundIndex);
         const historyReplacements = new Map(captured.messages.map((message, index) => [message, screening.messages[index]]));
         evidenceManager.captureReturned(screening.messages, executionId, modelInputId);
         evidenceManager.recordReturnedReads(screening);
         if (config.showDebugInfo && (screening.readResults || screening.replaced)) ctl.debug({ event: "read_ledger", executionId,
-          modelInputId, roundIndex, readResults: screening.readResults, newDeliveries: screening.newDeliveries,
-          redundantRereads: screening.redundant, duplicatedChars: screening.duplicatedChars, archiveRepages: screening.repages,
-          restoredReads: screening.focusedReads, repeatRestores: screening.repeatRestores,
-          failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds,
+          modelInputId, roundIndex, ...readLedgerTelemetry(screening),
           ledger: evidenceManager.ledger.stats(),
           events: evidenceManager.ledger.events.filter(event => event.round === roundIndex + 1).slice(0, 16) });
         if (config.showDebugInfo && batchReservation) ctl.debug({
@@ -1086,7 +1088,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             predictionUsage: captured.predictionUsage,
             callPurpose: finalizing
               ? reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
-              : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
+              : recoveryCoordinator.mutationFocus ? "mutation_focus" : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
                 : researchRecoveryRound ? "read_only_research_recovery" : "research",
             roundModelElapsedMs,
             modelPrefillMs: captured.timing.promptProcessingMs,

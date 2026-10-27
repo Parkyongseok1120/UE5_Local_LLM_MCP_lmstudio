@@ -488,6 +488,8 @@ def test_package_has_all_platform_launchers_and_no_local_state(tmp_path: Path, m
         "skills/evidence-first-code-audit/scripts/smoke_evidence_first_mcp.py",
         "skills/evidence-first-code-audit/scripts/validate_evidence_packet.py",
         "docs/ARCHITECTURE.md",
+        "docs/Harness_Compactor_Tool_Contract_v3_20261027.md",
+        "docs/evidence/harness-compactor-contract-v3-20261027.json",
         "docs/Integrated_Installer.md",
         "docs/LMStudio_MCP_Tool_Discipline.md",
         "docs/LMStudio_Unreal_Agent_Setup.md",

@@ -190,3 +190,25 @@ def test_reread_loop_reference_run_when_present() -> None:
     character = next(f for f in d["files"] if f["path"].endswith("LatencyMultiCombatCharacter.cpp"))
     assert character["shas"] == {"3cddf4aa": 7}
     assert character["redundant"] == 6
+
+def test_v3_contract_telemetry_and_legacy_restoration_are_distinct() -> None:
+    events = [
+        {"event": "read_ledger", "firstFocusReads": 2, "restoreRequiredReads": 3, "restoredReads": 3, "repeatRestores": 1},
+        {"event": "read_ledger", "restoredReads": 7},
+        {"event": "working_context_restore", "status": "source_prefix_mismatch", "windowStatus": "rejected", "ledgerStatus": "not_restored", "accessInherited": False},
+        {"event": "execution_outcome", "objectiveKind": "mutate", "mutationState": "applied"},
+        {"event": "direct_round_observation", "roundIndex": 0, "callPurpose": "mutation_focus"},
+        {"event": "system_prefix_fingerprint", "roundIndex": 0, "systemHash": "a", "previousSystemHash": None, "changed": False},
+        {"event": "system_prefix_fingerprint", "roundIndex": 1, "systemHash": "b", "previousSystemHash": "a", "changed": True},
+        {"event": "report_review_scheduled", "missing": ["ApplyDamage"]},
+    ]
+    conversation = {"messages": [{"versions": [{"role": "assistant", "steps": [
+        {"type": "debugInfoBlock", "debugInfo": json.dumps(e)} for e in events]}]}]}
+    report = analyze_message(conversation, 0)
+    assert report["readLedger"] == {"measuredEvents": 1, "firstFocusReads": 2, "restoreRequiredReads": 3, "repeatRestores": 1, "legacyAmbiguousRestoredReads": 7}
+    assert report["workingContextRestores"][0]["accessInherited"] is False
+    assert report["executionOutcomes"][0]["mutationState"] == "applied"
+    assert report["callPurposes"] == {"mutation_focus": 1}
+    assert report["systemPrefixChanges"] == 1
+    assert report["systemPrefixes"][1]["previousSystemHash"] == "a"
+    assert report["reportReviewMissing"] == [["ApplyDamage"]]

@@ -220,12 +220,12 @@
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/289",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/289",
           "observation": "sealed:false, source_prefix_changed. 다음 message5 step3 source_prefix_mismatch, firstDifferentIndex49."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/continuation-prefix-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/continuation-prefix-probe-result.json",
           "observation": "기존 마지막 assistant 수정은 실패, 별도 assistant append는 seal/restore 성공, 과거 user 수정 거부 유지."
         }
       ],
@@ -282,7 +282,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "supplements append immutable host blocks and survive the next user turn",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -309,12 +309,12 @@
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
           "observation": "94265 tokens, catalog entries=[], path_unavailable, read ledger files0, raw tool text 후 unresolved_tool_intent. 수정/빌드 호출0."
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/recovery-policy-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/recovery-policy-probe-result.json",
           "observation": "empty catalog/첫 실패는 research_recovery_exhausted; unlimited 성공 읽기는 endRecovery:false."
         }
       ],
@@ -346,7 +346,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
           "symbol": "failed/unresolved_tool_intent"
         }
       ],
@@ -358,7 +358,7 @@
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
           "observation": "taskCompleted:false로 정직하게 실패를 표시했다. 잘못된 수정/빌드는 실행되지 않았다."
         }
       ],
@@ -379,7 +379,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
         "testName": "recovered source and measured headroom restore the original mutation-capable profile",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -411,12 +411,12 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
           "observation": "같은 전체 파일 read_file→read_file_range가 newSourceUnits1. 원본이 입력에 있어도 archive 읽기가 restoredWorkingEvidenceUnits1, bodiesReplaced0."
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/203",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/203",
           "observation": "round16부터 archive7회 모두 restoredWorkingEvidenceUnits1; source screening과 서로 다른 진행 단위 사용."
         }
       ],
@@ -473,7 +473,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "real provider byte/range observations share whole-file coverage and duplicate capabilities stay separate",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -495,7 +495,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
           "observation": "1~2줄만 보이고 요청은1~6줄인 receipt 응답이 bodyInCurrentInput:true/bodyOmitted:true."
         }
       ],
@@ -540,7 +540,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "partial visible ranges cannot certify a whole duplicate receipt body",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -577,7 +577,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
           "observation": "Foo 한 건의 found 메모만으로 Bar까지 있는 파일이 closed. 이후 SHA B에서도 새 판정 없이 found 상태와 closed 결과 유지."
         }
       ],
@@ -640,7 +640,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "judgments do not close an entire file or become supported by a different version",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -667,12 +667,12 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
           "observation": "동일 DrawDebugLine 문장이 직접 검사에서는 gap1, ##P2/###항목에서는 gap0."
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/278",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/278",
           "observation": "progress 엔진 gap이 있었지만 report_review contracts=[]; 최종 engine notice 없음."
         }
       ],
@@ -704,7 +704,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "symbol": "근거 추가 읽기 없이 엔진 계약 확인 문구 보충"
         }
       ],
@@ -729,7 +729,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "nested priority headings retain engine evidence obligations",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -756,7 +756,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/contract-probes-result.json",
           "observation": "ProjectA 전달 후 ProjectB 같은 path/SHA를 redundant로 분류한다."
         }
       ],
@@ -802,7 +802,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "same relative path and hash in another project is a different ledger source",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -819,12 +819,12 @@
       "evidence": [
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/22",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/22",
           "observation": "evidence_first_read_context 호출 XML이 text block에 표시된다."
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/43",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/43",
           "observation": "read_file6개 XML이 text block에 표시되고 step46 부분 보고가 뒤따른다."
         },
         {
@@ -855,14 +855,14 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/46",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/46",
           "symbol": "이미 표시된 XML 이후 미완료 보고"
         }
       ],
       "counterEvidence": [
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0/steps/51",
           "observation": "raw XML을 실제 실행하지 않았고 taskCompleted:false로 실패를 기록한다."
         }
       ],
@@ -881,7 +881,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "raw tool protocol is hidden at every fragment boundary while quotes and code examples remain literal",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -898,17 +898,17 @@
       "evidence": [
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "observation": "권고 코드가 FindDeltaAngleRadians(ControlRot.Yaw, AimRotation.Yaw)를 사용한다."
         },
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/Rotator.h:24",
+          "location": "${ENGINE_ROOT}/Engine/Source/Runtime/Core/Public/Math/Rotator.h:24",
           "observation": "회전값은 degrees임을 명시한다."
         },
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
+          "location": "${ENGINE_ROOT}/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
           "observation": "FindDeltaAngleRadians는 [-PI,PI] 범위로 wrap하고 degrees 버전은 별도 함수다."
         }
       ],
@@ -916,26 +916,26 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "symbol": "권고 코드의 yaw 입력"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
+          "location": "${ENGINE_ROOT}/Engine/Source/Runtime/Core/Public/Math/UnrealMathUtility.h:914",
           "symbol": "radian wrapping"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "symbol": "0.1 기준 거부 코드 제안"
         }
       ],
       "counterEvidence": [
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/5/versions/0",
           "observation": "실제 write/build는0회여서 이 잘못된 예시는 적용되지 않았다."
         }
       ],
@@ -963,22 +963,22 @@
       "evidence": [
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "observation": "StartReload client 분기에 bIsReloading=true만 추가하도록 권고한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h:113",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Public/LatencyMultiCombatCharacter.h:113",
           "observation": "bIsReloading은 일반 bool이다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
           "observation": "StopReload는 !HasAuthority이면 반환. CanFire는 bIsReloading이 false여야 한다."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:323",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:323",
           "observation": "OnRep_CombatState에서 bIsReloading을 복구하지 않는다."
         }
       ],
@@ -986,32 +986,32 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "symbol": "제안 client StartReload"
         },
         {
           "stage": "mutation",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
+          "location": "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274",
           "symbol": "local bIsReloading=true"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:262",
           "symbol": "client StopReload 복구 불가"
         },
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:184",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:184",
           "symbol": "CanFire bool guard"
         }
       ],
       "counterEvidence": [
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:251",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:251",
           "observation": "기존 server 리로드 시작/종료는 정상적으로 bool을 관리한다. 결함은 이번 보고서의 권고에 있다."
         }
       ],
@@ -1095,7 +1095,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
           "observation": "sameStateSignature=true, changedSha=true, responseDuplicate=true, bodyOmitted=true."
         }
       ],
@@ -1127,7 +1127,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
           "symbol": "SHA 다른 내용이 숨겨짐"
         }
       ],
@@ -1139,7 +1139,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe.cjs",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe.cjs",
           "observation": "repeatReceipt 없는 대조군은 새 SHA/body를 받는다."
         }
       ],
@@ -1157,7 +1157,7 @@
         ],
         "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
         "testName": "same file metadata with changed SHA returns the new source body",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/provider-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1184,7 +1184,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
           "observation": "capacity2에서 첫 read 후 동일 repeat2회로 최초 receipt INVALID; registry2개 모두 미전달."
         }
       ],
@@ -1216,7 +1216,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-repeat-identity-probe-result.json",
           "symbol": "최초 receipt FILE_SNAPSHOT_INVALID"
         }
       ],
@@ -1247,7 +1247,7 @@
         ],
         "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
         "testName": "duplicate reads preserve source identity without issuing hidden mutation snapshots",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/provider-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1279,7 +1279,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
           "observation": "resolution 중 abort 후 ok:true, snapshot receipt 반환, registry1."
         }
       ],
@@ -1311,7 +1311,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/provider-read-cancel-probe-result.json",
           "symbol": "취소 이후 성공+receipt 반환"
         }
       ],
@@ -1342,7 +1342,7 @@
         ],
         "testFile": "lmstudio-unreal-agent-mcp/test/read-observation-contract.test.js",
         "testName": "cancellation after opening a byte reader closes it once and forbids retry",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/provider-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1374,7 +1374,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
           "observation": "실제 인자/history:8192+BoundProject; finalized/visible:65536+project 없음."
         }
       ],
@@ -1406,7 +1406,7 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
           "symbol": "표시와 실제 실행 인자 불일치"
         }
       ],
@@ -1435,7 +1435,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/sdk-contract.test.cjs",
         "testName": "actual SDK finalized, dispatch, model history and host history share effective arguments",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1467,7 +1467,7 @@
         },
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
           "observation": "actual SDK internalAct와 current runOneToolRound 연결: providerSuccesses1, capturedResults0, transport failure 유지."
         }
       ],
@@ -1499,14 +1499,14 @@
         {
           "stage": "observer",
           "stageStatus": "present",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
           "symbol": "이미 완료된 읽기가 captured results에서 유실"
         }
       ],
       "counterEvidence": [
         {
           "kind": "test",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-audit-1792936725501/sdk-contract-probe-result.json",
           "observation": "동일 성공 peer+guard denial 대조군은 capturedResults2, failure 없음."
         },
         {
@@ -1534,7 +1534,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/sdk-contract.test.cjs",
         "testName": "actual SDK preserves completed peer on exception",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1592,7 +1592,7 @@
         ],
         "testFile": "lmstudio-context-compactor-plugin/test/contract-repair.test.cjs",
         "testName": "terminal persistence releases once and reports a boolean release failure separately",
-        "testLog": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "testLog": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "runtimeVerification": "not_run",
         "limits": [
           "실제 LM Studio host에서 수정본을 실행하지 않았다. 테스트 범위를 넘는 정확도·성능·빈도를 확정하지 않는다."
@@ -1625,7 +1625,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
           "observation": "1059 passed, 0 failed"
         }
       ],
@@ -1687,7 +1687,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
           "observation": "1059 passed, 0 failed"
         }
       ],
@@ -1749,7 +1749,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
           "observation": "1059 passed, 0 failed"
         }
       ],
@@ -1811,7 +1811,7 @@
         },
         {
           "kind": "test",
-          "location": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
           "observation": "1059 passed, 0 failed"
         }
       ],
@@ -2145,8 +2145,8 @@
       "status": "unsupported_conclusion",
       "finding": "AimRotation 검증 부재에서 wallhack/벽 통과 가능성을 곧바로 확정",
       "evidence": [
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:217",
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:227"
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:217",
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:227"
       ],
       "correction": "서버 trace의 collision/first hit 반대 근거를 포함하고 실제 악용 경로 또는 미확인으로 판정",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2156,8 +2156,8 @@
       "status": "source_checked",
       "finding": "리로드 중 client 총성 발생 주장의 호출 경로 불일치",
       "evidence": [
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:188",
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:336"
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:188",
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:336"
       ],
       "correction": "client는 RPC 전송, 사운드는 서버 승인 후 multicast 경로임을 반영; 실제 UX 현상은 별도 확인",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2167,7 +2167,7 @@
       "status": "source_checked",
       "finding": "InitializeForSpawn(FCharacterStats()) 권고가 선택 DataAsset 대신 기본값을 사용",
       "evidence": [
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:88"
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:88"
       ],
       "correction": "리스폰 계약/현재 선택 통계 유지; dead code 여부만으로 P1 단정 금지",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2177,8 +2177,8 @@
       "status": "declaration_mismatch",
       "finding": "Niagara 권고 코드의 owner/API/enum이 설치본 선언과 불일치",
       "evidence": [
-        "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Classes/Kismet/GameplayStatics.h",
-        "C:/Program Files/Epic Games/UE_5.7/Engine/Plugins/FX/Niagara/Source/Niagara/Public/NiagaraFunctionLibrary.h:42"
+        "${ENGINE_ROOT}/Engine/Source/Runtime/Engine/Classes/Kismet/GameplayStatics.h",
+        "${ENGINE_ROOT}/Engine/Plugins/FX/Niagara/Source/Niagara/Public/NiagaraFunctionLibrary.h:42"
       ],
       "correction": "UGameplayStatics::SpawnNiagaraActor를 확인된 API로 취급하지 않기; UNiagaraFunctionLibrary::SpawnSystemAtLocation 및 ENCPoolMethod 선언으로 확인; 제안 미컴파일 표시",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2188,9 +2188,9 @@
       "status": "source_checked",
       "finding": "CreateWeakLambda(this)의 weak owner와 캡처 WeakController의 책임 혼동",
       "evidence": [
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:36",
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:48",
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:121"
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:36",
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:48",
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatGameMode.cpp:121"
       ],
       "correction": "GameMode 수명, WeakController.IsValid, Logout/EndPlay의 명시적 timer 정리를 각각 설명",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2200,8 +2200,8 @@
       "status": "NeedsRuntimeProof",
       "finding": "초기 탄약 0/0 수프레임 및 PlayerState ForceNetUpdate로 1틱 내 해결 확정",
       "evidence": [
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:375",
-        "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:95"
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:375",
+        "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatPlayerState.cpp:95"
       ],
       "correction": "Actor별 초기 복제/BeginPlay/HUD 시점 확인 없이는 확정하지 않기",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2211,7 +2211,7 @@
       "status": "design_context_required",
       "finding": "캐시·공유 OnRep·파생 상태를 현재 버그와 장래 개선 구분 없이 나열",
       "evidence": [
-        "C:/Users/sster/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274"
+        "${USER_HOME}/.lmstudio/conversations/1792936725501.conversation.json#/messages/3/versions/0/steps/274"
       ],
       "correction": "SSOT owner/갱신 및 파생 계약/실제 요구를 확인하고 Bug/ByDesign/NeedsRuntimeProof 구분",
       "implementationDisposition": "과거 보고의 정확도 반례로 유지. 일반 의미 검증기는 구현하지 않았으며 UE 코드 미수정. API/미컴파일 안내는 W5의 제한된 회귀로 별도 확인."
@@ -2288,47 +2288,47 @@
     "packetValidationMeaning": "structure_valid; facts_not_verified",
     "logReceipts": {
       "build.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\build.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/build.log",
         "bytes": 758,
         "sha256": "44a82f61e455535adbb6ec0537c3de7acb87739f5f228129d740e79e3f74f604"
       },
       "plugin-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\plugin-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/plugin-tests.log",
         "bytes": 102349,
         "sha256": "a5ca175f7ebcbe76c85a4d50647496eaa40e6af541d534156a2342083b487203"
       },
       "provider-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\provider-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/provider-tests.log",
         "bytes": 32284,
         "sha256": "40d2e9e095dba3b035bd827d1e91d2332411b1df3b31297bd8569d505914a2fb"
       },
       "unity-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\unity-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/unity-tests.log",
         "bytes": 12336,
         "sha256": "07680c8cca44fdcd1b54b2d4fceac1500d2545c2f7031cc2bfca9e0ee1a0196a"
       },
       "package-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\package-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/package-tests.log",
         "bytes": 102,
         "sha256": "0b3807d4a8ccd0264da6807494068679f8657cdc1d07faa46c07f867ff499b78"
       },
       "pre-fix-contract-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-contract-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/pre-fix-contract-tests.log",
         "bytes": 8892,
         "sha256": "c61b5f15eba9a12050048f0eb2e9d5b87e17573a2f50bceb3f2940f866fcc683"
       },
       "pre-fix-sdk-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-sdk-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/pre-fix-sdk-tests.log",
         "bytes": 2827,
         "sha256": "5cd3743605d1461c29bf29903541d07e02107d8e94dcc3492541015141e0bae0"
       },
       "pre-fix-provider-tests.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-provider-tests.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/pre-fix-provider-tests.log",
         "bytes": 3480,
         "sha256": "febd1bad3251390c7de005670402dd74ea5984bc0fc541a482e11a24d5ab4de1"
       },
       "pre-fix-provider-harness-bridge.log": {
-        "path": "C:\\Users\\sster\\.evidence-first\\diagnostics\\harness-contract-implementation-20261026\\pre-fix-provider-harness-bridge.log",
+        "path": "${USER_HOME}/.evidence-first/diagnostics/harness-contract-implementation-20261026/pre-fix-provider-harness-bridge.log",
         "bytes": 1006,
         "sha256": "000b48ae189523ad2d49445fa8c71dacc07ed99e5c40dc95fc723546a17b86d1"
       }
@@ -2548,7 +2548,7 @@
     "independentReview": {
       "scope": "read-only counterexample review of actual source and SDK",
       "proofLevel": "TestVerified",
-      "diagnostics": "C:/Users/sster/.evidence-first/diagnostics/harness-continuation-audit-20261025/implementation-*-probe-result.json",
+      "diagnostics": "${USER_HOME}/.evidence-first/diagnostics/harness-continuation-audit-20261025/implementation-*-probe-result.json",
       "note": "추가 위장 identity/projection, 취소 retry, late SDK guard, secondary cleanup failure 반례를 회귀에 반영. 실환경 검증 아님."
     },
     "remaining": [

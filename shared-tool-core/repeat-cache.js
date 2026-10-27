@@ -48,7 +48,7 @@ class DirectRepeatCache {
       duplicate: true,
       status: "no_new_information",
       message: entry.ok
-        ? "Unchanged observation; body omitted for the echoed receipt."
+        ? "Unchanged observation; no new information. Body omitted for the echoed receipt."
         : `This identical call already failed against the same observable state; no new information was produced. ${entry.message}`.trim(),
       originalOutcome: entry.ok ? "success" : "failure",
       ...(!entry.ok && entry.errorCode ? { originalErrorCode: entry.errorCode } : {}),

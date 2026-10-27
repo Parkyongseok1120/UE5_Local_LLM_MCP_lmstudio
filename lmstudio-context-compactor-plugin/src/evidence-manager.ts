@@ -234,6 +234,8 @@ export class EvidenceManager {
   // rounds, each a new byte or line window, never counted as re-reading).
   private readonly restoredSpans = new Map<string, Array<[number, number]>>();
   private readonly wholeRestores = new Set<string>();
+  private readonly measuredRestoreSpans = new Map<string, Array<[number, number]>>();
+  private readonly measuredWholeRestores = new Set<string>();
   // The delivered path each receipt this execution may send back stands for.
   private readonly receiptPaths = new Map<string, ReadFacts>();
   private readonly handleCache = new Map<string, string | null>();
@@ -282,7 +284,7 @@ export class EvidenceManager {
    * A hidden range or a different hash always keeps its body. */
   screenReturnedReads(messages: Array<ChatMessage>, roundIndex: number): ReadScreening {
     const screening: ReadScreening = { messages: [...messages], replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, focusedReads: 0,
-      repeatRestores: 0, newDeliveries: 0, readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] };
+      firstFocusReads: 0, restoreRequiredReads: 0, repeatRestores: 0, newDeliveries: 0, readResults: 0, failedReads: 0, otherResults: 0, pending: [], suppressedCallIds: [] };
     const history = Chat.empty(); for (const message of messages) history.append(message);
     const pairs = workingContextModule.exchangeIndex(history);
     if (pairs.ambiguous) return screening;
@@ -313,6 +315,7 @@ export class EvidenceManager {
               }
             }
             const returned = value?.returnedRange;
+            if (page.bodyVerified && !this.visibleRead(page)) this.measureRestore(page, screening);
             const span = Array.isArray(returned) && Number.isSafeInteger(returned[0]) && returned[1] > returned[0]
               ? [returned[0], returned[1] - 1] as [number, number] : null;
             const totalChars = Number(value?.totalChars);
@@ -369,7 +372,10 @@ export class EvidenceManager {
     // A repeat is suppressed only while its body is still visible in this
     // input; once projection or compaction removed it, the read is how the
     // model restores it, whole file or focused range alike.
-    const restoringHidden = verdict.status === "redundant" && !this.visibleRead(facts);
+    const bodyVisible = this.visibleRead(facts);
+    const restoringHidden = verdict.status === "redundant" && !bodyVisible;
+    if ((verdict.status === "redundant" || verdict.status === "narrower") && !bodyVisible) this.measureRestore(facts, screening);
+    else if (verdict.status === "narrower") screening.firstFocusReads++;
     if (verdict.status === "redundant" && verdict.entry && !restoringHidden) {
       const locator = this.store?.archiveLocator(verdict.entry.archiveRef, true, facts) || null;
       ledger.noteRedundant(verdict.entry, round, facts.chars, locator ? {} : { bodyKept: "no_archive_locator" });
@@ -418,14 +424,26 @@ export class EvidenceManager {
   /** Records a restored span of one file version in one unit; true when
    * earlier restores already covered it, or already restored the whole
    * version in any unit (archive pages and source re-reads alternate). */
-  private noteRestore(version: string, unit: string, span: [number, number] | null, whole: [number, number] | null): boolean {
+  private measureRestore(facts: ReadFacts, screening: ReadScreening) {
+    screening.restoreRequiredReads++;
+    const whole: [number, number] | null = facts.lines ? (facts.totalLines ? [1, facts.totalLines] : null)
+      : facts.size ? [0, facts.size - 1] : null;
+    if (this.noteRestore(`${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`, facts.lines ? "line" : "byte",
+      facts.lines || facts.bytes, whole, true)) screening.measuredRepeatRestores = (screening.measuredRepeatRestores || 0) + 1;
+  }
+
+  private noteRestore(version: string, unit: string, span: [number, number] | null, whole: [number, number] | null,
+    measurement = false): boolean {
     if (!span) return false;
-    const key = `${version}\u0000${unit}`, spans = this.restoredSpans.get(key) || [];
-    const repeat = this.wholeRestores.has(version) || spans.some(([start, end]) => start <= span[0] && end >= span[1]);
+    const restoredSpans = measurement ? this.measuredRestoreSpans : this.restoredSpans;
+    const wholeRestores = measurement ? this.measuredWholeRestores : this.wholeRestores;
+    const key = `${version}\u0000${unit}`, spans = restoredSpans.get(key) || [];
+    const repeat = wholeRestores.has(version) || spans.some(([start, end]) => start <= span[0] && end >= span[1]);
     const merged = inputAvailability.normalizeRanges([...spans, span]) as Array<[number, number]>;
-    this.restoredSpans.set(key, merged);
-    if (whole && merged.some(([start, end]) => start <= whole[0] && end >= whole[1])) this.wholeRestores.add(version);
-    while (this.restoredSpans.size > 128) this.restoredSpans.delete(this.restoredSpans.keys().next().value!);
+    restoredSpans.set(key, merged);
+    if (whole && merged.some(([start, end]) => start <= whole[0] && end >= whole[1])) wholeRestores.add(version);
+    while (restoredSpans.size > 128) restoredSpans.delete(restoredSpans.keys().next().value!);
+    if (measurement) while (wholeRestores.size > 128) wholeRestores.delete(wholeRestores.values().next().value!);
     return repeat;
   }
 
@@ -548,6 +566,10 @@ hasMore: typeof value.pageHasMore === "boolean" ? value.pageHasMore : "unknown",
 export type ReadScreening = {
   messages: Array<ChatMessage>; replaced: number; redundant: number; duplicatedChars: number; repages: number;
   newDeliveries: number; readResults: number; failedReads: number; otherResults: number; focusedReads: number;
+  /** Measurement only; focusedReads retains the existing progress contract. */
+  firstFocusReads: number; restoreRequiredReads: number;
+  /** All repeated hidden spans, including narrower reads; never drives recovery. */
+  measuredRepeatRestores?: number;
   /** Hidden bodies this execution had already restored once, restored again. */
   repeatRestores: number;
   pending: Array<{ request: ToolCallRequest; toolCallId: string; content: string | null; facts: ReadFacts; repeatReceipt: string }>;

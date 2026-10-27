@@ -4,7 +4,7 @@ import {
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
 import { type ContinuityNote, type DirectConfig } from "./execution-contracts";
-import type { RecoveryProgress } from "./evidence-manager";
+import type { RecoveryProgress, ReadScreening } from "./evidence-manager";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
@@ -22,6 +22,25 @@ export function runtimeConfigTelemetry(config: DirectConfig) {
     configuredSafetyMarginTokens: config.safetyMarginTokens,
     configuredFallbackContextLength: config.assumedContextLength,
   };
+}
+
+export function readLedgerTelemetry(screening: ReadScreening) {
+  return { readResults: screening.readResults, newDeliveries: screening.newDeliveries,
+    redundantRereads: screening.redundant, duplicatedChars: screening.duplicatedChars, archiveRepages: screening.repages,
+    firstFocusReads: screening.firstFocusReads, restoreRequiredReads: screening.restoreRequiredReads,
+    restoredReads: screening.restoreRequiredReads, repeatRestores: screening.measuredRepeatRestores || 0,
+    failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds };
+}
+
+/** Measurement only. Owned by one execution; no prompt text or cache policy. */
+export class SystemPrefixTelemetry {
+  private previous: string | null = null;
+  observe(messages: ChatMessage[]) {
+    const systemHash = telemetryFingerprint(messages.filter(message => message.getRole() === "system").map(message => message.getText()));
+    const event = { systemHash, previousSystemHash: this.previous, changed: this.previous !== null && this.previous !== systemHash };
+    this.previous = systemHash;
+    return event;
+  }
 }
 
 export function canonicalTelemetryValue(value: unknown, semantic = false): unknown {

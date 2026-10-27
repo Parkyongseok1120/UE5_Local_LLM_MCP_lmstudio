@@ -86,17 +86,17 @@
       "evidence": [
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:3390",
+          "location": "${ENGINE_ROOT}/Engine/Source/Runtime/Engine/Private/Actor.cpp:3390",
           "observation": "Full TakeDamage body through return at 3453 contains damage helpers and ReceiveAnyDamage/OnTakeAnyDamage notifications, no built-in Health reduction."
         },
         {
           "kind": "runtime",
-          "location": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025/new-report-visible.txt",
+          "location": "${USER_HOME}/.evidence-first/diagnostics/harness-review-register-20261025/new-report-visible.txt",
           "observation": "Partial finding 1 asserts Super::TakeDamage reduces AActor::Health and diverges from PlayerState health."
         },
         {
           "kind": "project_source",
-          "location": "C:/Users/sster/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:294",
+          "location": "${USER_HOME}/Documents/Git/UE5_Latency-Resilient-Multiplayer-Combat/Source/Latency_MultiCombat/Private/LatencyMultiCombatCharacter.cpp:294",
           "observation": "Project calls Super::TakeDamage then PS->ApplyDamage(Actual)."
         }
       ],
@@ -104,7 +104,7 @@
       "counterEvidence": [
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/Actor.cpp:3445",
+          "location": "${ENGINE_ROOT}/Engine/Source/Runtime/Engine/Private/Actor.cpp:3445",
           "observation": "ReceiveAnyDamage and delegates may cause project-defined effects; that does not establish an intrinsic AActor Health property mutation."
         }
       ],
@@ -119,8 +119,8 @@
     "installedBuildId": "ef-build-v2-68eb5ba25262e5aba2e64688d187221b44164fefd10517da62b2a158b37a0436",
     "sourceDistInstalledSourceDistProductionMatch": true,
     "mcpAndSettingsHashesUnchanged": true,
-    "backup": "C:/Users/sster/.evidence-first/backups/harness-review-register-20261025-183204",
-    "diagnostics": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025",
+    "backup": "${USER_HOME}/.evidence-first/backups/harness-review-register-20261025-183204",
+    "diagnostics": "${USER_HOME}/.evidence-first/diagnostics/harness-review-register-20261025",
     "loadedMatchesInstalledObserved": true,
     "runtimeExecutionId": "47fccccb-6d4b-47db-be4c-c1fc80d25d7a",
     "runtimeConversation": "1792916809646",
@@ -132,7 +132,7 @@
     "pluginSuite": {
       "passed": 1017,
       "failed": 0,
-      "log": "C:/Users/sster/.evidence-first/diagnostics/harness-review-register-20261025/plugin-suite.log"
+      "log": "${USER_HOME}/.evidence-first/diagnostics/harness-review-register-20261025/plugin-suite.log"
     },
     "portablePackaging": {
       "passed": 3,

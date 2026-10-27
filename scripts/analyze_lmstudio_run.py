@@ -145,6 +145,10 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
     raw_texts: list[str] = []
     result_text_index: list[int] = []
     ledger_events: list[dict[str, Any]] = []
+    restore_events: list[dict[str, Any]] = []
+    outcome_events: list[dict[str, Any]] = []
+    prefix_events: list[dict[str, Any]] = []
+    review_events: list[dict[str, Any]] = []
     report_now_events: list[dict[str, Any]] = []
     tool_calls: Counter[str] = Counter()
     thinking_blocks = 0
@@ -161,6 +165,14 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
                 rounds.append(event)
             elif name == "read_ledger":
                 ledger_events.append(event)
+            elif name == "working_context_restore":
+                restore_events.append(event)
+            elif name == "execution_outcome":
+                outcome_events.append(event)
+            elif name == "system_prefix_fingerprint":
+                prefix_events.append(event)
+            elif name == "report_review_scheduled":
+                review_events.append(event)
             elif name == "report_now":
                 report_now_events.append(event)
             elif name == "working_context_projection":
@@ -280,6 +292,21 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         "loadedBuildIds": sorted(set(build_ids)),
         "rounds": len(rounds),
         "finishReasons": dict(Counter(str(r.get("finishReason")) for r in rounds)),
+        "callPurposes": dict(Counter(str(r.get("callPurpose", "unknown")) for r in rounds)),
+        "readLedger": {
+            "measuredEvents": sum("restoreRequiredReads" in e for e in ledger_events),
+            "firstFocusReads": sum(e.get("firstFocusReads", 0) for e in ledger_events),
+            "restoreRequiredReads": sum(e.get("restoreRequiredReads", 0) for e in ledger_events),
+            "repeatRestores": sum(e.get("repeatRestores", 0) for e in ledger_events),
+            # Before v3 restoredReads included first focused reads. Do not
+            # reinterpret those old events as measured restoration counts.
+            "legacyAmbiguousRestoredReads": sum(e.get("restoredReads", 0) for e in ledger_events if "restoreRequiredReads" not in e),
+        },
+        "workingContextRestores": [{k: e.get(k) for k in ("status", "windowStatus", "ledgerStatus", "accessInherited")} for e in restore_events],
+        "executionOutcomes": [{k: e.get(k) for k in ("objectiveKind", "mutationState", "finalizationTrigger")} for e in outcome_events],
+        "systemPrefixChanges": sum(e.get("changed") is True for e in prefix_events),
+        "systemPrefixes": [{k: e.get(k) for k in ("roundIndex", "systemHash", "previousSystemHash", "changed")} for e in prefix_events],
+        "reportReviewMissing": [e.get("missing", []) for e in review_events],
         "toolCalls": sum(tool_calls.values()),
         "toolCallsByName": dict(tool_calls.most_common()),
         "thinkingBlocks": thinking_blocks,
@@ -517,6 +544,10 @@ def format_report(report: dict[str, Any]) -> str:
     if report["loadedBuildIds"]:
         out.append(f"  loaded build: {', '.join(report['loadedBuildIds'])}")
     out.append(f"  rounds: {report['rounds']}  finish: {report['finishReasons']}")
+    out.append(f"  call purposes: {report.get('callPurposes', {})}  system prefix changes: {report.get('systemPrefixChanges', 0)}")
+    ledger = report.get("readLedger", {})
+    out.append(f"  reads: first focus {ledger.get('firstFocusReads', 0)}, required restores {ledger.get('restoreRequiredReads', 0)}, "
+               f"repeat restores {ledger.get('repeatRestores', 0)}, legacy ambiguous restores {ledger.get('legacyAmbiguousRestoredReads', 0)}")
     out.append(f"  tool calls: {report['toolCalls']}")
     for name, count in report["toolCallsByName"].items():
         out.append(f"    {name}: {count}")
