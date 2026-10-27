@@ -293,8 +293,10 @@ test("production handler narrows before archive starvation and restores an early
 });
 
 for (const mixed of [true, false]) test(`read recovery ${mixed ? "consumes two successes beside a denied third call" : "uses ordinary delivery limits after a stalled batch"}`, async () => {
+  // C9 protects this reader's floor. Exercise the documented exception where
+  // another minimum plus the protected floor cannot fit, retaining 2+1 delivery.
   const read={name:"read_file",pluginIdentifier:"mcp/unity-tools",description:"read source",parametersJsonSchema:{
-    type:"object",properties:{path:{type:"string"},byteBudget:{type:"integer",minimum:1024,maximum:65536,default:32768}}}};
+    type:"object",properties:{path:{type:"string"},byteBudget:{type:"integer",minimum:20000,maximum:65536,default:32768}}}};
   const write={name:"write_file",pluginIdentifier:"mcp/unity-tools",description:"write",parametersJsonSchema:{type:"object"}};
   let calls=0,denials=0;
   const model={identifier:"mixed-batch-fixture",async getContextLength(){return 86272;},applyPromptTemplate:measuredCataloguePrompt,

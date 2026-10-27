@@ -205,7 +205,9 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
     const c = readResultContract(tool);
     return c.field ? Math.ceil(c.minimum * c.multiplier) + UNKNOWN_SIZE_MARGIN_TOKENS : 3072 + UNKNOWN_SIZE_MARGIN_TOKENS;
   };
-  const sourceMinimum = actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
+  const floorTools = tools.filter(tool => operationCapabilities(tool).some(op => op.roles?.includes("budget_floor")));
+  const sourceMinimum = floorTools.length ? Math.max(...floorTools.map(minimumFor))
+    : actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
   // Once returned evidence is archived, acquisition and rehydration are both
   // required lifecycle operations. A cheap source read cannot certify that
   // the archive is usable. This reserves either operation, not their sum:
