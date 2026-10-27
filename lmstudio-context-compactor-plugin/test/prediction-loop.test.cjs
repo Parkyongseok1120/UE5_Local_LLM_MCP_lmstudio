@@ -1504,7 +1504,7 @@ test("pressure trace measures eviction and historical reacquisition against the 
   assert.equal(thirdCall.newEvidenceUnits, 0);
 });
 
-test("pause policy stops before a fourth equivalent tool round", async () => {
+test("stagnation detector warns while the coordinator owns the tool-round limit", async () => {
   const history = Chat.from([{ role: "user", content: "Inspect until evidence changes." }]);
   const tool = { name: "read_file", description: "Read", parametersJsonSchema: { type: "object" },
     pluginIdentifier: "mcp/unreal-agent" };
@@ -1516,6 +1516,11 @@ test("pause policy stops before a fourth equivalent tool round", async () => {
     async countTokens() { return 100; },
     async act(_chat, _tools, options) {
       actCount += 1;
+      if (!_tools.length) {
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+        options.onMessage(ChatMessage.create("assistant", "No additional evidence was obtained."));
+        return;
+      }
       const request = { id: `same-${actCount}`, type: "function", name: "read_file",
         arguments: { path: "project://Source/Same.cpp" } };
       await options.guardToolCall(0, 77, {
@@ -1531,14 +1536,15 @@ test("pause policy stops before a fourth equivalent tool round", async () => {
     },
   };
   const ctl = fakeController(history, selectedModel, {
-    toolStagnationAction: "pause", toolStagnationRounds: 3,
+    toolStagnationAction: "pause", toolStagnationRounds: 3, maxResearchRounds: 3,
   }, [tool]);
   await handlePredictionLoop(ctl);
-  assert.equal(actCount, 3);
+  assert.equal(actCount, 4);
+  assert.ok(ctl.debugValues.some(e => e.event === "continuation_decision" && e.trigger === "research_round_limit"));
   const event = ctl.debugValues.find(value => value.event === "tool_round_stagnation");
   assert.equal(event.action, "pause");
   assert.equal(event.repeatCount, 3);
-  assert.ok(ctl.statuses.some(status => /일시 중지/u.test(status.state.text)));
+  assert.ok(ctl.statuses.some(status => /반복 읽기/u.test(status.state.text)));
 });
 
 test("soft compaction keeps the largest complete tool tail that meets the token budget", async () => {
@@ -3824,7 +3830,7 @@ test("a failed hybrid summary stays in execution cooldown while deterministic fa
   });
   const ctl = fakeController(history, model, {
     contextManagementMode: "hybrid", semanticHandoff: true, workingInputTargetTokens: 3000, workingInputScaling: "fixed",
-    workingInputTriggerTokens: 3500, toolResultProjectionChars: 512,
+    workingInputTriggerTokens: 10000, toolResultProjectionChars: 512,
     semanticSummaryMaxTokens: 700, softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
   await createPredictionLoopHandler()(ctl);
@@ -6250,9 +6256,8 @@ for (const action of ["off", "warn", "pause"]) test(`ordinary research detects A
   const events = ctl.debugValues.filter(v => v.event === "tool_round_stagnation");
   assert.equal(events.length, action === "off" ? 0 : 1);
   if (action !== "off") assert.equal(events[0].cycleLength, 2);
-  assert.equal(calls, action === "pause" ? 4 : 7);
-  if (action === "warn") assert.match(inputs[4], /Runtime evidence observation/);
-  else if (action === "pause") assert.ok(ctl.blocks.some(block => /아직 완료되지/.test(block.text)));
+  assert.equal(calls, 7, "the cycle detector supplies facts without a second termination authority");
+  if (action !== "off") assert.match(inputs[4], /Runtime evidence observation/);
   else assert.ok(inputs.every(input => !input.includes("Runtime evidence observation")));
 });
 
@@ -6588,7 +6593,8 @@ test("re-reading an unchanged file gives UNCHANGED facts, then report_now, then 
   assert.match(inputs[2], /UNCHANGED: project:\/\/Source\/Game\/LedgerCharacter\.cpp sha 3c3c3c3c is the same version already returned in round 1/);
   assert.equal(inputs[2].split("// line 17 ").length - 1, 1, "the body is delivered once");
   const reportNow = ctl.debugValues.filter(value => value.event === "report_now");
-  assert.deepEqual(reportNow.map(value => [value.roundIndex, value.trigger, value.finalize]), [[3, 1, false], [6, 2, true]]);
+  assert.deepEqual(reportNow.map(value => [value.roundIndex, value.trigger]), [[3, 1], [6, 2]]);
+  assert.ok(ctl.debugValues.some(value => value.event === "continuation_decision" && value.trigger === "research_no_new_evidence"));
   assert.match(inputs[4], /Runtime evidence observation: report_now\. The last 3 tool round\(s\) returned no new file, version or range/);
   assert.match(inputs[4], /Runtime read ledger \(kept across compaction\)/);
   assert.equal(calls, 8);
@@ -6636,6 +6642,7 @@ test("budget-failed new source reads remain unresolved instead of unchanged and 
 });
 test("genuine new evidence ends the previous duplicate-read episode", async () => {
   const r=await runProgressScenario([auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue(),auditReadValue('B'),auditReadValue('B'),auditReadValue('B'),auditReadValue('B')]);
-  assert.deepEqual(r.events.filter(e=>e.event==='report_now').map(e=>[e.trigger,e.finalize]),[[1,false],[1,false]]);
+  assert.deepEqual(r.events.filter(e=>e.event==='report_now').map(e=>e.trigger),[1,1]);
+  assert.ok(!r.events.some(e=>e.event==='continuation_decision' && e.action==='finalize'));
   assert.ok(r.toolCounts.every(n=>n>0));
 });

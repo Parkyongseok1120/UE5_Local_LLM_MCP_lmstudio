@@ -15,6 +15,19 @@ export interface TaskObjective {
   mutationState: MutationState;
 }
 
+export interface RoundVerdict {
+  readonly progressed: boolean;
+  readonly noNewEvidence: boolean;
+  readonly failedReads: number;
+  readonly budgetDenied: readonly string[];
+  readonly mutationOutcomes: readonly ("applied" | "failed")[];
+}
+export interface PressureSignal {
+  readonly workingSetExhausted: boolean;
+  readonly measuredStage: "final";
+}
+export type ContinuationAction = "continue" | "recover_read" | "narrow_to_mutation" | "finalize";
+
 export type ContinuityNote = {
   scope: { objectiveFingerprint: string; projectIdentity?: string };
   decisions: Array<unknown>;
@@ -164,7 +177,8 @@ export const PINNED_WORKING_SET_MIN_CHARS = 6144;
 export type FinalizationTrigger = "research_time_limit" | "research_timeout" | "research_output_limit"
   | "output_recovery" | "report_review"
   | "research_round_limit" | "context_budget" | "research_recovery_complete"
-  | "research_recovery_exhausted" | "research_no_new_evidence" | "research_repetition";
+  | "research_recovery_exhausted" | "research_no_new_evidence" | "research_repetition"
+  | "context_working_set_exhausted" | "mutation_blocked_by_context";
 
 export type FinalDeliveryState = "complete" | "truncated" | "partial" | "no_answer";
 

@@ -11,6 +11,14 @@ import {
 } from "@lmstudio/sdk";
 import { type RemoteToolLike } from "./tool-capability-registry";
 import { toolMemory } from "./context-ports";
+import type { FinalizationTrigger } from "./execution-contracts";
+import { finalizationCause } from "./execution-instructions";
+
+export function continuationStatusText(trigger: FinalizationTrigger): string {
+  if (trigger === "context_working_set_exhausted") return "작업 근거를 유지할 공간이 부족해 확인된 범위로 보고합니다.";
+  if (trigger === "mutation_blocked_by_context") return "변경 집중 라운드에서 변경 결과를 얻지 못해 미적용 상태를 보고합니다.";
+  return finalizationCause(trigger);
+}
 
 type ContentController = Pick<PredictionLoopHandlerController, "createContentBlock">;
 

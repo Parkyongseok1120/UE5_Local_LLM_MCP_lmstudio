@@ -23,6 +23,7 @@ import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective } from "./execution-contracts";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
 import { classifyObjective } from "./tool-capability-registry";
+import { continuationStatusText } from "./prediction-ui";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted, reportNowFact } from "./resume-facts";
@@ -161,7 +162,7 @@ export function createPredictionLoopHandler(
     const latestUserText = originalHistory.getMessagesArray().filter(message => message.getRole() === "user").at(-1)?.getText() || "";
     objective = classifyObjective(latestUserText);
     const readOnlyReview = !config.observeOnly && readOnlyReviewRequest(latestUserText);
-    const modelTools = config.auditCompletionMode === "bounded" ? capabilityRegistry.readProfile()
+    const modelTools = config.auditCompletionMode === "bounded" && !objective.requiredEffects.has("mutation") ? capabilityRegistry.readProfile()
       : readOnlyReview ? capabilityRegistry.reviewProfile() : allModelTools;
     if (config.showDebugInfo) ctl.debug({
       event: "direct_runtime_identity",
@@ -251,6 +252,7 @@ export function createPredictionLoopHandler(
       (history, maxChars) => workingContext?.pinnedResultIndexes(history, maxChars) || []);
     const deliveryController = terminalOwner = new DeliveryController(allModelTools, objective);
     const recoveryCoordinator = execution.recovery;
+    let mutationTools: RemoteToolLike[] = [];
 
     const seedResearchRecoveryTracking = (history: Chat) => evidenceManager.seed(history);
     evidenceManager.seed(workingHistory);
@@ -275,7 +277,7 @@ export function createPredictionLoopHandler(
     // are never sealed into the durable window.
     const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
       | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-      | "repetition_check", string>();
+      | "repetition_check" | "mutation_focus", string>();
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -392,6 +394,7 @@ export function createPredictionLoopHandler(
         }
         const roundTools = finalizing ? [] : researchRecoveryRound
           ? modelTools.filter(tool => recoveryCoordinator.allowsTool(tool.name))
+          : recoveryCoordinator.mutationFocus ? mutationTools
           : modelTools;
         const actToolSurfaceFingerprint = telemetryFingerprint(toolDefinitionSurface(roundTools));
         const finalLimits = deliveryController.limits(config, boundedAudit, execution.finalizationTrigger);
@@ -416,7 +419,7 @@ export function createPredictionLoopHandler(
             ? [`${MUTATION_NOT_APPLIED_INSTRUCTION} 요청한 변경은 적용되지 않았습니다: ${finalizationCause(execution.finalizationTrigger)}`] : []),
             ...scopeInstructions, reviewingReport ? REPORT_REVIEW_INSTRUCTION : execution.finalizationTrigger === "output_recovery"
             ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
-            : execution.finalizationTrigger === "context_budget"
+            : ["context_budget", "context_working_set_exhausted", "mutation_blocked_by_context"].includes(execution.finalizationTrigger || "")
               ? CONTEXT_BUDGET_FINAL_INSTRUCTION
               : ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence", "research_repetition"].includes(execution.finalizationTrigger || "")
                 ? RESEARCH_RECOVERY_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION]
@@ -497,10 +500,6 @@ export function createPredictionLoopHandler(
           continue;
         }
         ({ workingHistory, roundOutputReserve, outputCapSource, projectionApplied } = prepared);
-        // Closed judgments carry their evidence: when even the released working
-        // set does not fit, this round's results go to the report, not to
-        // another restore cycle.
-        const workingSetExhausted = prepared.projectionExhausted === true && reviewRegister.rows.some(row => row.bundle);
         const { before, modelHistory, compacted, compactionAppliedCount, compactionAppliedModes,
           compactionCheckpoint, compactionRetention, assembledInput, modelComposition, modelInput,
           finalMeasurement, lowWater, mandatoryFloorMeasurement, mandatoryFloorExceedsTarget,
@@ -962,8 +961,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           dispatchCount: null,
           resultCount: actualResultCount,
         });
-        const recoveryProgress = evidenceManager.observe(screening.messages, modelInputId, screening);
-        for (const result of capabilityRegistry.mutationOutcomes(captured.messages)) {
+        const budgetDenied = [...runtimeToolTrace.values()].filter(call => call.validationState === "denied_batch_budget")
+          .map(call => String(call.providerRequestId || call.callKey));
+        const recoveryProgress = evidenceManager.observe(screening.messages, modelInputId, screening, budgetDenied);
+        for (const result of recoveryProgress.verdict.mutationOutcomes) {
           if (result === "applied") objective.mutationState = "applied";
           else if (objective.mutationState !== "applied") objective.mutationState = "attempted";
         }
@@ -1229,8 +1230,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               names: unverified.slice(0, 8).map(api => api.name) });
           }
         }
-        let reportNowFinalize = false;
-        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
+        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools
+          && recoveryProgress.verdict.budgetDenied.length === 0) {
           // Historical novelty and restoring evidence needed in the current
           // input are different. Failed reads establish neither unchangedness nor completion.
           // A round that only restored bodies it had already restored once is
@@ -1246,16 +1247,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             runtimeFacts.set("report_now", reportNowFact(config.noNewEvidenceRounds, evidenceManager.ledger.stats()));
             // The second trigger ends research per the stagnation policy: one
             // tool-free report from the evidence already returned.
-            reportNowFinalize = reportNowTriggers >= 2;
-            ctl.createStatus({ status: "done", text: reportNowFinalize
-              ? "새 근거 없이 이미 읽은 버전만 반복 조회해 조사를 마치고 최종 보고로 전환합니다."
-              : "새 근거 없이 이미 읽은 버전만 반복 조회했습니다. 확인된 근거로 최종 보고를 작성하도록 안내합니다." });
+            ctl.createStatus({ status: "done", text: "새 근거 없이 이미 읽은 버전만 반복 조회했습니다. 사용자 목표에 따라 다음 단계를 결정합니다." });
             if (config.showDebugInfo) ctl.debug({ event: "report_now", executionId, modelInputId, roundIndex,
-              trigger: reportNowTriggers, rounds: config.noNewEvidenceRounds, finalize: reportNowFinalize,
+              trigger: reportNowTriggers, rounds: config.noNewEvidenceRounds,
               ledger: evidenceManager.ledger.stats() });
           }
         }
-        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools) {
+        if (!config.observeOnly && config.toolStagnationAction !== "off" && captured.continueAfterTools
+          && recoveryProgress.verdict.budgetDenied.length === 0) {
           const stagnation = toolStagnation.observe(screening.messages, recoveryProgress);
           const failure = stagnation.repeatedFailure;
           if (failure?.firstNotice) {
@@ -1270,14 +1269,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if ((stagnation.count >= config.toolStagnationRounds || stagnation.cycleDetected) && stagnation.firstWarning) {
             toolStagnation.acknowledge(stagnation.warningKey);
             stagnationWarnings += 1;
-            // A second distinct stagnation in one execution escalates "warn":
-            // repeated re-reading after a warning is a loop, not progress.
-            const pause = config.toolStagnationAction === "pause" || stagnationWarnings >= 2;
             ctl.createStatus({
-              status: pause ? "canceled" : "done",
-              text: pause
-                ? "동일 근거의 반복 읽기가 감지되어 후속 호출을 일시 중지했습니다. 작업 완료를 뜻하지 않습니다."
-                : "동일 근거의 반복 읽기를 감지했습니다. 새 범위와 필요한 재확인 여부를 확인하며 계속합니다.",
+              status: "done",
+              text: "동일 근거의 반복 읽기를 감지했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.",
             });
             if (config.showDebugInfo) ctl.debug({
               event: "tool_round_stagnation",
@@ -1291,14 +1285,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               `Runtime evidence observation: a ${stagnation.cycleLength}-round read cycle repeated with no new source/archive range. `
               + (stagnation.reacquisition ? "Some ranges restored evidence absent from the input; repeated restoration is not new source coverage. " : "The returned observations repeat previously seen evidence. ")
               + "Use the returned evidence; request only a missing range or a necessary fresh version. This observation does not prove review completion.");
-            if (pause) {
-              captured.continueAfterTools = false;
-              deliveryController.stop("tool_stagnation_paused");
-              const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
-              block.appendText("동일 근거를 반복해서 읽는 상태가 감지되어 설정에 따라 중단했습니다. 반환된 근거는 보존했으며, 요청한 검토는 아직 완료되지 않았습니다.");
-              deliveryController.recordPartialDelivery("tool_stagnation_paused");
-              break;
-            }
+            // This detector supplies an observation only. Layer A owns continuation.
           }
         }
         if (ctl.abortSignal.aborted) throw ctl.abortSignal.reason || captured.failure;
@@ -1498,7 +1485,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             actualResultCount, visibleTextFromMessages(captured.messages, internalDataParts).trim(), boundedAudit,
             { originalProfileFits: captured.continueAfterTools && recoveryProgress?.progressed === true
               && recoveryProgress.usableSourceEvidence
-              && await measureOriginalProfile(workingHistory), fallbackInstruction: recoveryFallbackInstruction(captured.messages) });
+              && await measureOriginalProfile(workingHistory), fallbackInstruction: recoveryFallbackInstruction(captured.messages),
+              budgetDenied: recoveryProgress.verdict.budgetDenied.length > 0 });
           if (decision.trigger) {
             execution.finishResearch(decision.trigger);
             if (config.showDebugInfo) ctl.debug({
@@ -1614,22 +1602,39 @@ event: decision.trigger === "research_recovery_exhausted"
           deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
         }
         if (!captured.continueAfterTools) break;
-        if ((reportNowFinalize || workingSetExhausted) && !execution.finalizing && !execution.reasoningRecovery && !execution.recovering) {
-          if (workingSetExhausted && config.showDebugInfo) ctl.debug({ event: "working_set_exhausted", executionId, modelInputId, roundIndex,
-            bundledRows: reviewRegister.rows.filter(row => row.bundle).length });
-          execution.finishResearch("research_no_new_evidence");
-          roundIndex += 1;
-          continue;
-        }
-        if (boundedAudit && (
-          roundIndex + 1 >= config.auditResearchRounds || Date.now() >= researchDeadlineAt
-        )) {
-          execution.finishResearch("research_round_limit");
-        } else if (!boundedAudit && config.maxResearchRounds > 0 && roundIndex + 1 >= config.maxResearchRounds
-          && !execution.finalizing && !execution.reasoningRecovery) {
-          if (config.showDebugInfo) ctl.debug({ event: "research_round_limit", executionId, modelInputId,
-            rounds: roundIndex + 1, maxResearchRounds: config.maxResearchRounds });
-          execution.finishResearch("research_round_limit");
+        if (!execution.finalizing && !execution.reasoningRecovery && !execution.recovering) {
+          const decision = recoveryCoordinator.decide({ verdict: recoveryProgress.verdict, objective, pressure: prepared.pressure,
+            limits: { reached: boundedAudit ? roundIndex + 1 >= config.auditResearchRounds || Date.now() >= researchDeadlineAt
+              : config.maxResearchRounds > 0 && roundIndex + 1 >= config.maxResearchRounds },
+            state: { reportNowTriggers, narrowAttempted: recoveryCoordinator.narrowAttempted, mutationFocus: recoveryCoordinator.mutationFocus } });
+          if (config.showDebugInfo) ctl.debug({ event: "continuation_decision", executionId, modelInputId, roundIndex,
+            ...decision, objectiveKind: objective.kind, mutationState: objective.mutationState,
+            verdict: recoveryProgress.verdict, pressure: prepared.pressure });
+          if (decision.action === "finalize" && decision.trigger) {
+            if (decision.trigger === "mutation_blocked_by_context" && objective.mutationState !== "applied") objective.mutationState = "blocked";
+            execution.finishResearch(decision.trigger);
+            ctl.createStatus({ status: "done", text: continuationStatusText(decision.trigger) });
+            if (decision.trigger === "research_round_limit" && config.showDebugInfo) ctl.debug({
+              event: "research_round_limit", executionId, modelInputId, rounds: roundIndex + 1, maxResearchRounds: config.maxResearchRounds });
+          } else if (decision.action === "narrow_to_mutation") {
+            const targets = reviewRegister.rows.filter(row => row.status === "found" && row.bundle?.path)
+              .map(row => row.bundle!.path!).slice(0, 40);
+            mutationTools = recoveryCoordinator.mutationProfile(capabilityRegistry, targets);
+            recoveryCoordinator.beginMutationFocus();
+            runtimeFacts.set("mutation_focus", "Runtime mutation focus: 수집한 근거로 지금 변경을 적용하라. 추가 조사는 하지 말라. Use the registered mutation tools; reread only a target file if its current receipt is required.");
+            if (workingContext) {
+              const focused = buildCompactedHistory(workingHistory, 0, config, { ...contextManager.checkpointOptions,
+                requiredIndexes: workingContext.pendingResultIndexes(workingHistory), maxCurrentTurnMessages: 4, checkpointPolicy: "bounded" });
+              workingContext.archiveConversationProse(workingHistory, focused.checkpoint.retainedIndexes);
+              workingHistory = focused.history;
+            }
+          } else if (recoveryCoordinator.mutationFocus && recoveryProgress.verdict.mutationOutcomes.length) {
+            recoveryCoordinator.endMutationFocus();
+            runtimeFacts.delete("mutation_focus");
+            const originalProfileFits = await measureOriginalProfile(workingHistory);
+            if (config.showDebugInfo) ctl.debug({ event: "mutation_focus_resumed_original", executionId, modelInputId,
+              originalToolCount: modelTools.length, originalProfileFits, mutationState: objective.mutationState });
+          }
         }
         roundIndex += 1;
       }

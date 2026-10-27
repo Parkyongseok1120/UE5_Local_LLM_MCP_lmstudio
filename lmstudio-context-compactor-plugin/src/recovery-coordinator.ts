@@ -3,6 +3,14 @@ import {
 } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
 import type { RecoveryProgress } from "./evidence-manager";
+import type { ContinuationAction, FinalizationTrigger, PressureSignal, RoundVerdict, TaskObjective } from "./execution-contracts";
+
+export type ContinuationInput = {
+  verdict: RoundVerdict; objective: TaskObjective; pressure: PressureSignal;
+  limits: { reached: boolean };
+  state: { reportNowTriggers: number; narrowAttempted: boolean; mutationFocus: boolean };
+};
+export type ContinuationDecision = { action: ContinuationAction; trigger: FinalizationTrigger | null };
 import { FRESH_TOOL_PLANNING_RETRY_INSTRUCTION } from "./execution-instructions";
 import { type RawToolIntentClassification } from "./raw-tool-intent";
 import { isObservationOnlyToolCall, isUnregisteredGitReadIntent, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
@@ -13,6 +21,41 @@ export type RecoveryPlan = {
 };
 
 export class RecoveryCoordinator {
+  private narrowed = false;
+  private focused = false;
+  get narrowAttempted() { return this.narrowed; }
+  get mutationFocus() { return this.focused; }
+  beginMutationFocus() { this.narrowed = true; this.focused = true; }
+  endMutationFocus() { this.focused = false; }
+  /** Pure layer-A policy. The execution consumes this value once per tool round. */
+  decide({ verdict, objective, pressure, limits, state }: ContinuationInput): ContinuationDecision {
+    const finalize = (trigger: FinalizationTrigger): ContinuationDecision => ({ action: "finalize", trigger });
+    const resume: ContinuationDecision = { action: "continue", trigger: null };
+    const mutation = objective.kind === "mutate" || objective.kind === "build";
+    const focus = (): ContinuationDecision => state.narrowAttempted
+      ? finalize("mutation_blocked_by_context") : { action: "narrow_to_mutation", trigger: null };
+    if (limits.reached) return finalize("research_round_limit");
+    if (state.mutationFocus) return verdict.mutationOutcomes.length ? resume : finalize("mutation_blocked_by_context");
+    if (pressure.workingSetExhausted && objective.kind === "review") return finalize("context_working_set_exhausted");
+    if (pressure.workingSetExhausted && mutation) return focus();
+    if (verdict.budgetDenied.length) return resume;
+    if (state.reportNowTriggers >= 2) return mutation && objective.mutationState === "none"
+      ? focus() : finalize("research_no_new_evidence");
+    return resume;
+  }
+  mutationProfile(registry: ToolCapabilityRegistry, targets: readonly string[]) {
+    return registry.tools.flatMap(tool => {
+      if (registry.isMutation(tool, { name: tool.name, arguments: {} }) || tool.name === "static_validate_project") return [tool];
+      if (!["read_file", "read_file_range"].includes(tool.name) || !targets.length
+        || !isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })) return [];
+      const schema = tool.parametersJsonSchema as { properties?: Record<string, unknown> };
+      const narrowed = Object.create(tool) as RemoteToolLike;
+      Object.defineProperty(narrowed, "parametersJsonSchema", { enumerable: true, value: {
+        ...schema, properties: { ...schema?.properties, path: { type: "string", enum: [...new Set(targets)] } },
+      } });
+      return [narrowed];
+    });
+  }
   private rounds = 0;
   private pages = 0;
   private stagnant = 0;
@@ -38,10 +81,10 @@ export class RecoveryCoordinator {
   }
   reset() { this.rounds = 0; this.pages = 0; this.stagnant = 0; this.fallbackUsed = false; }
   advance(progress: RecoveryProgress | null, maximum: number, continued: boolean,
-    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true, readiness: { originalProfileFits?: boolean; fallbackInstruction?: string } = {}) {
+    rawIntent: boolean, requestCount: number, resultCount: number, reportText: string, bounded = true, readiness: { originalProfileFits?: boolean; fallbackInstruction?: string; budgetDenied?: boolean } = {}) {
     this.rounds++;
     const progressed = progress?.progressed === true;
-    if (progressed) { this.pages++; this.stagnant = 0; } else this.stagnant++;
+    if (progressed) { this.pages++; this.stagnant = 0; } else if (!readiness.budgetDenied) this.stagnant++;
     const resumeOriginal = continued && progressed && readiness.originalProfileFits;
     const fallback = !progressed && !rawIntent && !this.fallbackUsed && Boolean(readiness.fallbackInstruction);
     const noProgress = !progressed && !fallback;

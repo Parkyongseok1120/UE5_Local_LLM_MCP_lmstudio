@@ -8,7 +8,8 @@ import { inputAvailability, readLedgerModule, toolMemory, workingContextModule, 
   type ReadFacts, type ReadLedgerLike } from "./context-ports";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
-import { isObservationOnlyToolCall, localObservationTools, type RemoteToolLike } from "./tool-capability-registry";
+import { isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import type { RoundVerdict } from "./execution-contracts";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics } from "./tool-result-semantics.js";
@@ -131,7 +132,7 @@ export class EvidenceManager {
     for (const collection of [this.fingerprints, this.coverage, this.currentCoverage])
       while (collection.size > 2048) collection.delete(collection.keys().next().value!);
   }
-  observe(messages: Array<ChatMessage>, roundId?: string, screening?: ReadScreening): ReadDelta {
+  observe(messages: Array<ChatMessage>, roundId?: string, screening?: ReadScreening, budgetDenied: readonly string[] = []): ReadDelta {
     if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
     const observed = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
       this.isArchiveRepage);
@@ -140,7 +141,10 @@ export class EvidenceManager {
     const noNewEvidence = Boolean(screening && screening.readResults > 0 && screening.failedReads === 0
       && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
       && (observed.restoredWorkingEvidenceUnits === 0 || repeatRestoreOnly));
-    const progress: ReadDelta = { ...observed, repeatRestoreOnly, noNewEvidence,
+    const verdict: RoundVerdict = Object.freeze({ progressed: observed.usefulProgress && !repeatRestoreOnly,
+      noNewEvidence, failedReads: screening?.failedReads ?? 0, budgetDenied: Object.freeze([...budgetDenied]),
+      mutationOutcomes: new ToolCapabilityRegistry(this.tools).mutationOutcomes(messages) });
+    const progress: ReadDelta = { ...observed, repeatRestoreOnly, noNewEvidence, verdict,
       usableSourceEvidence: Boolean(screening && screening.newDeliveries + screening.focusedReads > 0),
       progressed: observed.progressed && !repeatRestoreOnly, usefulProgress: observed.usefulProgress && !repeatRestoreOnly };
     Object.freeze(progress);
@@ -523,6 +527,7 @@ export type ReadScreening = {
 /** One immutable round decision for recovery, stagnation and reporting. Actual
  * regained availability stays measured even when it repeats an earlier restore. */
 export type ReadDelta = RecoveryProgress & {
+  readonly verdict: RoundVerdict;
   repeatRestoreOnly: boolean; noNewEvidence: boolean; usableSourceEvidence: boolean;
 };
 

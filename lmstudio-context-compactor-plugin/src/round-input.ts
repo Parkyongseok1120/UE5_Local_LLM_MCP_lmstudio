@@ -72,6 +72,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // Releasing every pin still left the input over high water: the working set
   // no longer fits, and restoring it again would only repeat this rewrite.
   let projectionExhausted = false;
+  let releasedAllPins = false;
   const minimumReadBudget = (tools: RemoteToolLike[]) => minimumReadResultTokens(
     tools.filter(hasReadCapability), Boolean(workingContext?.hasArchivedEvidence));
   let outputCapSource: "configured" | "headroom_clamp" = "configured";
@@ -200,8 +201,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         assembledInput = await assembleModelInput(workingHistory);
       }
     }
-    projectionExhausted = pinsReleased && contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools,
-      minimumReadBudget(roundTools), retainedGuidanceTokens);
+    releasedAllPins = pinsReleased;
     let reasoningBounded = false;
     if (changed) {
       projectionApplied = true; workingInputProjected = true;
@@ -466,6 +466,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     addedTokens: 0, attempts: 0, selectedIds: [], selectedDataIds: [],
     finalInputTokens: assembledInput.measurement.inputTokens });
   const finalMeasurement = assembledInput.measurement;
+  projectionExhausted = releasedAllPins && contextManager.shouldProjectEvidence(finalMeasurement, hasReadTools,
+    minimumReadBudget(roundTools));
+  const pressure = Object.freeze({ workingSetExhausted: projectionExhausted, measuredStage: "final" as const });
   if (options.reportContinuation && (!lowWater.canRun || finalMeasurement.remainingTokens < 0
     || !assembledInput.history.getMessagesArray().some(message => message.isAssistantMessage()
       && message.getText().includes(options.reportContinuation!)))) {
@@ -493,7 +496,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   return { kind: "ready" as const, ...baseResult(), before, workingHistory, modelHistory: workingHistory,
     modelComposition: assembledInput.composition, modelInput: assembledInput.history, finalMeasurement, assembledInput,
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
-    lowWater, projectionApplied, projectionExhausted, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
+    lowWater, projectionApplied, projectionExhausted, pressure, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
     mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
       && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };
