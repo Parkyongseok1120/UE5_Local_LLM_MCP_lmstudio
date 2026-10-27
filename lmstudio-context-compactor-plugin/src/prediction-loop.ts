@@ -37,7 +37,7 @@ import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTP
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
-import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, stripUnexecutedToolProtocol, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
+import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
 import { decideReasoningRecovery, reasoningRecoveryOutputCap, repetitionFact } from "./reasoning-recovery";
@@ -155,6 +155,7 @@ export function createPredictionLoopHandler(
     const reviewRegister = new ReviewRegister();
     // Returned bodies and searches the register cites as each judgment's evidence.
     const reviewEvidence = new ReviewEvidenceIndex(allModelTools);
+    reviewEvidence.observe(originalHistory.getMessagesArray());
     evidenceManager.initializeChangeOrigins(originalHistory);
     // A review-only request withholds the file/project mutation schemas it
     // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
@@ -673,7 +674,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const roundController = continuingReport ? visibleTranscript.continuationController() : visibleTranscript.controller;
         const roundEmitter = continuingReport ? createMessageEmitter(roundController, modelTools) : emitter;
         const internalDataParts = modelComposition?.privateDataParts || [];
-        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport, internalDataParts);
+        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport,
+          internalDataParts, reviewingReport ? reportContinuation : undefined);
         const continuationStatus = continuingReport ? ctl.createStatus({ status: "loading", text: "답변 이어 작성 중" }) : null;
         const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
         let generationRepetitionReported = false;
@@ -800,14 +802,9 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
               let visibleMessage = message;
               let textStreamed = false;
               if (message.isAssistantMessage() && message.getText()) {
-                const streamed = stream.consumeAssistant(message.getText());
-                const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
-                const visibleText = streamed.streamed ? streamed.visibleText : stripUnexecutedToolProtocol(fallback.visibleText);
+                const streamed = stream.consumeMessage(message);
                 textStreamed = streamed.streamed;
-                if (visibleText !== message.getText()) {
-                  visibleMessage = ChatMessage.from(message);
-                  visibleMessage.replaceText(visibleText);
-                }
+                visibleMessage = stream.visibleMessage(message);
               }
               liveMessages.set(message, { visibleMessage, textStreamed });
               roundEmitter.emit(visibleMessage, textStreamed, true);
@@ -836,8 +833,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         continuationStatus?.remove();
         // Completion/recovery must assess the same prose the user receives.
         // Preserve captured originals for diagnostics and tool evidence.
-        const visibleCaptured = { ...captured,
-          messages: captured.messages.map(message => modelHistoryMessage(message, internalDataParts)) };
+        const visibleCaptured = { ...captured, messages: captured.messages.map(message => reviewingReport
+          ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts)) };
+        if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
+          executionId, roundIndex, deliveredChars: reportContinuation.length, suppressedChars: stream.suppressedChars });
         deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
         if (!hasUnexecutedRawToolSyntax(visibleTranscript.lastAnswerText))
           deliveryController.retainReportPrefix(visibleTranscript.lastAnswerText);
@@ -891,18 +890,16 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           let textAlreadyStreamed = live?.textStreamed || false;
           if (message.isAssistantMessage() && message.getText()) {
             const extracted = modelNotes.splitVisibleAnswer(message.getText());
-            historyMessage = modelHistoryMessage(message, internalDataParts);
+            historyMessage = reviewingReport ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts);
             if (hasUnexecutedRawToolSyntax(visibleAssistantOutput(historyMessage.getText()).visibleText)) {
               const sanitized = ChatMessage.from(historyMessage);
               sanitized.replaceText("[Unexecuted raw tool-call text omitted from subsequent model input; no tool was dispatched.]");
               historyMessage = sanitized;
             }
             if (!live) {
-              const streamed = stream.consumeAssistant(message.getText());
-              const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
+              const streamed = stream.consumeMessage(message);
               textAlreadyStreamed = streamed.streamed;
-              visibleMessage = ChatMessage.from(message);
-              visibleMessage.replaceText(streamed.streamed ? streamed.visibleText : stripUnexecutedToolProtocol(fallback.visibleText));
+              visibleMessage = stream.visibleMessage(message);
             }
             if (extracted.hasFooter) {
               if (transaction.planningCommitted && noteEnabled && extracted.note) {
@@ -1400,7 +1397,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex += 1;
             continue;
           }
-          if (reviewingReport && !visibleTextFromMessages(captured.messages).trim()) reportReviewEmpty = true;
+          if (reviewingReport && !visibleTextFromMessages(visibleCaptured.messages).trim()) reportReviewEmpty = true;
           if (deliveryState !== "complete") ctl.createStatus({
             status: deliveryState === "no_answer" ? "error" : "canceled",
             text: safePartialReport
@@ -1523,6 +1520,7 @@ event: decision.trigger === "research_recovery_exhausted"
           continue;
         }
         if (!config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted
+          && (objective.kind === "review" || objective.kind === "explain")
           && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
           && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
           const answer = visibleTranscript.lastAnswerText;

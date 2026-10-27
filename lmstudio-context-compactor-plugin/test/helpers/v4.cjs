@@ -37,4 +37,11 @@ async function prepare(history, extra={}) {
     executionId:"v4",modelInputId:"v4:0",roundIndex:0,...extra});
   return {result,events,broker,contextManager,evidenceManager};
 }
-module.exports={Chat,ChatMessage,tools,readers,tool,pair,configFor,prepare};
+function sourceHistory(user='Audit the project.', names=['ReloadSound','RunSpeed','ResetForRespawn','AssignTeam']) {
+  const history=Chat.from([{role:'user',content:user}]);
+  for(const message of pair('read_file',{path:'Source/Fixture.cpp'},
+    {ok:true,path:'Source/Fixture.cpp',sha256:'a'.repeat(64),startLine:1,endLine:names.length,totalLines:names.length,
+      content:names.map(name=>`int ${name};`).join('\n')},'fixture-source')) history.append(message);
+  return history;
+}
+module.exports={Chat,ChatMessage,tools,readers,tool,pair,configFor,prepare,sourceHistory};

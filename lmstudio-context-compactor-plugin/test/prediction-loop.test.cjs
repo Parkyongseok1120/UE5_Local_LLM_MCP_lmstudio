@@ -4840,7 +4840,7 @@ test('report review includes reasoning-only omissions, uses no tools, and append
     reviewLast = { role: last.getRole(), text: last.getText() };
     completeRecoveryReply(options, '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.');
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory(), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
   assert.equal(reviewTools.length, 0);
@@ -4865,7 +4865,7 @@ test('an empty report review keeps the delivered report, records the supplement 
     if (++calls === 1) { completeRecoveryReply(options, '`ResetForRespawn()` is never called.' + REASONING_SEPARATOR + report); return; }
     options.onPredictionCompleted({ stats: { stopReason: 'eosFound', predictedTokensCount: 1 } });
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory(), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
   const outcome = ctl.debugValues.find(event => event.event === 'execution_outcome');
@@ -4875,7 +4875,7 @@ test('an empty report review keeps the delivered report, records the supplement 
   assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty' });
   const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
   assert.match(footer, /검토 보완 호출이 내용을 생성하지 않았습니다/);
-  assert.match(footer, /- ResetForRespawn: `ResetForRespawn\(\)` is never called\./);
+  assert.match(footer, /- ResetForRespawn \(Fixture\.cpp:3\): `ResetForRespawn\(\)` is never called\./);
 });
 
 for (const mode of ['covered', 'off', 'observeOnly']) test(`report review makes no extra call for ${mode}`, async () => {
@@ -4886,8 +4886,8 @@ for (const mode of ['covered', 'off', 'observeOnly']) test(`report review makes 
     completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR
       + (mode === 'covered' ? '`RunSpeed` excluded: consumer evidence is incomplete.' : 'Audit complete.'));
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model,
-    mode === 'off' ? { reportReviewMode: 'off' } : mode === 'observeOnly' ? { observeOnly: true } : {});
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory('Audit project'), model,
+    mode === 'off' ? { reportReviewMode: 'off' } : mode === 'observeOnly' ? { observeOnly: true } : {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 1);
   assert.equal(ctl.debugValues.some(event => event.event === 'report_review_scheduled'), false);
@@ -4923,7 +4923,7 @@ test('report review blocked by context preserves report and adds omission footer
     completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR + 'Original report.');
   });
   model.countTokens = async text => text.includes('phase=REPORT_REVIEW') ? 1000000 : 100;
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory('Audit project'), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 1);
   assert.ok(ctl.blocks.some(block => block.text === 'Original report.'));

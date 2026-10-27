@@ -15,5 +15,8 @@ test('v3 system fingerprint measures system changes with execution-local lifetim
 test('v3 note schema fields cannot schedule missing report findings',()=>{
  const register=new ReviewRegister();
  register.observe([ChatMessage.create('assistant','`openQuestions` is missing. `reviewClaims` has a P1 bug.\n`ApplyDamage` has a P1 bug.')],0);
+ const index=new (require('../dist/review-register').ReviewEvidenceIndex)();
+ index.observe(require('./helpers/v4.cjs').sourceHistory('Audit source.',['openQuestions','reviewClaims','ApplyDamage']).getMessagesArray());
+ register.attach(index);
  assert.deepEqual(register.missing('').map(row=>row.identifier),['ApplyDamage']);
 });
