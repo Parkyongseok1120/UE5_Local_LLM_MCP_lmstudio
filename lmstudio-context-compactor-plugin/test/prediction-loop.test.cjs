@@ -6654,3 +6654,83 @@ test("genuine new evidence ends the previous duplicate-read episode", async () =
   assert.ok(!r.events.some(e=>e.event==='continuation_decision' && e.action==='finalize'));
   assert.ok(r.toolCounts.every(n=>n>0));
 });
+
+// v4 U0: synthetic source locations make report obligations eligible independently of prose.
+function v4SourceHistory(user = 'Audit the project.') {
+  const { pair } = require('./helpers/v4.cjs');
+  const history = Chat.from([{role:'user',content:user}]);
+  for (const m of pair('read_file',{path:'Source/Fixture.cpp'},
+    {ok:true,path:'Source/Fixture.cpp',sha256:'a'.repeat(64),startLine:1,endLine:2,totalLines:2,
+      content:'int ReloadSound;\nint AssignTeam;'},'v4-source')) history.append(m);
+  return history;
+}
+test('no report_review for mutate objective after applied mutation',async()=>{
+  const {pair,tool}=require('./helpers/v4.cjs');
+  const {REASONING_SEPARATOR}=require('../src/continuity-text');
+  let calls=0;
+  const model=reasoningModel(async(_chat,_tools,options)=>{
+    if(++calls===1){
+      for(const message of pair('apply_edit_bundle',{patches:[{path:'Source/Fixture.cpp'}]},
+        {ok:true,applied:true,operation:'bundle_applied',files:[{path:'Source/Fixture.cpp',applied:true}]}))options.onMessage(message);
+      options.onPredictionCompleted({stats:{stopReason:'toolCalls'}});options.onRoundEnd();throw options.signal.reason;
+    }
+    completeRecoveryReply(options,'ReloadSound is unused.'+REASONING_SEPARATOR+'Changes applied.');
+  });
+  const ctl=fakeController(v4SourceHistory('수정 진행해'),model,{designGuidanceMode:'off'},[tool('read_file'),tool('apply_edit_bundle')]);
+  await handlePredictionLoop(ctl);
+  assert.equal(ctl.debugValues.some(e=>e.event==='report_review_scheduled'),false);
+  assert.equal(ctl.debugValues.find(e=>e.event==='execution_outcome').mutationState,'applied');
+});
+test('missing candidates exclude identifiers without a returned source location',()=>{
+  const {ReviewRegister}=require('../dist/review-register');
+  const register=new ReviewRegister();
+  register.observe([ChatMessage.create('assistant','succeededCount has a bug.\nAssignTeam has a bug.')],0);
+  register.rows.find(r=>r.identifier==='AssignTeam').bundle={path:'Source/Fixture.cpp',lines:[2,2],excerpt:'int AssignTeam;'};
+  assert.deepEqual(register.missing('').map(r=>r.identifier),['AssignTeam']);
+});
+for(const streaming of [false,true])for(const delta of [false,true])test(
+  (delta?'supplement that repeats then adds a delta shows only the delta':'duplicate supplement is suppressed')+' (stream='+streaming+')',async()=>{
+    const {REASONING_SEPARATOR}=require('../src/continuity-text');
+    const {tool}=require('./helpers/v4.cjs');
+    const report='## Audit\nThe observed input path is consistent.';
+    const addition='\n\n## 검토 보완\n- X';
+    const echo='##   Audit\n\nThe observed input path is consistent.'+(delta?addition:'');
+    let calls=0;
+    const model=reasoningModel(async(_chat,_tools,options)=>{
+      if(++calls===1){completeRecoveryReply(options,'ReloadSound is unused.'+REASONING_SEPARATOR+report);return;}
+      if(streaming)for(let i=0;i<echo.length;i+=3)options.onPredictionFragment({content:echo.slice(i,i+3),roundIndex:0,
+        reasoningType:'none',isStructural:false,tokensCount:1,containsDrafted:false});
+      completeRecoveryReply(options,echo);
+    });
+    const ctl=fakeController(v4SourceHistory(),model,{designGuidanceMode:'off'},[tool('read_file')]);
+    await handlePredictionLoop(ctl);assert.equal(calls,2);
+    const visible=ctl.blocks.filter(b=>b.options?.includeInContext!==false).map(b=>b.text).join('');
+    assert.equal(visible.split('observed input path').length-1,1);
+    if(delta)assert.ok(visible.includes('## 검토 보완\n- X'));
+    else assert.ok(ctl.debugValues.some(e=>e.event==='supplement_duplicate_suppressed'));
+    assert.equal(ctl.debugValues.find(e=>e.event==='execution_outcome').executionOutcome,'completed');
+  });
+test('explain objective without topic omits guidance',async()=>{
+  const model=reasoningModel(async(_chat,_tools,opts)=>completeRecoveryReply(opts,'Current project is Fixture.'));
+  const ctl=fakeController(Chat.from([{role:'user',content:'지금 프로젝트 어디야'}]),model,
+    {projectEngine:'unreal',designGuidanceMode:'auto',designGuidanceMaxTokens:8192});
+  await handlePredictionLoop(ctl);
+  assert.ok(ctl.debugValues.some(e=>e.event==='design_guidance_input'&&e.omissionReasons?.includes('objective_explain_without_topic')));
+});
+test('prefix_reuse event records causes',async()=>{
+  const {pair,tool}=require('./helpers/v4.cjs');let calls=0;
+  const model=reasoningModel(async(_chat,_tools,opts)=>{
+    if(++calls===1){
+      for(const m of pair('read_file',{path:'Source/Big.cpp'},{ok:true,path:'Source/Big.cpp',sha256:'a'.repeat(64),
+        startLine:1,endLine:20000,totalLines:20000,content:Array(20000).fill('int LargeFixture;').join('\n')}))opts.onMessage(m);
+      opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});opts.onRoundEnd();throw opts.signal.reason;
+    }
+    completeRecoveryReply(opts,'Review complete.');
+  });
+  model.getContextLength=async()=>84224;model.countTokens=async text=>Math.ceil(text.length/4);
+  const ctl=fakeController(Chat.from([{role:'user',content:'Audit the source.'}]),model,
+    {contextManagementMode:'hybrid',maxOutputReserve:8192,safetyMarginTokens:2048,designGuidanceMode:'off',
+      semanticHandoff:false,reportReviewMode:'off',toolStagnationAction:'off'},[tool('read_file')]);
+  await handlePredictionLoop(ctl);
+  assert.ok(ctl.debugValues.some(e=>e.event==='prefix_reuse'&&e.rewriteCauses.includes('projection')));
+});
