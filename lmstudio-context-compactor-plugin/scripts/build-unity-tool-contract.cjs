@@ -20,7 +20,8 @@ function render() {
   names.push(...workspaceToolDefinitions().map(tool => tool.name));
   return "// Generated from Unity catalog effect data. Do not edit.\n"
     + `export const UNITY_OBSERVATION_TOOL_NAMES: readonly string[] = ${JSON.stringify([...new Set(names)].sort())};\n`
-    + `export const UNITY_READ_OPERATIONS: Readonly<Record<string, readonly string[]>> = ${JSON.stringify(actions)};\n`;
+    + `export const UNITY_READ_OPERATIONS: Readonly<Record<string, readonly string[]>> = ${JSON.stringify(actions)};\n`
+    + `export const UNITY_TOOL_EFFECTS: Readonly<Record<string, string | Record<string, string>>> = ${JSON.stringify(toolEffects)};\n`;
 }
 const output = path.resolve(__dirname, "../src/generated-unity-tool-contract.ts");
 if (require.main === module) {

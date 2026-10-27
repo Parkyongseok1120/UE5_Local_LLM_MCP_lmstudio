@@ -1,4 +1,8 @@
-import { UNITY_OBSERVATION_TOOL_NAMES, UNITY_READ_OPERATIONS } from "./generated-unity-tool-contract";
+import { UNITY_OBSERVATION_TOOL_NAMES, UNITY_READ_OPERATIONS, UNITY_TOOL_EFFECTS } from "./generated-unity-tool-contract";
+import type { TaskObjective } from "./execution-contracts";
+import { resultSemantics } from "./tool-result-semantics.js";
+import type { ChatMessage } from "@lmstudio/sdk";
+const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   type Tool,
@@ -107,8 +111,18 @@ const NO_CHANGE = /(?:코드\s*)?(?:수정|변경)하지\s*(?:말고|마|않고)
  * build or run: its rounds need no file/project mutation schemas.
  * Ambiguous or elliptical requests keep the full surface. */
 export function readOnlyReviewRequest(text: string): boolean {
+  return classifyObjective(text).kind === "review";
+}
+
+export function classifyObjective(text: string): TaskObjective {
   const request = String(text || "").replace(NO_CHANGE, " ");
-  return REVIEW_REQUEST.test(request) && !CHANGE_REQUEST.test(request);
+  const kind = CHANGE_REQUEST.test(request)
+    ? /빌드|컴파일|실행|돌려|\b(?:build|compile|run|execute)\b/iu.test(request) ? "build" : "mutate"
+    : REVIEW_REQUEST.test(request) ? "review" : "explain";
+  const requiredEffects = new Set<"read" | "mutation" | "long_running">(["read"]);
+  if (kind === "mutate" || kind === "build") requiredEffects.add("mutation");
+  if (kind === "build") requiredEffects.add("long_running");
+  return { kind, requiredEffects, mutationState: "none" };
 }
 
 export class ToolCapabilityRegistry {
@@ -119,6 +133,33 @@ export class ToolCapabilityRegistry {
     this.tools = tools.filter(t => !this.collisions.includes(t.name));
   }
   resolve(name: string) { return this.tools.find(t => t.name === name); }
+  isMutation(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">): boolean {
+    if (request.name !== tool.name || this.resolve(tool.name) !== tool) return false;
+    const provider = String(tool.pluginIdentifier || "").toLowerCase();
+    if (provider === ENGINE_PROFILES.unreal.fileProvider) return UNREAL_AGENT_MUTATIONS.has(tool.name);
+    if (provider === "mcp/unreal-rag") return UNREAL_RAG_MUTATIONS.has(tool.name);
+    if (provider !== ENGINE_PROFILES.unity.fileProvider) return false;
+    const effect = UNITY_TOOL_EFFECTS[tool.name];
+    return (typeof effect === "string" ? effect : effect?.[String((request.arguments as Record<string, unknown>)?.action || "")]) === "mutation";
+  }
+  mutationOutcomes(messages: readonly ChatMessage[]): readonly ("applied" | "failed")[] {
+    const requests = new Map<string, ToolCallRequest | null>();
+    for (const message of messages) for (const request of message.getToolCallRequests()) {
+      const id = String(request.id || "");
+      requests.set(id, requests.has(id) ? null : request);
+    }
+    const outcomes: ("applied" | "failed")[] = [];
+    for (const message of messages) for (const result of message.getToolCallResults()) {
+      const request = requests.get(String(result.toolCallId || ""));
+      const tool = request && this.resolve(request.name);
+      if (!request || !tool || !this.isMutation(tool, request)) continue;
+      const value = decodeToolResultRecord(result.content).value;
+      const semantics = resultSemantics(value, tool.pluginIdentifier);
+      if (semantics.operationStatus === "completed") outcomes.push("applied");
+      else if (["failed", "canceled", "outcome_unknown"].includes(semantics.operationStatus)) outcomes.push("failed");
+    }
+    return Object.freeze(outcomes);
+  }
   /** Every tool except the manifest's known file/project mutations, for a
    * review-only request. Validators, long-running checks and tools of other
    * providers stay: only what the request ruled out is withheld. */

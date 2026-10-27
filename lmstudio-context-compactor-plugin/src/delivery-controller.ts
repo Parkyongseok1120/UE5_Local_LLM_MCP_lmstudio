@@ -8,7 +8,8 @@ import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
-import type { DirectConfig, ExecutionOutcome, FinalizationTrigger } from "./execution-contracts";
+import type { DirectConfig, ExecutionOutcome, FinalizationTrigger, TaskObjective } from "./execution-contracts";
+import { finalizationCause } from "./execution-instructions";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 import { hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
@@ -21,7 +22,7 @@ export class DeliveryController {
   private observation: ExecutionObservation = { reportText: "" };
   private outcome: ExecutionOutcome | null = null;
   private priorReportPresent = false;
-  constructor(private readonly tools: Array<RemoteToolLike> = []) { }
+  constructor(private readonly tools: Array<RemoteToolLike> = [], private readonly objective?: TaskObjective) { }
   // Only this attempt's answer can become a final report. Prior progress text
   // and an interrupted earlier generation must never count as delivered work.
   beginRound() { this.observation = { reportText: "" }; }
@@ -61,8 +62,10 @@ export class DeliveryController {
   }
   get hasPartialDelivery() { return this.observation.partialReportDelivered === true; }
   stop(reason: string) { this.observation = { ...this.observation, reason }; }
-  partialReport(history: Chat, reason: string) {
-    return evidenceBackedPartialReport(history, [], reason, this.tools);
+  partialReport(history: Chat, reason: string, messages: Array<ChatMessage> = [], trigger: string = reason) {
+    const report = evidenceBackedPartialReport(history, messages, reason, this.tools);
+    return this.objective?.requiredEffects.has("mutation") && this.objective.mutationState !== "applied"
+      ? { ...report, text: `요청한 변경은 적용되지 않았습니다: ${finalizationCause(trigger)}\n\n${report.text}` } : report;
   }
   finish(overrides: Pick<ExecutionObservation, "canceled" | "failure" | "timedOut"> = {}): ExecutionOutcome {
     // Cleanup calls can ask again, but cannot overwrite an accepted outcome.
@@ -74,7 +77,7 @@ export class DeliveryController {
   // Terminal parse failure never repairs or retries an operation. Deliver only
   // returned observations; unfinished model claims are not report evidence.
   failedToolRequest(history: Chat, messages: Array<ChatMessage>, reason: string) {
-    const report = evidenceBackedPartialReport(history, messages, reason, this.tools);
+    const report = this.partialReport(history, reason, messages);
     return { ...report, text: `${report.text}\n- 도구 요청 인수를 완성하지 못해 해당 요청은 실행되지 않았습니다.\n- 실행되지 않은 요청의 검증 결과는 없으며, 반환 기록만으로 전체 조사나 원인 판단이 완료된 것은 아닙니다.` };
   }
   limits(config: Pick<DirectConfig, "maxOutputReserve" | "auditFinalMaxTokens" | "auditFinalSeconds"
@@ -113,8 +116,8 @@ export class DeliveryController {
     this.observation = { ...this.observation, delivery, objectiveSatisfied };
     const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
       || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence", "research_repetition"].includes(trigger || ""));
-    const partial = needsPartial ? evidenceBackedPartialReport(history, captured.messages,
-      delivery.rejectionReason || trigger || "research_incomplete", this.tools) : null;
+    const partial = needsPartial ? this.partialReport(history,
+      delivery.rejectionReason || trigger || "research_incomplete", captured.messages, trigger || "research_incomplete") : null;
     const outcome = classifyExecutionOutcome({ ...this.observation, partialReportDelivered: needsPartial });
     return {
       generationCompleted: outcome.generationCompleted,

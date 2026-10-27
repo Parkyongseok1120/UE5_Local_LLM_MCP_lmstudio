@@ -20,7 +20,9 @@ import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, seria
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
-import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote } from "./execution-contracts";
+import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective } from "./execution-contracts";
+import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
+import { classifyObjective } from "./tool-capability-registry";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted, reportNowFact } from "./resume-facts";
@@ -61,6 +63,7 @@ export function createPredictionLoopHandler(
   return async (ctl) => {
     const executionId = crypto.randomUUID();
     let terminalOwner = new DeliveryController();
+    let objective: TaskObjective | undefined;
     let finalExecution: ExecutionState | null = null;
     let finalModelInputId: string | null = null;
     let executionFailure: unknown;
@@ -156,11 +159,13 @@ export function createPredictionLoopHandler(
     // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
     // schema chars per call).
     const latestUserText = originalHistory.getMessagesArray().filter(message => message.getRole() === "user").at(-1)?.getText() || "";
+    objective = classifyObjective(latestUserText);
     const readOnlyReview = !config.observeOnly && readOnlyReviewRequest(latestUserText);
     const modelTools = config.auditCompletionMode === "bounded" ? capabilityRegistry.readProfile()
       : readOnlyReview ? capabilityRegistry.reviewProfile() : allModelTools;
     if (config.showDebugInfo) ctl.debug({
       event: "direct_runtime_identity",
+      objectiveKind: objective.kind, mutationState: objective.mutationState,
       executionId,
       ...runtimeInstallationIdentity(),
       modelIdentifier: String((tokenSource as { identifier?: unknown }).identifier || "unknown"),
@@ -244,7 +249,7 @@ export function createPredictionLoopHandler(
       reviewRegisterItems: () => reviewRegister.rows.length ? reviewRegister.lines() : null },
       history => workingContext?.pendingResultIndexes(history) || [],
       (history, maxChars) => workingContext?.pinnedResultIndexes(history, maxChars) || []);
-    const deliveryController = terminalOwner = new DeliveryController(allModelTools);
+    const deliveryController = terminalOwner = new DeliveryController(allModelTools, objective);
     const recoveryCoordinator = execution.recovery;
 
     const seedResearchRecoveryTracking = (history: Chat) => evidenceManager.seed(history);
@@ -407,7 +412,9 @@ export function createPredictionLoopHandler(
         const requestedOutputCap = roundOutputReserve;
         let outputCapSource: "configured" | "headroom_clamp" = "configured";
         const roundScopeInstructions = finalizing
-          ? [...scopeInstructions, reviewingReport ? REPORT_REVIEW_INSTRUCTION : execution.finalizationTrigger === "output_recovery"
+          ? [...(objective.requiredEffects.has("mutation") && objective.mutationState !== "applied"
+            ? [`${MUTATION_NOT_APPLIED_INSTRUCTION} 요청한 변경은 적용되지 않았습니다: ${finalizationCause(execution.finalizationTrigger)}`] : []),
+            ...scopeInstructions, reviewingReport ? REPORT_REVIEW_INSTRUCTION : execution.finalizationTrigger === "output_recovery"
             ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
             : execution.finalizationTrigger === "context_budget"
               ? CONTEXT_BUDGET_FINAL_INSTRUCTION
@@ -956,6 +963,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           resultCount: actualResultCount,
         });
         const recoveryProgress = evidenceManager.observe(screening.messages, modelInputId, screening);
+        for (const result of capabilityRegistry.mutationOutcomes(captured.messages)) {
+          if (result === "applied") objective.mutationState = "applied";
+          else if (objective.mutationState !== "applied") objective.mutationState = "attempted";
+        }
         const planningAllowed = !reasoningRecoveryRound && !(finalizing && execution.finalizationTrigger === "output_recovery");
         const shouldMeasureRetryCandidate = !boundedAudit && !config.observeOnly && planningAllowed
           && recoveryCoordinator.planningAttempts < 1 && captured.failure === undefined
@@ -1677,6 +1688,7 @@ event: decision.trigger === "research_recovery_exhausted"
       finalExecution?.terminate(outcome.reason);
       if (showDebugInfo) {
         ctl.debug({ event: "execution_outcome", executionId, modelInputId: finalModelInputId,
+          objectiveKind: objective?.kind ?? null, mutationState: objective?.mutationState ?? "none",
           terminalPhase, ...outcome, cleanupFailures });
         if (finalExecution) ctl.debug({ event: "execution_transitions", executionId,
           phase: finalExecution.phase, transitions: finalExecution.transitions });

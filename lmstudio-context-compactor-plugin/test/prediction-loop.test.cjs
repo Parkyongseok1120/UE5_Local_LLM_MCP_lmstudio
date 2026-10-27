@@ -5338,7 +5338,8 @@ for (const stopReason of ['maxPredictedTokensReached', 'eosFound']) test(`unpars
   assert.equal(ctl.debugValues.some(e => e.event === 'reasoning_recovery_scheduled'), false);
   assert.match(ctl.statuses.at(-1).state.text, stopReason === 'maxPredictedTokensReached' ? /생성 한도에서 잘려/ : /해석할 수 없어/);
   assert.doesNotMatch(JSON.stringify(ctl.debugValues), /Source\/UNFINISHED/);
-  const partial = ctl.blocks.filter(block => block.text.startsWith('부분 조사 보고'));
+  const partial = ctl.blocks.filter(block => block.text.includes('부분 조사 보고'));
+  assert.match(partial[0]?.text || "", /^요청한 변경은 적용되지 않았습니다:/u);
   assert.equal(partial.length, 1); assert.match(partial[0].text, /해당 요청은 실행되지 않았습니다/);
   const delivery = ctl.debugValues.find(e => e.event === 'partial_report_delivery');
   assert.equal(delivery.taskCompleted, false); assert.equal(delivery.generationCompleted, false);

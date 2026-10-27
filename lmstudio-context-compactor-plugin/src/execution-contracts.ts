@@ -7,6 +7,14 @@ import {
 import type { DesignGuidanceMode, DesignGuidanceDelivery } from "./design-guidance";
 import { CONTEXT_DEFAULTS } from "./config-defaults";
 
+export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
+export type MutationState = "none" | "attempted" | "applied" | "blocked";
+export interface TaskObjective {
+  readonly kind: ObjectiveKind;
+  readonly requiredEffects: ReadonlySet<"read" | "mutation" | "long_running">;
+  mutationState: MutationState;
+}
+
 export type ContinuityNote = {
   scope: { objectiveFingerprint: string; projectIdentity?: string };
   decisions: Array<unknown>;

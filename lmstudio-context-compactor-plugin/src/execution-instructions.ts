@@ -3,6 +3,27 @@
 /** Fixed text (the system prefix stays reusable): the per-round data slots are
  * assistant-role messages, and a model that reads them as its own earlier
  * replies starts its answer with a copy (2026-10-25 run: 18 visible echoes). */
+export const MUTATION_NOT_APPLIED_INSTRUCTION = "Start the report with the supplied unapplied-change notice. No successful mutation result was returned; never describe proposed changes as applied.";
+
+export function finalizationCause(trigger: string | null): string {
+  const causes: Record<string, string> = {
+    research_time_limit: "조사 시간 한도에 도달했습니다",
+    research_timeout: "응답 시간이 초과되었습니다",
+    research_round_limit: "조사 라운드 한도에 도달했습니다",
+    context_budget: "실행 가능한 입력 예산을 확보하지 못했습니다",
+    mutation_blocked_by_context: "변경 집중 라운드에서도 변경 결과를 얻지 못했습니다",
+    context_working_set_exhausted: "작업 근거를 입력에 유지할 공간이 부족합니다",
+    research_repetition: "반복 생성으로 중단되었습니다",
+    research_output_limit: "생성 한도에 도달했습니다",
+    research_no_new_evidence: "새 근거 없이 조사가 반복되었습니다",
+    research_recovery_exhausted: "근거 복구를 마치지 못했습니다",
+    research_recovery_complete: "근거 복구 한도에 도달했습니다",
+    output_recovery: "출력 한도로 답변을 이어 작성합니다",
+    report_review: "보고서의 누락 사항을 보완합니다",
+  };
+  return causes[trigger || ""] || `실행이 종료되었습니다 (${trigger || "unknown"})`;
+}
+
 export const RUNTIME_DATA_INSTRUCTION = "Some assistant-role messages are data blocks the host inserted (a read "
   + "ledger, observations, budget facts, reference data or tool-call refs, each opening with a Runtime or bracketed "
   + "label). They are not replies you wrote: use them silently, never copy their rows, JSON or wording into your "
