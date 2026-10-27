@@ -476,6 +476,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
 /** Pure terminal presentation. Evidence/claim owners determine the notices;
  * the prediction loop only appends them before its immutable terminal snapshot. */
 export function terminalReportNotices(history: Chat, answer: string, options: {
+  returnedSources?: import("./context-ports").ReturnedSources;
   packetQuoteGaps: QuoteMismatch[]; packetEngineGaps: EngineClaimGap[]; engine: string; observeOnly: boolean;
   reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reviewMissing: ReviewRow[];
 }) {
@@ -487,13 +488,14 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
   const remaining = options.reviewedReport ? unresolvedEngineClaimGaps(options.packetEngineGaps, answer) : options.packetEngineGaps;
   if (answer && !options.reviewedReport) add("engine_claim_notice", engineClaimNotice(options.packetEngineGaps), {gaps:options.packetEngineGaps.length});
   if (answer && !options.observeOnly) {
-    const visible = history.getMessagesArray(), evidence = returnedEngineEvidence(visible);
+    const source = options.returnedSources || {files:[],contractIds:new Set<string>(),scope:"execution" as const};
+    const visible = history.getMessagesArray(), evidence = returnedEngineEvidence(source);
     const gaps = unresolvedReportEngineClaimGaps(answer, evidence, options.engine).filter(gap => !remaining.some(item => item.factId === gap.factId));
     if (options.reviewedReport) gaps.push(...remaining);
     add("report_engine_claim_notice", reportEngineClaimNotice(gaps,
       unresolvedEngineClaimGaps(textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, options.engine, "progress"), answer)), {gaps:gaps.length});
-    add("suggested_code_scope_notice", suggestedCodeNotice(visible, answer, options.engine));
-    add("file_coverage_notice", fileCoverageNotice(visible, answer));
+    add("suggested_code_scope_notice", suggestedCodeNotice(visible, answer, options.engine, source));
+    add("file_coverage_notice", fileCoverageNotice(source, answer));
     if (options.reportReviewBlocked || options.reportReviewEmpty)
       add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewEmpty ? "empty" : "budget"));
   }

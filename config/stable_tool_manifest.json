@@ -397,7 +397,8 @@
       "unreal_symbol_lookup": {
         "resultKind": "search_hits",
         "roles": [
-          "api_lookup"
+          "api_lookup",
+          "contract_lookup"
         ],
         "minimumEnvelopeChars": 2000
       },

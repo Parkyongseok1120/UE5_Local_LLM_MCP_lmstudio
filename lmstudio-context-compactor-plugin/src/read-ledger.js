@@ -13,6 +13,7 @@ const { normalizeRanges } = require("./evidence-ranges.js");
 const { fileSourceKey } = require("./evidence-identity.js");
 
 const { namesForRole } = require("./tool-capability-core.js");
+const { resultSemantics } = require("./tool-result-semantics.js");
 const SOURCE_READ_TOOLS = new Set(namesForRole("source_read"));
 const SHA256 = /^[A-Fa-f0-9]{64}$/u;
 const MAX_ENTRIES = 64;
@@ -130,10 +131,102 @@ class ReadLedger {
     this.items = new Map();
     this.events = [];
     this.resultSizes = new Map();
+    this.returnedText = [];
+    this.returnedSpans = [];
+    this.returnedFactsIncomplete = false;
+    this.returnedContracts = [];
     this.counters = { redundantRereads: 0, duplicatedChars: 0, archiveRepages: 0, deliveries: 0 };
   }
 
   get size() { return this.items.size; }
+
+  /** Returned text is evidence of delivery, not hash/range coverage. In
+   * particular search hits must never suppress a later full source read. */
+  recordReturnedSource(value, resultKind, executionId = "", authority = {}) {
+    if (!value || value.ok === false || value.errorCode || value.envelopeIsError
+      || ["failed","canceled","outcome_unknown","pending","accepted"].includes(resultSemantics(value).operationStatus)) return;
+    if (authority.contractLookup === true && value.sourceMode === "engine_local" && resultKind === "search_hits") {
+      for (const item of Array.isArray(value.relatedContracts?.items)?value.relatedContracts.items:[]) if (typeof item?.id === "string")
+        this.returnedContracts.push({id:item.id.slice(0,160),executionId});
+      this.returnedContracts = this.returnedContracts.slice(-64);
+    }
+    const put = (path, lines, via, source = value, sourceKey) => {
+      if (!path || !lines.length) return;
+      const row = {sourceKey:sourceKey || fileSourceKey({...value,...source,path}),path:String(path).slice(0,4096),
+        sourceVersion:String(source.sha256 || source.hash || source.sourceVersion || "unknown"),via,executionId,
+        lines:lines.filter(([line,text])=>Number.isSafeInteger(line)&&line>0&&typeof text==='string')};
+      this.returnedSpans.push({sourceKey:row.sourceKey,path:row.path,sourceVersion:row.sourceVersion,via,executionId,
+        ranges:normalizeRanges(row.lines.map(([line])=>[line,line]))});
+      if(this.returnedSpans.length>256){this.returnedSpans.shift();this.returnedFactsIncomplete=true;}
+      let chars=0; row.lines=row.lines.filter(([,text],i)=>i<4096 && (chars+=text.length)<=16384);
+      if (!row.lines.length) return;
+      this.returnedText.push(row);
+      while (this.returnedText.length>64 || this.returnedText.reduce((n,r)=>n+r.lines.reduce((s,[,t])=>s+t.length,0),0)>65536) this.returnedText.shift();
+    };
+    const positioned = (body, start, numbered=false) => {
+      if (typeof body !== 'string') return [];
+      const parts=body.split(/\r?\n/);
+      if (!numbered && value.offsetBytes===0 && (value.hasMore===true || value.truncated===true)) parts.pop();
+      return parts.flatMap((text,index)=>{
+        const match=numbered?/^(\d+)(?:\t|: ?)(.*)$/.exec(text):null;
+        return numbered ? match?[[Number(match[1]),match[2]]]:[] : Number.isSafeInteger(start)&&start>0?[[start+index,text]]:[];
+      });
+    };
+    if (resultKind === "search_hits") {
+      for (const hit of (Array.isArray(value.results)?value.results:Array.isArray(value.items)?value.items:[])) {
+        if (!hit || typeof hit!=='object') continue;
+        const path=hit.uri || hit.path;
+        const lines=Number.isSafeInteger(hit.line)&&typeof hit.text==='string'?[[hit.line,hit.text]]:[];
+        if (typeof hit.context==='string' && Number.isSafeInteger(hit.contextStartLine))
+          lines.push(...positioned(hit.context,hit.contextStartLine,/^\d+[\t:]/.test(hit.context)));
+        // A query/tree digest is not the file's version.
+        put(path,lines,"search_hit",{...value,...hit,sha256:hit.sha256||hit.hash||"",sourceVersion:hit.sha256||hit.hash||"unknown"});
+      }
+    } else if (resultKind === "source_body") {
+      put(value.projectRelativePath || value.path,positioned(bodyOf(value),value.startLine || (value.offsetBytes===0?1:null),value.lineNumbers===true),"body");
+    } else if (resultKind === "archive_page") {
+      const facts=archivePageFacts(value);
+      if (facts?.bodyVerified) put(facts.path,positioned(bodyOf(value),facts.lines?.[0]),"archive_page",facts,facts.sourceKey);
+    }
+  }
+
+  returnedSource(sourceKey, span, executionId = "") {
+    const start=Array.isArray(span)?span[0]:span?.start, end=Array.isArray(span)?span[1]:span?.end;
+    const rows=this.returnedSpans.filter(r=>r.sourceKey===sourceKey);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start<1 || end<start
+      || !covers(rows.flatMap(r=>r.ranges),[start,end]))return {returned:false,via:"body",scope:"conversation",complete:!this.returnedFactsIncomplete};
+    const current=rows.filter(r=>r.executionId && r.executionId===executionId);
+    const scope=covers(current.flatMap(r=>r.ranges),[start,end])?"execution":"conversation";
+    return {returned:true,via:(scope==="execution"?current:rows).find(r=>r.ranges.some(([s,e])=>s<=start&&e>=start)).via,scope};
+  }
+
+  returnedSources(executionId = "") {
+    const files=new Map();
+    for(const row of this.returnedText){
+      let file=files.get(row.sourceKey);
+      const known=row.sourceVersion!=="unknown" && row.sourceVersion!=="unknown-version";
+      // An unhashed search is another delivered snippet, not proof that an
+      // already returned file version disappeared or changed.
+      if(!file || known && file.knownVersion!==row.sourceVersion)file={sourceKey:row.sourceKey,path:row.path,
+        knownVersion:known?row.sourceVersion:null,lines:new Map(),origins:new Map(),bodyReturned:false};
+      for(const [line,text] of row.lines){file.lines.set(line,text);file.origins.set(line,{via:row.via,executionId:row.executionId,sourceVersion:row.sourceVersion});}
+      file.bodyReturned ||= row.via!=="search_hit";
+      files.set(row.sourceKey,file);
+    }
+    for(const row of this.returnedSpans)if(!files.has(row.sourceKey))files.set(row.sourceKey,{sourceKey:row.sourceKey,path:row.path,lines:new Map(),origins:new Map(),bodyReturned:row.via!=="search_hit"});
+    const projected=[...files.values()].map(f=>{
+      const spans=this.returnedSpans.filter(r=>r.sourceKey===f.sourceKey);
+      const completeText=spans.every(r=>r.ranges.every(([start,end])=>{
+        if(end-start>=f.lines.size)return false;
+        for(let line=start;line<=end;line++)if(!f.lines.has(line))return false;return true;
+      }));
+      return {...f,completeText,bodyReturned:f.bodyReturned||spans.some(r=>r.via!=="search_hit"),
+        scope:spans.every(r=>r.executionId&&r.executionId===executionId)?"execution":"conversation"};
+    });
+    return {files:projected,contractIds:new Set(this.returnedContracts.map(r=>r.id)),
+      complete:!this.returnedFactsIncomplete,
+      scope:projected.some(f=>f.scope==="conversation") || this.returnedContracts.some(r=>!r.executionId||r.executionId!==executionId)?"conversation":"execution"};
+  }
 
   entryKey(facts) { return `${facts.sourceKey || facts.key}\u0000${facts.sourceVersion}`; }
 
@@ -293,6 +386,7 @@ class ReadLedger {
   toJSON() {
     return { schemaVersion: 2, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
+      returnedText:this.returnedText,returnedContracts:this.returnedContracts,returnedSpans:this.returnedSpans,returnedFactsIncomplete:this.returnedFactsIncomplete,
       resultSizes: [...this.resultSizes].slice(-MAX_RESULT_SIZES) };
   }
 
@@ -301,6 +395,17 @@ class ReadLedger {
   load(value) {
     this.reset();
     if (!value || ![1, 2].includes(value.schemaVersion) || !Array.isArray(value.entries)) return false;
+    for(const row of (Array.isArray(value.returnedText)?value.returnedText:[]).slice(-64)) {
+      if(!row || typeof row.sourceKey!=="string" || typeof row.path!=="string" || !Array.isArray(row.lines)
+        || !["body","search_hit","archive_page"].includes(row.via))continue;
+      const lines=row.lines.slice(0,4096).filter(pair=>Array.isArray(pair)&&Number.isSafeInteger(pair[0])&&pair[0]>0&&typeof pair[1]==="string"&&pair[1].length<=16384);
+      this.returnedText.push({...row,lines,executionId:""});
+    }
+    while(this.returnedText.reduce((n,r)=>n+r.lines.reduce((s,[,t])=>s+t.length,0),0)>65536)this.returnedText.shift();
+    this.returnedContracts=(Array.isArray(value.returnedContracts)?value.returnedContracts:[]).filter(r=>typeof r?.id==="string").slice(-64).map(r=>({id:r.id.slice(0,160),executionId:""}));
+    this.returnedFactsIncomplete=value.returnedFactsIncomplete===true;
+    this.returnedSpans=(Array.isArray(value.returnedSpans)?value.returnedSpans:[]).filter(r=>r&&typeof r.sourceKey==="string"&&typeof r.path==="string"&&["body","search_hit","archive_page"].includes(r.via)).slice(-256)
+      .map(r=>({...r,executionId:"",ranges:normalizeRanges(Array.isArray(r.ranges)?r.ranges:[]).slice(-512)}));
     for (const item of value.entries.slice(-MAX_ENTRIES)) {
       if (!item || typeof item.path !== "string" || !SHA256.test(String(item.sourceVersion || ""))) continue;
       const entry = { ...item, key: pathKey(item.path), sourceVersion: String(item.sourceVersion).toLowerCase(),

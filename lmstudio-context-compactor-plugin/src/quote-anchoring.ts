@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@lmstudio/sdk";
-import { toolMemory } from "./context-ports";
+import { toolMemory, type ReturnedSources } from "./context-ports";
 import { namesForRole } from "./tool-capability-core.js";
 
 // Compares the code an evidence packet says it observed with the source text
@@ -8,7 +8,6 @@ import { namesForRole } from "./tool-capability-core.js";
 // handler or specifier that no returned body contains is a mismatch we can
 // name. Advisory: nothing here blocks, rewrites a result, or verifies a fact.
 
-const SOURCE_READ_TOOLS = new Set(namesForRole("source_read"));
 const VALIDATE_TOOL = namesForRole("structure_validation")[0];
 const LINE_SLACK = 2;
 // A short cite inside a body may name its enclosing function, declared above it.
@@ -20,9 +19,9 @@ const MAX_REPORTED = 4;
 const MAX_LINE_CHARS = 160;
 const NETWORK_SPECIFIERS = /\b(ReplicatedUsing|NetMulticast|WithValidation|Unreliable|Reliable|Replicated|Server|Client)\s*=?/g;
 
-type SourceFile = { path: string; lines: Map<number, string> };
+type SourceFile = ReturnedSources["files"][number];
 export type QuoteMismatch = { claimPath: string; location: string; missingTokens: string[]; returnedLines: string[];
-  kind: "not_in_returned_source" | "not_at_cited_lines" };
+  kind: "not_in_returned_source" | "not_at_cited_lines"; scope?: "execution"|"conversation" };
 
 const normalizePath = (value: string) => value.replace(/^project:\/\//, "").replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase();
 
@@ -31,46 +30,8 @@ function decoded(content: unknown): Record<string, any> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : null;
 }
 
-/** The first line number of a result's content when its position is
- * verifiable: an explicit startLine, or a byte window that starts at the
- * file's first byte. A mid-file byte window (read_file offsetBytes > 0, the
- * long-line recovery path) has no line position, so it registers none. */
-function contentStartLine(value: Record<string, any>): number | null {
-  if (Number.isInteger(value.startLine) && value.startLine > 0) return value.startLine;
-  return value.offsetBytes === 0 ? 1 : null;
-}
-
-/** Latest returned text of each source line, by file, in transcript order.
- * Only lines whose position the result proves are registered. */
-export function returnedSourceLines(messages: ChatMessage[]): SourceFile[] {
-  const names = new Map<string, string>();
-  const files = new Map<string, SourceFile>();
-  for (const message of messages) {
-    for (const request of message.getToolCallRequests()) names.set(String(request.id || ""), request.name);
-    for (const result of message.getToolCallResults()) {
-      if (!SOURCE_READ_TOOLS.has(names.get(String(result.toolCallId || "")) || "")) continue;
-      const value = decoded((result as { content?: unknown }).content);
-      if (!value || value.ok === false || typeof value.content !== "string") continue;
-      const path = String(value.projectRelativePath || value.path || "");
-      if (!path) continue;
-      const numbered = value.lineNumbers === true;
-      const start = numbered ? null : contentStartLine(value);
-      if (!numbered && start === null) continue;
-      const file = files.get(normalizePath(path)) || { path, lines: new Map<number, string>() };
-      const lines = value.content.split(/\r?\n/);
-      // Before EOF the last split item is unproven: either a cut line or the
-      // empty item after a final newline, whose next line was not read yet.
-      if (!numbered && value.offsetBytes === 0 && (value.hasMore === true || value.truncated === true)) lines.pop();
-      lines.forEach((text: string, index: number) => {
-        const match = numbered ? /^(\d+)\t(.*)$/.exec(text) : null;
-        if (numbered && !match) return;
-        file.lines.set(match ? Number(match[1]) : start! + index, match ? match[2] : text);
-      });
-      files.set(normalizePath(path), file);
-    }
-  }
-  return [...files.values()];
-}
+/** Read-only projection of the delivery ledger; this module never scans tool results. */
+export function returnedSourceLines(source: ReturnedSources): SourceFile[] { return source.files; }
 
 // A clause that denies, compares or proposes a name does not claim the source
 // shows it ("never calls Cleanup()", "Cleanup()을 호출하지 않는다", "should call").
@@ -199,6 +160,7 @@ export function packetQuoteMismatches(packet: unknown, files: SourceFile[]): Quo
       const tokens = observedCodeTokens(item.observation);
       const target = tokens.length ? locate(item.location, files) : null;
       if (!target) return;
+      if (target.file.completeText === false) return; // evicted text is not evidence that a name was absent
       const cited = [...target.file.lines].filter(([line, text]) => line >= target.start && line <= target.end && text.trim())
         .sort(([a], [b]) => a - b).map(([line, text]) => `${line}: ${text.trim().slice(0, MAX_LINE_CHARS)}`);
       if (!cited.length) return;
@@ -218,9 +180,9 @@ export function packetQuoteMismatches(packet: unknown, files: SourceFile[]): Quo
       const notCited = missing.filter(token => !absent.includes(token));
       const claimPath = `claims[${claimIndex}].evidence[${evidenceIndex}]`;
       if (absent.length) mismatches.push({ claimPath, location: item.location, missingTokens: absent,
-        returnedLines: cited.slice(0, 2), kind: "not_in_returned_source" });
+        returnedLines: cited.slice(0, 2), kind: "not_in_returned_source", ...(target.file.scope === "conversation" ? {scope:"conversation" as const} : {}) });
       if (notCited.length) mismatches.push({ claimPath, location: item.location, missingTokens: notCited,
-        returnedLines: cited.slice(0, 2), kind: "not_at_cited_lines" });
+        returnedLines: cited.slice(0, 2), kind: "not_at_cited_lines", ...(target.file.scope === "conversation" ? {scope:"conversation" as const} : {}) });
     });
   });
   return mismatches;
@@ -249,7 +211,7 @@ export function acceptedValidatePackets(messages: ChatMessage[]): unknown[] {
 
 function describe(mismatch: QuoteMismatch): string {
   const what = mismatch.kind === "not_in_returned_source"
-    ? `${mismatch.missingTokens.join(", ")} appears in no source text returned in this execution`
+    ? `${mismatch.missingTokens.join(", ")} appears in no source text returned in this ${mismatch.scope || "execution"}`
     : `${mismatch.missingTokens.join(", ")} is not on the cited lines`;
   return `- ${mismatch.claimPath} ${mismatch.location}: ${what}; returned text there: ${mismatch.returnedLines.join(" | ")}`;
 }
@@ -260,7 +222,7 @@ export function quoteCheckFact(mismatches: QuoteMismatch[]): string | null {
   const listed = mismatches.slice(0, MAX_REPORTED).map(describe);
   const more = mismatches.length > MAX_REPORTED ? [`- ${mismatches.length - MAX_REPORTED} more not listed`] : [];
   return [
-    `Runtime evidence observation: the last evidence packet quotes ${mismatches.length} code name(s) that the source returned in this execution does not show.`,
+    `Runtime evidence observation: the last evidence packet quotes ${mismatches.length} code name(s) that the source returned in this ${mismatches.some(m=>m.scope === "conversation") ? "conversation" : "execution"} does not show.`,
     ...listed, ...more,
     "This compares names the observation states as present only (names it denies or proposes are not compared); "
       + "it is not a fact check. Re-read the cited range and correct the observation, location "
@@ -273,14 +235,14 @@ export function quoteCheckFact(mismatches: QuoteMismatch[]): string | null {
 const COVERAGE_CLAIM = /(?:전체|모든)[^.\n]{0,20}?(\d+)\s*개\s*(?:의\s*)?(?:소스\s*)?파일|(\d+)\s*개\s*(?:의\s*)?(?:소스\s*)?파일(?:을|를)?\s*(?:모두\s*|전부\s*)?(?:확인|검토|읽)|\b(?:all|every)\s+(\d+)\s+(?:source\s+)?files\b|\b(\d+)\s+(?:source\s+)?files\s+(?:were\s+)?(?:read|reviewed|checked)\b/iu;
 
 /** Footer when the answer claims more checked files than returned bodies. */
-export function fileCoverageNotice(messages: ChatMessage[], answer: string): string | null {
+export function fileCoverageNotice(source: ReturnedSources, answer: string): string | null {
   const match = COVERAGE_CLAIM.exec(answer || "");
   const claimed = match ? Number(match.slice(1).find(Boolean)) : NaN;
   if (!Number.isFinite(claimed)) return null;
-  const read = new Set(returnedSourceLines(messages).filter(file => !/^engine:\/\//i.test(file.path))
+  const read = new Set(returnedSourceLines(source).filter(file => file.bodyReturned && !/^engine:\/\//i.test(file.path))
     .map(file => normalizePath(file.path))).size;
   if (claimed <= read) return null;
-  return ["", "", `[조사 범위] 답변은 ${claimed}개 파일을 확인했다고 하지만, 이번 실행에서 본문이 반환된 프로젝트 파일은 ${read}개입니다. `
+  return ["", "", `[조사 범위] 답변은 ${claimed}개 파일을 확인했다고 하지만, 이번 ${source.scope === "conversation" ? "대화" : "실행"}에서 본문이 반환된 프로젝트 파일은 ${read}개입니다. `
     + "검색 결과의 스캔 파일 수는 본문 확인이 아닙니다."].join("\n");
 }
 
@@ -291,6 +253,6 @@ export function quoteAnchoringNotice(mismatches: QuoteMismatch[]): string | null
   const listed = mismatches.slice(0, MAX_REPORTED).map(mismatch => `- ${mismatch.location}: `
     + `${mismatch.missingTokens.join(", ")} → 반환된 원문: ${mismatch.returnedLines.join(" | ")}`);
   const more = mismatches.length > MAX_REPORTED ? [`- 외 ${mismatches.length - MAX_REPORTED}건`] : [];
-  return ["", "", `[인용 대조] 마지막 근거 패킷에서 이번 실행이 반환한 소스와 맞지 않는 코드 이름 ${mismatches.length}건이 남아 있습니다. `
+  return ["", "", `[인용 대조] 마지막 근거 패킷에서 이번 ${mismatches.some(m=>m.scope === "conversation") ? "대화" : "실행"}에서 반환한 소스와 맞지 않는 코드 이름 ${mismatches.length}건이 남아 있습니다. `
     + "이름만 비교한 결과이며 사실 검증이 아닙니다. 해당 지적은 원문을 다시 확인한 뒤 판단해야 합니다.", ...listed, ...more].join("\n");
 }

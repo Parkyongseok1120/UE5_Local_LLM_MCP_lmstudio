@@ -209,6 +209,7 @@ export function createPredictionLoopHandler(
       historicalAvailabilityLedger.push(...inputAvailability.historicalAvailabilityFromMemory(bootstrap.memory));
     }
     const restoredWindow = workingContext?.restore(originalHistory);
+    evidenceManager.rebuildReturnedSources(originalHistory);
     const historicalReadsRebuilt = workingContext && !config.observeOnly && restoredWindow?.reason !== "restored_remeasure_required"
       ? evidenceManager.rebuildHistoricalReads(originalHistory) : 0;
     evidenceManager.restoreReferences();
@@ -841,6 +842,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const roundModelElapsedMs = Date.now() - roundModelStartedAt;
         // Same-hash re-reads of delivered ranges enter the working history as
         // UNCHANGED facts; the user's transcript keeps every returned body.
+        evidenceManager.recordReturnedSources(captured.messages, executionId);
         const screening = config.observeOnly
           ? { messages: captured.messages, replaced: 0, redundant: 0, duplicatedChars: 0, repages: 0, newDeliveries: 0,
             readResults: 0, failedReads: 0, otherResults: 0, focusedReads: 0, repeatRestores: 0, pending: [], suppressedCallIds: [] }
@@ -1198,14 +1200,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           // The visible recorder keeps every returned body, including ones the
           // working input has since compacted.
           const returnedMessages = [...visibleTranscript.snapshot().getMessagesArray(), ...captured.messages];
-          packetQuoteGaps = packetQuoteMismatches(packets.at(-1), returnedSourceLines(returnedMessages));
+          packetQuoteGaps = packetQuoteMismatches(packets.at(-1), returnedSourceLines(evidenceManager.returnedSources()));
           const quoteFact = quoteCheckFact(packetQuoteGaps);
           if (quoteFact) runtimeFacts.set("quote_check", quoteFact);
           else runtimeFacts.delete("quote_check");
-          packetEngineGaps = packetEngineClaimGaps(packets.at(-1), returnedEngineEvidence(returnedMessages), scope.engine);
+          packetEngineGaps = packetEngineClaimGaps(packets.at(-1), returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine);
           for (const packet of acceptedValidatePackets(captured.messages)) {
-            if (!packetQuoteMismatches(packet, returnedSourceLines(returnedMessages)).length
-              && !packetEngineClaimGaps(packet, returnedEngineEvidence(returnedMessages), scope.engine).length)
+            if (!packetQuoteMismatches(packet, returnedSourceLines(evidenceManager.returnedSources())).length
+              && !packetEngineClaimGaps(packet, returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine).length)
               evidenceManager.recordChecks(packet, roundIndex, true);
           }
           if (config.showDebugInfo) ctl.debug({ event: "quote_anchoring_check", executionId, roundIndex,
@@ -1222,7 +1224,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           // without any packet; it is held to the same engine facts.
           const visibleMessages = visibleTranscript.snapshot().getMessagesArray();
           progressEngineGaps = textEngineClaimGaps([...confirmedProgressStatements(visibleMessages, ""), ...reviewRegister.findings()],
-            returnedEngineEvidence([...visibleMessages, ...captured.messages]), scope.engine, "progress");
+            returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine, "progress");
           const engineGaps = [...packetEngineGaps, ...progressEngineGaps];
           const engineFact = engineClaimFact(engineGaps);
           if (engineFact) runtimeFacts.set("engine_claim_check", engineFact);
@@ -1231,7 +1233,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             gaps: engineGaps.map(({ claimPath, severity, factId }) => ({ claimPath, severity, factId })) });
           // Engine names an edit adds are compared with returned source before a build reports only the first error.
           if (scope.engine === "unreal") {
-            const unverified = unverifiedWriteApis([...visibleMessages, ...captured.messages]);
+            const unverified = unverifiedWriteApis([...visibleMessages, ...captured.messages], evidenceManager.returnedSources());
             const writeFact = writeApiFact(unverified);
             if (writeFact) runtimeFacts.set("write_api_check", writeFact);
             else runtimeFacts.delete("write_api_check");
@@ -1429,7 +1431,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           // The engine contracts the looping text touches: the fact it was
           // trying to recall (r7 above: ue.net.client-rpc-callspace).
           const gaps = textEngineClaimGaps([{ label: "repeated reasoning", severity: "unrated", text: block }],
-            returnedEngineEvidence([...visibleTranscript.snapshot().getMessagesArray(), ...captured.messages]), scope.engine, "progress");
+            returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine, "progress");
           const toolActivity = runtimeToolTrace.size > 0
             || captured.messages.some(message => message.getToolCallRequests().length || message.getToolCallResults().length);
           const retry = !reasoningRecoveryRound && execution.reasoningRecoveryAttempts === 0 && !toolActivity;
@@ -1523,7 +1525,7 @@ event: decision.trigger === "research_recovery_exhausted"
           && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
           const answer = visibleTranscript.lastAnswerText;
           const gaps = unresolvedReportEngineClaimGaps(answer,
-            returnedEngineEvidence(visibleTranscript.snapshot().getMessagesArray()), scope.engine);
+            returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine);
           reviewMissing = reviewRegister.missing(answer);
           if (answer.trim() && (reviewMissing.length || gaps.length)) {
             reportReviewAttempted = true;
@@ -1648,7 +1650,7 @@ event: decision.trigger === "research_recovery_exhausted"
         roundIndex += 1;
       }
       const notices = terminalReportNotices(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText, {
-        packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly,
+        packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
         reviewedReport: reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty,
         reportReviewBlocked, reportReviewEmpty, reviewMissing });
       for (const notice of notices) {

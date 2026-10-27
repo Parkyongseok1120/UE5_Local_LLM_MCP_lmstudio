@@ -8,7 +8,7 @@ import { inputAvailability, readLedgerModule, toolMemory, workingContextModule, 
   type ReadFacts, type ReadLedgerLike } from "./context-ports";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
-import { isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import { capabilityFor, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import type { RoundVerdict } from "./execution-contracts";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
@@ -66,6 +66,34 @@ export class EvidenceManager {
     : this.changeOrigins.get(changePairKey(request, content)) || undefined;
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
+  private sourceExecutionId = "";
+  recordReturnedSources(messages: ChatMessage[], executionId: string) {
+    this.sourceExecutionId = executionId;
+    const counts = new Map<string,number>();
+    for(const message of messages) for(const request of message.getToolCallRequests())
+      counts.set(String(request.id),1+(counts.get(String(request.id))||0));
+    for(const record of observationRecords(messages,this.tools,{confirmedPairsOnly:true})) {
+      if(!record.trustedRead || !record.tool || !record.request || !record.value || counts.get(String(record.request.id))!==1)continue;
+      const capability=capabilityFor(record.tool,record.request),kind=capability?.resultKind;
+      if(kind) this.ledger.recordReturnedSource({...record.value,
+        sourceMode:record.value.sourceMode || record.request.arguments?.sourceMode,
+        canonicalProject:record.value.canonicalProject || record.request.arguments?.project},kind,executionId,{contractLookup:capability.roles?.includes("contract_lookup")});
+    }
+  }
+  returnedSource(sourceKey:string,span:[number,number]) { return this.ledger.returnedSource(sourceKey,span,this.sourceExecutionId); }
+  returnedSources() { return this.ledger.returnedSources(this.sourceExecutionId); }
+  rebuildReturnedSources(history: Chat) {
+    if(this.ledger.returnedSources().files.length || this.ledger.returnedSources().contractIds.size)return;
+    for(const record of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
+      if(!record.trustedRead || !record.tool || !record.request || !record.value)continue;
+      const capability=capabilityFor(record.tool,record.request),kind=capability?.resultKind;
+      // Old host transcripts prove delivery only. They cannot inherit today's
+      // provider identity, archive access, receipts or version coverage.
+      if(kind && kind!=="archive_page")this.ledger.recordReturnedSource({...record.value,provider:"historical_unverified",
+        sourceMode:record.value.sourceMode || record.request.arguments?.sourceMode,
+        canonicalProject:record.value.canonicalProject || record.request.arguments?.project},kind,"",{contractLookup:capability.roles?.includes("contract_lookup")});
+    }
+  }
   ingestReferences(messages: readonly ChatMessage[], scope: ToolScope, executionId: string) {
     ingestReferenceObservations(this.referenceState, messages, this.tools, scope, executionId);
     if (this.store) this.store.referenceObservations = JSON.parse(JSON.stringify(this.referenceState.observations));

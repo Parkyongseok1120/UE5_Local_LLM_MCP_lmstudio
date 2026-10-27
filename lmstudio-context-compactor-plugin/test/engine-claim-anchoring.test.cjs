@@ -9,7 +9,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { ChatMessage } = require("@lmstudio/sdk");
-const { engineClaimFact, engineClaimNotice, packetEngineClaimGaps, returnedEngineEvidence } = require("../dist/engine-claim-anchoring");
+const { engineClaimFact, engineClaimNotice, packetEngineClaimGaps, returnedEngineEvidence: rawReturnedEngineEvidence } = require("../dist/engine-claim-anchoring");
 const { bundledEngineClaimFacts } = require("../dist/generated-design-guidance");
 
 function exchange(messages, id, name, args, result) {
@@ -159,3 +159,5 @@ test("progress lines that do not confirm a finding, or reject one, are not claim
     .map(text => ChatMessage.from({ role: "assistant", content: text }));
   assert.deepEqual(confirmedProgressStatements(visible, ""), []);
 });
+
+function returnedEngineEvidence(messages) { return rawReturnedEngineEvidence(require("./helpers/returned-sources.cjs").ledgerView(messages)); }

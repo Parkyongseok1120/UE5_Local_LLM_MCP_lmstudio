@@ -8,7 +8,7 @@ const { composeModelHistory } = require("../dist/context-manager");
 const { stripInternalDataEcho, InternalDataOutputFilter } = require("../dist/internal-data-output");
 const { readConfig } = require("../dist/execution-config");
 const { buildCheckpoint } = require("../src/direct-compaction-core");
-const { textEngineClaimGaps, returnedEngineEvidence, engineClaimFact, unresolvedReportEngineClaimGaps,
+const { textEngineClaimGaps, returnedEngineEvidence: rawReturnedEngineEvidence, engineClaimFact, unresolvedReportEngineClaimGaps,
   unresolvedEngineClaimGaps } = require("../dist/engine-claim-anchoring");
 const raw = require("./fixtures/review-reasoning-1792916809646.json");
 const assistant = text => ChatMessage.create("assistant", text);
@@ -153,3 +153,5 @@ test("report review defaults on and preserves explicit off", () => {
   assert.equal(config('on').reportReviewMode, 'on');
   assert.equal(config('off').reportReviewMode, 'off');
 });
+
+function returnedEngineEvidence(messages) { return rawReturnedEngineEvidence(require("./helpers/returned-sources.cjs").ledgerView(messages)); }

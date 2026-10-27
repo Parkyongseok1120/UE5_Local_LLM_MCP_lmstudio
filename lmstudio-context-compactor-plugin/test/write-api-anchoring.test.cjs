@@ -8,7 +8,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { ChatMessage } = require("@lmstudio/sdk");
-const { unverifiedWriteApis, writeApiFact } = require("../dist/write-api-anchoring");
+const { unverifiedWriteApis: rawUnverifiedWriteApis, writeApiFact } = require("../dist/write-api-anchoring");
 
 function exchange(messages, id, name, args, result) {
   messages.push(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
@@ -64,3 +64,5 @@ test("edit hunks contribute only their added lines, and failed or read-only roun
   assert.deepEqual(unverifiedWriteApis([]), []);
   assert.equal(writeApiFact([]), null);
 });
+
+function unverifiedWriteApis(messages) { return rawUnverifiedWriteApis(messages, require("./helpers/returned-sources.cjs").ledgerView(messages)); }

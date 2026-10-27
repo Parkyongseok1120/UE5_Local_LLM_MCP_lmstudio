@@ -8,7 +8,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { ChatMessage } = require("@lmstudio/sdk");
-const { observedCodeTokens, packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines,
+const { observedCodeTokens, packetQuoteMismatches, quoteAnchoringNotice, quoteCheckFact, returnedSourceLines: rawReturnedSourceLines,
   validatePackets } = require("../dist/quote-anchoring");
 
 function exchange(messages, id, name, args, result) {
@@ -276,7 +276,8 @@ test("a partial byte read ending at a newline cannot overwrite the next known li
 // The 2026-10-24 audit said it checked "전체 소스(21개 파일)": 21 was a search's
 // filesScanned. Bodies were returned for 15 project files.
 test("a claimed file count above the returned bodies gets a coverage footer", () => {
-  const { fileCoverageNotice } = require("../dist/quote-anchoring");
+  const { fileCoverageNotice: rawFileCoverageNotice } = require("../dist/quote-anchoring");
+  const fileCoverageNotice=(messages,answer)=>rawFileCoverageNotice(require("./helpers/returned-sources.cjs").ledgerView(messages),answer);
   const messages = returned();
   exchange(messages, "s1", "search_files", { query: "FireRate" }, { ok: true, filesScanned: 21, results: [] });
   exchange(messages, "e1", "read_file_range", { path: "engine://Engine/Source/Runtime/Engine/Private/Actor.cpp" }, {
@@ -288,3 +289,5 @@ test("a claimed file count above the returned bodies gets a coverage footer", ()
   for (const answer of ["2개 파일을 확인했습니다.", "전체 소스를 확인했습니다.", "P3 3개 항목입니다."])
     assert.equal(fileCoverageNotice(messages, answer), null, answer);
 });
+
+function returnedSourceLines(messages) { return rawReturnedSourceLines(require("./helpers/returned-sources.cjs").ledgerView(messages)); }

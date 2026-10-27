@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@lmstudio/sdk";
-import { toolMemory } from "./context-ports";
+import type { ReturnedSources } from "./context-ports";
 import { bundledEngineClaimFacts } from "./generated-design-guidance";
 import { returnedSourceLines } from "./quote-anchoring";
 import { REJECTED, FINDING } from "./review-patterns.js";
@@ -12,14 +12,13 @@ import { REJECTED, FINDING } from "./review-patterns.js";
 // handed the contract statement and the range to read. Advisory: nothing here
 // blocks, rewrites a result, or decides whether the claim is right.
 
-const LOOKUP_TOOL = "unreal_symbol_lookup";
 const GATED_SEVERITIES = new Set(["P0", "P1"]);
 const ENGINE_URI = /^engine:\/\//i;
 const MAX_REPORTED = 3;
 
 type EngineClaimFact = (typeof bundledEngineClaimFacts)[number];
 export type EngineClaimGap = { claimPath: string; severity: string; factId: string; contractSet: string;
-  engineVersions: readonly string[]; statement: string; evidence: string[] };
+  engineVersions: readonly string[]; statement: string; evidence: string[]; scope?:"execution"|"conversation" };
 
 const catalogue = bundledEngineClaimFacts.map(fact => ({ fact, markers: fact.claimMarkers.map(marker => new RegExp(marker, "iu")) }));
 
@@ -30,21 +29,10 @@ const evidenceLabel = (ref: EngineClaimFact["evidenceRefs"][number]) => `${ref.p
 
 /** Engine source this execution actually returned: engine:// file lines, and
  * the contract ids an engine_local lookup attached to its result. */
-export function returnedEngineEvidence(messages: ChatMessage[]) {
-  const files = returnedSourceLines(messages).filter(file => ENGINE_URI.test(file.path))
-    .map(file => ({ path: enginePath(file.path), text: [...file.lines.values()].join("\n") }));
-  const names = new Map<string, string>();
-  const contractIds = new Set<string>();
-  for (const message of messages) {
-    for (const request of message.getToolCallRequests()) names.set(String(request.id || ""), request.name);
-    for (const result of message.getToolCallResults()) {
-      if (names.get(String(result.toolCallId || "")) !== LOOKUP_TOOL) continue;
-      const value = toolMemory.decodeToolResultRecord((result as { content?: unknown }).content).value as Record<string, any> | undefined;
-      const items = value?.relatedContracts?.items;
-      if (Array.isArray(items)) for (const item of items) if (typeof item?.id === "string") contractIds.add(item.id);
-    }
-  }
-  return { files, contractIds };
+export function returnedEngineEvidence(source: ReturnedSources) {
+  const files = returnedSourceLines(source).filter(file => ENGINE_URI.test(file.path))
+    .map(file => ({ path: enginePath(file.path), text: [...file.lines.values()].join("\n"),completeText:file.completeText }));
+  return { files, contractIds:source.contractIds, scope:source.scope,complete:source.complete };
 }
 type ReturnedEngineEvidence = ReturnType<typeof returnedEngineEvidence>;
 
@@ -74,6 +62,10 @@ function backed(fact: EngineClaimFact, claim: Record<string, any>, evidence: Ret
   return Array.isArray(claim.evidence) && claim.evidence.some((item: any) => item?.kind === "framework_source"
     && typeof item.location === "string" && fileRead(evidence, item.location).length > 0);
 }
+// A bounded text cache cannot prove absence. Suppress a missing-source notice
+// when delivery is recorded but its text is unavailable; this grants no fact proof.
+const textUnavailable = (fact:EngineClaimFact,evidence:ReturnedEngineEvidence) => evidence.complete===false
+  || fact.evidenceRefs.some(ref=>fileRead(evidence,ref.path).some(file=>file.completeText===false));
 
 /** P0/P1 claims of one packet whose wording touches an engine fact that no
  * returned engine source backs. Only facts of the resolved project engine apply. */
@@ -85,9 +77,9 @@ export function packetEngineClaimGaps(packet: unknown, evidence: ReturnedEngineE
     if (!claim || typeof claim !== "object" || !GATED_SEVERITIES.has(String(claim.severity))) return;
     const text = claimText(claim);
     for (const { fact, markers } of catalogue) {
-      if (fact.engine !== engine || !markers.some(marker => marker.test(text)) || backed(fact, claim, evidence)) continue;
+      if (fact.engine !== engine || !markers.some(marker => marker.test(text)) || textUnavailable(fact,evidence) || backed(fact, claim, evidence)) continue;
       gaps.push({ claimPath: `claims[${index}]`, severity: String(claim.severity), factId: fact.id, contractSet: fact.contractSet,
-        engineVersions: fact.engineVersions, statement: fact.statement, evidence: fact.evidenceRefs.map(evidenceLabel) });
+        engineVersions: fact.engineVersions, statement: fact.statement, evidence: fact.evidenceRefs.map(evidenceLabel),scope:evidence.scope });
     }
   });
   return gaps;
@@ -147,9 +139,9 @@ export function textEngineClaimGaps(findings: readonly TextFinding[], evidence: 
   const gaps: EngineClaimGap[] = [];
   for (const finding of findings) {
     for (const { fact, markers } of catalogue) {
-      if (fact.engine !== engine || !markers.some(marker => marker.test(finding.text)) || backed(fact, {}, evidence)) continue;
+      if (fact.engine !== engine || !markers.some(marker => marker.test(finding.text)) || textUnavailable(fact,evidence) || backed(fact, {}, evidence)) continue;
       gaps.push({ claimPath: `${kind} "${finding.label}"`, severity: finding.severity, factId: fact.id, contractSet: fact.contractSet,
-        engineVersions: fact.engineVersions, statement: fact.statement, evidence: fact.evidenceRefs.map(evidenceLabel) });
+        engineVersions: fact.engineVersions, statement: fact.statement, evidence: fact.evidenceRefs.map(evidenceLabel),scope:evidence.scope });
     }
   }
   return gaps;
@@ -162,7 +154,7 @@ export function reportEngineClaimNotice(report: EngineClaimGap[], progress: Engi
   const firstSentence = (statement: string) => statement.split(/(?<=\.)\s/)[0];
   const lines = report.slice(0, MAX_REPORTED).map(gap => `- ${gap.claimPath} (${gap.severity}) ↔ \`${gap.factId}\`: ${firstSentence(gap.statement)}`);
   const dropped = retracted.slice(0, MAX_REPORTED).map(gap => `- 중간 진행 문장 ${gap.claimPath} ↔ \`${gap.factId}\`: 최종 보고에는 남지 않았습니다.`);
-  return ["", "", "[엔진 동작 근거 · 보고서] 아래 지적은 엔진 동작에 기대지만, 이번 실행은 해당 엔진 소스를 반환하지 않았습니다. "
+  return ["", "", `[엔진 동작 근거 · 보고서] 아래 지적은 엔진 동작에 기대지만, 이번 ${[...report,...progress].some(g=>g.scope === "conversation") ? "대화에서" : "실행은"} 해당 엔진 소스를 반환하지 않았습니다. `
     + "엔진 계약 문장과 표현을 대조한 결과이며 사실 판정이 아닙니다.", ...lines, ...dropped].join("\n");
 }
 
@@ -194,7 +186,7 @@ export function engineClaimFact(gaps: EngineClaimGap[]): string | null {
   const more = gaps.length > MAX_REPORTED ? [`- ${gaps.length - MAX_REPORTED} more not listed`] : [];
   return [
     `Runtime evidence observation: ${gaps.length} assistant claim(s) use wording that depends on engine behavior, `
-      + "and no engine source returned in this execution backs it.",
+      + `and no engine source returned in this ${gaps.some(g=>g.scope === "conversation") ? "conversation" : "execution"} backs it.`,
     ...listed, ...more,
     "This names a catalogued engine fact the claim's wording touches; it is not a verdict on the claim, and a passed packet "
       + "validation does not check it. Before reporting the claim at P0/P1, read that engine range on the project's engine "
@@ -209,6 +201,6 @@ export function engineClaimNotice(gaps: EngineClaimGap[]): string | null {
   if (!gaps.length) return null;
   const listed = gaps.slice(0, MAX_REPORTED).map(gap => `- ${gap.claimPath} (${gap.severity}) ↔ \`${gap.factId}\`: ${gap.evidence[0]}`);
   const more = gaps.length > MAX_REPORTED ? [`- 외 ${gaps.length - MAX_REPORTED}건`] : [];
-  return ["", "", `[엔진 동작 근거] 마지막 근거 패킷의 P0/P1 지적 ${gaps.length}건이 엔진 동작에 기대지만, 이번 실행은 해당 엔진 소스를 반환하지 않았습니다. `
+  return ["", "", `[엔진 동작 근거] 마지막 근거 패킷의 P0/P1 지적 ${gaps.length}건이 엔진 동작에 기대지만, 이번 ${gaps.some(g=>g.scope === "conversation") ? "대화에서" : "실행은"} 해당 엔진 소스를 반환하지 않았습니다. `
     + "엔진 계약 문장과 표현을 대조한 결과이며 사실 판정이 아닙니다. 해당 지적은 엔진 구현을 확인한 뒤 판단해야 합니다.", ...listed, ...more].join("\n");
 }

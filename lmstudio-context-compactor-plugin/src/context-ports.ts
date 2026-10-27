@@ -106,6 +106,9 @@ export type LedgerEntry = { path: string; key: string; sourceKey?: string; sourc
   duplicatedChars: number; archivePages: number; checks: Array<{ check: string; round: number | null; claim?: string }>;
   archiveRef?: { evidenceId: string; version: string } };
 export type ReadLedgerLike = {
+  recordReturnedSource(value: Record<string, unknown>, resultKind: string, executionId?: string, authority?: {contractLookup?:boolean}): void;
+  returnedSource(sourceKey: string, span: [number,number], executionId?: string): {returned:boolean;via:"body"|"search_hit"|"archive_page";scope:"execution"|"conversation"};
+  returnedSources(executionId?: string): ReturnedSources;
   readonly size: number;
   get(path: string, sourceVersion: string, sourceKey?: string): LedgerEntry | null;
   latestFor(path: string, sourceKey?: string): LedgerEntry | null;
@@ -125,6 +128,8 @@ export type ReadLedgerLike = {
   toJSON(): Record<string, unknown>;
   load(value: unknown): boolean;
 };
+export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean}>;
+  contractIds:Set<string>;scope:"execution"|"conversation";complete?:boolean};
 export const readLedgerModule = require("./read-ledger.js") as {
   ReadLedger: new () => ReadLedgerLike;
   verifiedReadFacts(value: unknown): ReadFacts | null;

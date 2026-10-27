@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@lmstudio/sdk";
-import { toolMemory } from "./context-ports";
+import { toolMemory, type ReturnedSources } from "./context-ports";
 import { returnedSourceLines } from "./quote-anchoring";
 import { namesForRole } from "./tool-capability-core.js";
 
@@ -45,7 +45,7 @@ function addedText(name: string, args: Record<string, any>, value: Record<string
 }
 
 /** Engine names that this execution's edits add and that no returned source shows. */
-export function unverifiedWriteApis(messages: ChatMessage[]): UnverifiedApi[] {
+export function unverifiedWriteApis(messages: ChatMessage[], source: ReturnedSources = {files:[],contractIds:new Set(),scope:"execution"}): UnverifiedApi[] {
   const requests = new Map<string, { name: string; args: Record<string, any> }>();
   const added: Array<{ path: string; text: string }> = [];
   const lookups: string[] = [];
@@ -60,14 +60,14 @@ export function unverifiedWriteApis(messages: ChatMessage[]): UnverifiedApi[] {
       else if (LOOKUP_TOOLS.has(request.name)) lookups.push(JSON.stringify(value));
     }
   }
-  return unverifiedAddedApis(messages, added, lookups);
+  return unverifiedAddedApis(source, added, lookups);
 }
 
-function unverifiedAddedApis(messages: ChatMessage[], added: Array<{path: string; text: string}>, lookups: string[], strictMembers = false): UnverifiedApi[] {
+function unverifiedAddedApis(source: ReturnedSources, added: Array<{path: string; text: string}>, lookups: string[], strictMembers = false): UnverifiedApi[] {
   if (!added.length) return [];
   // Files this execution creates or edits are project files, not engine names.
   const editedFiles = added.map(({ path }) => path.replace(/\\/g, "/").split("/").pop() || "").filter(Boolean);
-  const files = returnedSourceLines(messages);
+  const files = returnedSourceLines(source);
   const project = files.filter(file => !/^engine:\/\//i.test(file.path)).map(file => [...file.lines.values()].join("\n")).join("\n");
   const engine = files.filter(file => /^engine:\/\//i.test(file.path)).map(file => `${file.path}\n${[...file.lines.values()].join("\n")}`).join("\n");
   const seen = `${project}\n${engine}\n${lookups.join("\n")}`;
@@ -117,7 +117,8 @@ export function writeApiFact(unverified: UnverifiedApi[]): string | null {
 
 /** Proposed snippets are not edits and inherit no successful-build claim.
  * Reuse API name checks, but require an owner-qualified declaration/reference. */
-export function suggestedCodeNotice(messages: ChatMessage[], answer: string, engine: string): string | null {
+export function suggestedCodeNotice(messages: ChatMessage[], answer: string, engine: string,
+  source: ReturnedSources = {files:[],contractIds:new Set(),scope:"execution"}): string | null {
   if (engine !== "unreal") return null;
   const added: Array<{path: string; text: string}> = [];
   for (const match of answer.matchAll(/```(?:cpp|c\+\+|cxx|h)\s*\n([\s\S]*?)```/giu)) {
@@ -134,7 +135,7 @@ export function suggestedCodeNotice(messages: ChatMessage[], answer: string, eng
     added.push({path:`suggestion ${added.length + 1}`,text:code});
   }
   if (!added.length) return null;
-  const apis = unverifiedAddedApis(messages, added, [], true);
+  const apis = unverifiedAddedApis(source, added, [], true);
   return ["", "", `[제안 코드 검증 범위] C++ 예시 ${added.length}개는 별도 컴파일하지 않은 제안입니다. 선언 이름의 대조는 타입·수신 객체·단위·수명 및 실제 동작 검증을 대신하지 않습니다.`,
     ...apis.slice(0, MAX_REPORTED).map(api => `- ${api.path}: ${api.name} — 반환된 소스에서 이 소유 타입의 선언을 확인하지 못했습니다.`)].join("\n");
 }
