@@ -16,7 +16,7 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
@@ -177,14 +177,7 @@ export function createPredictionLoopHandler(
       }))),
       fullToolCount: modelTools.length,
       toolProfile: config.auditCompletionMode === "bounded" ? "bounded_audit" : readOnlyReview ? "read_only_review" : "full",
-      contextManagementMode: config.contextManagementMode,
-      configuredWorkingInputTargetTokens: config.workingInputTargetTokens,
-      configuredWorkingInputTriggerTokens: config.workingInputTriggerTokens,
-      configuredSoftRemainingTokens: config.softRemainingTokens,
-      configuredHardRemainingTokens: config.hardRemainingTokens,
-      configuredMaxOutputReserve: config.maxOutputReserve,
-      configuredSafetyMarginTokens: config.safetyMarginTokens,
-      configuredFallbackContextLength: config.assumedContextLength,
+      ...runtimeConfigTelemetry(config),
     });
     const scopeInstructions = config.observeOnly ? [] : [
       ...(scope.availableUnityTools + scope.availableUnrealTools > 0
@@ -229,6 +222,10 @@ export function createPredictionLoopHandler(
     };
     const restoredWindowApplied = restoredWindow?.reason === "restored_remeasure_required";
     let workingHistory = restoredWindow?.history || originalHistory;
+    // Execution-owned: a current-turn checkpoint must not erase the previous
+    // review's targets before the mutation has consumed their source bodies.
+    const priorMutationTargets = ["mutate", "build"].includes(objective.kind)
+      ? workingContextModule.mutationTargetsFromHistory(workingHistory) : [];
     if (workingContext && config.showDebugInfo) ctl.debug({
       event: "working_context_restore",
       executionId,
@@ -250,7 +247,7 @@ export function createPredictionLoopHandler(
     const contextManager = new ContextManager(config, budgetBroker, { changeOrigin: evidenceManager.changeOrigin,
       reviewRegisterItems: () => reviewRegister.rows.length ? reviewRegister.lines() : null },
       history => workingContext?.pendingResultIndexes(history) || [],
-      (history, maxChars) => workingContext?.pinnedResultIndexes(history, maxChars) || []);
+      (history, maxChars, metadata) => workingContext?.pinnedResultIndexes(history, maxChars, metadata) || []);
     const deliveryController = terminalOwner = new DeliveryController(allModelTools, objective);
     const recoveryCoordinator = execution.recovery;
     let mutationTools: RemoteToolLike[] = [];
@@ -437,6 +434,8 @@ export function createPredictionLoopHandler(
         }
         const postProjectionHistory = Chat.from(workingHistory);
         const prepared = await prepareRoundInput({
+          objective, mutationTargets:[...priorMutationTargets, ...reviewRegister.rows.filter(row=>row.status==="found" && row.bundle?.path)
+            .map(row=>({path:row.bundle!.path,sourceKey:row.bundle!.sourceKey}))],
           ctl, config, tokenSource, contextManager, evidenceManager, workingContext,
           workingHistory, visibleHistory, preProjectionHistory, postProjectionHistory,
           roundTools, modelTools, roundScopeInstructions, scopeInstructions, roundOutputReserve,

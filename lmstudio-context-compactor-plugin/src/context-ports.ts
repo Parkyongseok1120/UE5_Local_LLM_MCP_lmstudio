@@ -44,6 +44,7 @@ export const modelNotes = require("./continuity-model-notes.js") as {
 };
 
 export const workingContextModule = require("./working-context.js") as {
+  mutationTargetsFromHistory(history: Chat): Array<{path:string;sourceKey?:string}>;
   exchangeIndex(history: Chat): { matches: Map<string, ToolCallRequest>; ambiguous: boolean };
   WorkingContext: new (scope: Record<string, string>, options?: Record<string, unknown>) => {
     archive: { stats: Record<string, number> };
@@ -69,7 +70,7 @@ export const workingContextModule = require("./working-context.js") as {
     close(): boolean;
     captureExposure(history: Chat, modelInputId: string, completed?: boolean): void;
     pendingResultIndexes(history: Chat): number[];
-    pinnedResultIndexes(history: Chat, maxChars: number): number[];
+    pinnedResultIndexes(history: Chat, maxChars: number, metadata?: Record<string,unknown>): number[];
     archiveConversationProse(history: Chat, retainedIndexes?: number[]): number;
     releaseOmittedPending(history: Chat): string[];
     captureReturned(history: Chat, observation: (request: ToolCallRequest) => boolean, metadata?: Record<string, unknown>): number;

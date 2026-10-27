@@ -578,7 +578,7 @@ export class ContextManager {
     readonly requiredIndexes: (history: Chat) => number[] = () => [],
     /** Indexes a candidate keeps while it still reaches the target (the pinned
      * working set within maxChars); candidates without them follow. */
-    readonly preferredIndexes: (history: Chat, maxChars: number) => number[] = () => []) { }
+    readonly preferredIndexes: (history: Chat, maxChars: number, metadata?:Record<string,unknown>) => number[] = () => []) { }
   /** Exact measurements are deterministic per execution/model handle. */
   readonly measurementCache = new Map<string, ContextMeasurement>();
   /** reservedTokens: material this round will add after the evidence window
@@ -678,7 +678,8 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
    * here saves a rewrite a few rounds later. Unlike force, an unmet target does
    * not block a round whose input already fits under high water. */
   async enforceLowWater(history: Chat, assemble: (history: Chat) => Promise<AssembledInput>,
-    options: { force?: boolean; deepen?: boolean; hasReadTools: boolean; minimumReadTokens?: number }) {
+    options: { force?: boolean; deepen?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
+      pinnedWorkingSetMaxChars?:number; pinMetadata?:Record<string,unknown> }) {
     const before = await assemble(history);
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
       || before.measurement.contextLengthSource !== "model") {
@@ -711,7 +712,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         maxCheckpointChars: Math.max(2000, Math.floor(this.config.maxCheckpointChars * ratio)) } }));
       // The reads the turn is still reasoning about survive a cut of older
       // exchanges first; re-paging them costs a round each (2026-10-25 run).
-      const preferred = this.preferredIndexes(history, this.broker.pinnedWorkingSetChars(water))
+      const preferred = this.preferredIndexes(history, options.pinnedWorkingSetMaxChars ?? this.broker.pinnedWorkingSetChars(water),options.pinMetadata)
         .filter(index => !requiredIndexes.includes(index));
       const pinnedRequired = [...requiredIndexes, ...preferred];
       const pinnedVariants = preferred.length ? [...exchangeCaps, ...checkpointBudgets].map(choice => ({
@@ -719,9 +720,10 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       // Most-retaining first: keep the last one or two complete user turns
       // verbatim before collapsing every earlier turn into the checkpoint.
       const candidates: Array<{ name: string; recentTurns?: number; options: Record<string, unknown> }> = [
+        ...pinnedVariants,
         ...[2, 1].map(recentTurns => ({ name: `recent_turns_${recentTurns}`, recentTurns, options: {
           checkpointPolicy: "bounded", maxCheckpointChars: this.config.maxCheckpointChars } })),
-        ...pinnedVariants, ...exchangeCaps, ...checkpointBudgets,
+        ...exchangeCaps, ...checkpointBudgets,
         { name: "mandatory_floor", options: { maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" } },
       ];
       // Complete exchanges are indivisible. Never assume token sizes are monotone.

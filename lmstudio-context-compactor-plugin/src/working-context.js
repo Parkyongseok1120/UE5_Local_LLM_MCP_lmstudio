@@ -13,7 +13,8 @@ const evidenceIdentity = require("./evidence-identity.js");
 const { exchangeIndex } = require("./tool-exchange-index.js");
 const { retainInterruptedCalls } = require("./interrupted-calls.js");
 const { canonicalTranscript } = require("./transcript-canonical.js");
-const { retainVisibleResponse } = require("./continuity-assistant-evidence.js");
+const { retainVisibleResponse, extractPriorAssistantEvidence, mergePriorAssistantEvidence } = require("./continuity-assistant-evidence.js");
+const { extractPriorContinuityState } = require("./continuity-memory.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
 const { sourceOutline } = require("./source-outline.js");
 const { ReadLedger, archivePageFacts, readFacts, pathKey } = require("./read-ledger.js");
@@ -97,6 +98,7 @@ function rawExposureKey(request, result, originalEnvelope) {
 // of 13 files the review had already read in full).
 const PINNED_MAX_EDITED_FILES = 3;
 const PINNED_DEFAULT_MAX_CHARS = 6144;
+const PIN_CITATION = /((?:[a-zA-Z][a-zA-Z0-9+.-]*:\/\/|[a-zA-Z]:[/\\])?[\w./\\-]+\.(?:h|hh|hpp|hxx|inl|c|cc|cpp|cxx|cs|ini|md|json|ts|js|py))(?::(\d+)(?:\s*-\s*(\d+))?)?\b/g;
 // The body fields evidenceBodyView reads: Unreal returns content, Unity text.
 const READ_BODY_FIELDS = ["content", "text", "body", "code"];
 const EDIT_PROVIDERS = ["mcp/unity-tools", "mcp/unreal-agent"];
@@ -115,7 +117,15 @@ function completedEdit(parsed, provider) {
  * file (2026-10-25 run: nine rounds of restored pages were cut by the next
  * compaction and restored again). Each returned page is its own candidate
  * (Unity reads a file in pages); only pages of the file's newest version are
- * kept. metadata.readUse(pathKey) ranks files the turn already went back to. */
+ * kept. Provider/project/root-qualified source keys keep distinct files apart. */
+function mutationTargetsFromHistory(history) {
+  const normalized = history.getMessagesArray().map(m => ({role:m.getRole(),text:m.getText()}));
+  const prior = mergePriorAssistantEvidence(extractPriorContinuityState(normalized) || {}, extractPriorAssistantEvidence(normalized));
+  return (prior?.currentTurnFindings?.items || [])
+    .filter(line => typeof line === "string" && !/\bcleared\b|기각|해소됨/u.test(line))
+    .flatMap(line => [...line.matchAll(PIN_CITATION)].flatMap(match => match[1] ? [{path:pathKey(match[1])}] : []));
+}
+
 function pinnedWorkingSet(messages, index, metadata = {}) {
   const budget = Math.max(0, Number(metadata.pinnedWorkingSetMaxChars ?? PINNED_DEFAULT_MAX_CHARS));
   const pinned = new Map();
@@ -123,26 +133,50 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
   const edited = new Set(), reads = new Map(), versions = new Map();
   let sequence = 0;
   const turnStart = messages.findLastIndex(message => message.getRole() === "user");
+  const mutation = ["mutate","build"].includes(metadata.objectiveKind);
+  const mutationTargets = mutation ? [...(metadata.mutationTargets || []),
+    ...mutationTargetsFromHistory({getMessagesArray:()=>messages})] : [];
+  const matchesPath=(path,target)=>pathKey(path)===pathKey(target) || pathKey(path).endsWith('/'+pathKey(target));
+  const unresolved = (metadata.unresolvedClaims || []).flatMap(claim => {
+    const value = typeof claim === "string" ? { statement: claim } : claim;
+    const citations = [...String(value.statement || value.location || "").matchAll(PIN_CITATION)]
+      .filter(match => match[1]).map(match => ({ path: match[1],
+        lines: match[2] ? [Number(match[2]), Number(match[3] || match[2])] : null }));
+    const targets = citations.length ? citations : value.path ? [{ path: value.path, lines: value.lines || value.span || null }] : [];
+    return targets.map(target => ({ ...value, ...target }));
+  });
+  const overlaps = (a,b) => Array.isArray(a) && Array.isArray(b) && a[0] <= b[1] && b[0] <= a[1];
+  const priorityOf=(facts,request)=>mutationTargets.some(t=>t.sourceKey?t.sourceKey===facts.sourceKey:matchesPath(facts.path,t.path))?2
+    :unresolved.some(target => {
+      if (!(target.sourceKey ? target.sourceKey === facts.sourceKey : matchesPath(facts.path,target.path))) return false;
+      if (target.sha256 && String(facts.sourceVersion).toLowerCase() !== String(target.sha256).toLowerCase()) return false;
+      if (target.lines) return overlaps(facts.lines,target.lines);
+      if (target.bytes) return overlaps(facts.bytes,target.bytes);
+      if (target.refs?.length) return target.refs.some(ref => String(ref).replace(/^tool-call:/, "") === request.id);
+      return true;
+    })?1:0;
   messages.forEach((message, messageIndex) => message.getToolCallResults().forEach((result, resultIndex) => {
-    if (messageIndex <= turnStart) return;
     const request = index.matches.get(`${messageIndex}:${resultIndex}`);
     if (!request) return;
     const envelope = serializedResultContent(result.content);
     const parsed = decodeToolResultRecord(envelope).value;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.ok === false) return;
-    if (completedEdit(parsed, metadata.toolProviders?.[request.name])) {
+    const observed = evidenceIdentity.normalizeObservation(parsed,request,metadata.toolProviders?.[request.name] || parsed.provider || "");
+    if (messageIndex > turnStart && completedEdit(parsed, metadata.toolProviders?.[request.name])) {
       [parsed.path, ...(Array.isArray(parsed.files) ? parsed.files.map(file => file?.path) : [])]
-        .filter(value => typeof value === "string" && value).forEach(value => edited.add(pathKey(value)));
+        .filter(value => typeof value === "string" && value).forEach(path => edited.add(evidenceIdentity.fileSourceKey({...observed,path})));
       return;
     }
     if (!READ_BODY_FIELDS.some(field => typeof parsed[field] === "string")) return;
-    const facts = parsed.kind === "historical_evidence_range" ? archivePageFacts(parsed) : readFacts(parsed);
+    const facts = parsed.kind === "historical_evidence_range" ? archivePageFacts(parsed) : readFacts(observed);
     if (!facts || (!facts.lines && !facts.bytes)) return;
-    const key = `${facts.key}\u0000${JSON.stringify([facts.lines, facts.bytes])}`;
+    const sourceKey = facts.sourceKey || evidenceIdentity.fileSourceKey(observed), priority=priorityOf({...facts,sourceKey},request);
+    if(messageIndex <= turnStart && !priority)return;
+    const key = `${sourceKey}\u0000${JSON.stringify([facts.lines, facts.bytes])}`;
     reads.delete(key);
-    reads.set(key, { file: facts.key, version: facts.sourceVersion, complete: facts.complete === true && !facts.partialPage,
+    reads.set(key, { file: sourceKey, path:facts.path,priority, version: facts.sourceVersion, complete: facts.complete === true && !facts.partialPage,
       key: `${messageIndex}:${resultIndex}`, messageIndex, size: envelope.length, sequence: sequence++ });
-    versions.set(facts.key, facts.sourceVersion);
+    versions.set(sourceKey, facts.sourceVersion);
   }));
   // A complete read of a version supersedes its partial windows: pinning
   // those too spent the budget on copies (2026-10-25 run, r11: three reads of
@@ -157,13 +191,13 @@ function pinnedWorkingSet(messages, index, metadata = {}) {
     return [...cited.keys()].some(key => key.startsWith("stem:") ? namesMatch(key.slice(5), stem) : namesMatch(key, own));
   };
   const useOf = file => Number(metadata.readUse?.(file)) || 0;
-  // A file whose judgments are all closed with their evidence is not still
-  // under investigation: it yields its pin to the files that are.
+  // Objective targets precede unresolved claims, then citations/re-reads/recency.
+  // The selected result's real envelope size must fit the shared pin allowance.
   const candidates = [...reads.values()]
-    .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file))
+    .filter(read => read.version === versions.get(read.file) && (!edited.size || edited.has(read.file) || read.priority>0)
 )
-    .map(read => ({ ...read, cited: isCited(read.file), use: useOf(read.file) }))
-    .sort((a, b) => Number(b.cited) - Number(a.cited) || b.use - a.use || b.sequence - a.sequence);
+    .map(read => ({ ...read, cited: isCited(read.path), use: useOf(read.file) }))
+    .sort((a, b) => b.priority-a.priority || Number(b.cited) - Number(a.cited) || b.use - a.use || b.sequence - a.sequence);
   const pinnedFiles = new Set();
   let used = 0;
   for (const read of candidates) {
@@ -490,17 +524,17 @@ class WorkingContext {
 
   /** Message indexes of the current turn's pinned working-set reads, which a
    * compaction candidate keeps when its target still allows them. */
-  pinnedResultIndexes(history, maxChars) {
+  pinnedResultIndexes(history, maxChars, metadata = {}) {
     const index = exchangeIndex(history);
     if (index.ambiguous) return [];
     return [...new Set(pinnedWorkingSet(history.getMessagesArray(), index,
-      { pinnedWorkingSetMaxChars: maxChars, readUse: key => this.readUse(key) }).values())];
+      { ...metadata, pinnedWorkingSetMaxChars: maxChars, readUse: key => this.readUse(key) }).values())];
   }
 
   /** How often this conversation went back to a file (re-reads, UNCHANGED
    * repeats, archive pages): the reads it evidently still needs. */
   readUse(key) {
-    return this.readLedger.entries().filter(entry => entry.key === key)
+    return this.readLedger.entries().filter(entry => (entry.sourceKey || entry.key) === key)
       .reduce((total, entry) => total + Math.max(0, entry.deliveries - 1) + entry.archivePages + entry.redundant, 0);
   }
 
@@ -1220,4 +1254,4 @@ function validateSemanticNote(text, refs, generation, parentWindow) {
   } catch { return null; }
 }
 
-module.exports = { WorkingContext, serialize, deserialize, exchangeIndex, validateSemanticNote, hash };
+module.exports = { WorkingContext, serialize, deserialize, exchangeIndex, validateSemanticNote, hash, mutationTargetsFromHistory };

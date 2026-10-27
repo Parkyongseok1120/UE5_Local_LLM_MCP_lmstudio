@@ -77,6 +77,31 @@ test("v3 projectionExhausted is measured after low-water compaction", async () =
   } finally { wc.close(); }
 });
 
+test("v3 61029 input keeps pins before optional 5523 guidance at high water 63626", async()=>{
+ const config=configFor({workingInputScaling:'fixed',workingInputTargetTokens:48000,workingInputTriggerTokens:63626,designGuidanceMode:'core',designGuidanceMaxTokens:6000});
+ const history=Chat.from([{role:'user',content:'Fix the found file'}]),wc=store();
+ history.append(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{type:'function',id:'pin',name:'read_file',arguments:{path:'Source/Pinned.cpp'}}}]}));
+ history.append(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'pin',content:JSON.stringify({ok:true,path:'Source/Pinned.cpp',sha256:'a'.repeat(64),startLine:1,endLine:1,totalLines:1,content:'void PinnedSource() {}'})}]}));
+ const broker=new BudgetBroker(config);let pinDecisions=0,projections=0;
+ const original=broker.pinnedWorkingSetChars.bind(broker);broker.pinnedWorkingSetChars=w=>{pinDecisions++;return original(w)};
+ const cm=new ContextManager(config,broker),em=new EvidenceManager(wc,[{name:'read_file',pluginIdentifier:'mcp/unreal-agent'}]);
+ const oldProject=em.project.bind(em);em.project=(...args)=>{projections++;return oldProject(...args)};
+ const source={async getContextLength(){return 84224},async applyPromptTemplate(chat){return chat.toString()},async countTokens(text){return text.includes('GUIDANCE_SENTINEL')?66552:61029}};
+ try{
+  const {result,byEvent}=await prepare(config,history,wc,{tokenSource:source,contextManager:cm,evidenceManager:em,
+   objective:{kind:'mutate',requiredEffects:new Set(['read','mutation']),mutationState:'none'},
+   mutationTargets:[{path:'Source/Pinned.cpp'}],
+   guidanceRetention:{kept:{ids:['fixture'],instruction:'GUIDANCE_SENTINEL',selectionScope:'unscoped',tokens:5523}}});
+  assert.equal(result.kind,'ready');assert.equal(projections,0,'guidance alone cannot start pin release');assert.equal(pinDecisions,1);
+  assert.match(result.modelInput.toString(),/void PinnedSource/);
+  assert.equal(byEvent('design_guidance_input')[0].reason,'sticky_dropped');
+  const base={measurement:result.finalMeasurement,modelInput:result.modelInput};
+  const guide=await cm.addOptionalReferences(base,[{ids:['fixture'],instruction:'optional'}],async()=>({...base,measurement:{...base.measurement,inputTokens:66552}}),
+    {maxAddedTokens:6000,hasReadTools:true,minimumReadTokens:4096,guardAbort(){},admissionWater:'high'});
+  assert.notEqual(guide.telemetry.reason,'included');assert.equal(guide.assembled,base);
+ }finally{wc.close();}
+});
+
 test("a projection that settles below the midpoint keeps the conversation", async () => {
   const config = configFor();
   const w = water(config);
@@ -103,7 +128,7 @@ test("a projection that settles below the midpoint keeps the conversation", asyn
   } finally { wc.close(); }
 });
 
-test("a retained instruction that no longer fits compacts in the same rewrite", async () => {
+test("v3 optional retained instruction cannot force a working-set rewrite", async () => {
   const config = configFor();
   const w = water(config);
   const history = withProse(Chat.from([{ role: "user", content: "Review the replication contracts" }]),
@@ -114,12 +139,10 @@ test("a retained instruction that no longer fits compacts in the same rewrite", 
   try {
     const { result, byEvent } = await prepare(config, history, wc, { guidanceRetention });
     assert.equal(result.kind, "ready");
-    const [projection] = byEvent("working_context_projection");
-    assert.equal(projection.changed, false, "nothing to project: only prose");
-    assert.equal(projection.deepenLowWater, true);
+    assert.equal(byEvent("working_context_projection").length, 0);
     const [low] = byEvent("context_low_water");
-    assert.equal(low.disposition, "compacted_to_low",
-      "the rewrite that makes room for the instruction happens now, not one round later");
-    assert.ok(result.finalMeasurement.inputTokens <= w.effectiveLowWaterTokens);
+    assert.equal(low.selectedCandidate, "unchanged");
+    assert.match(result.modelInput.toString(), /progress 0 /u);
+    assert.ok(result.finalMeasurement.inputTokens < w.effectiveHighWaterTokens);
   } finally { wc.close(); }
 });

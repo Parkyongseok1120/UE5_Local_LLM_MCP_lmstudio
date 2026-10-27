@@ -5903,7 +5903,7 @@ test('admitted guidance keeps one system text across rounds, and a dropped one r
 
 // 2026-10-20 run: dropping the instruction alone rebuilt a 55.7k prompt (71.7s)
 // one round before a projection rebuilt it again. One rewrite now does both.
-test('a retained instruction that would cross high water is kept by projecting evidence in the same round', async () => {
+test('v3 optional guidance crossing high water is dropped while source input is retained', async () => {
   const { REASONING_SEPARATOR } = require('../dist/context-budget');
   const systems = [], inputs = [];
   let calls = 0;
@@ -5947,15 +5947,14 @@ test('a retained instruction that would cross high water is kept by projecting e
     { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192, contextManagementMode: 'hybrid' }, [tool]);
   await handlePredictionLoop(ctl);
   const events = ctl.debugValues.filter(e => e.event === 'design_guidance_input');
-  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_kept']);
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped']);
   const projection = ctl.debugValues.find(e => e.event === 'working_context_projection' && e.roundIndex === 2);
-  assert.equal(projection?.changed, true);
-  assert.equal(projection.reasoningBounded, true);
-  assert.equal(systems[2], systems[0]);
+  assert.equal(projection, undefined);
+  assert.notEqual(systems[2], systems[0]);
   assert.match(inputs[1], /OLD_REASONING/);
-  assert.doesNotMatch(inputs[2], /OLD_REASONING/);
+  assert.match(inputs[2], /OLD_REASONING/);
   assert.match(inputs[2], /Reading\./);
-  assert.match(inputs[2], /sp-0/);
+  assert.match(inputs[2], /void L0_0/);
 });
 
 test('a dropped guidance stays out between low and high water instead of alternating', async () => {

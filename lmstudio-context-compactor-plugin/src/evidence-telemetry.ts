@@ -3,13 +3,26 @@ import {
 } from "@lmstudio/sdk";
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
-import { type ContinuityNote } from "./execution-contracts";
+import { type ContinuityNote, type DirectConfig } from "./execution-contracts";
 import type { RecoveryProgress } from "./evidence-manager";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
   "gitTiming",
 ]);
+
+export function runtimeConfigTelemetry(config: DirectConfig) {
+  return {
+    contextManagementMode: config.contextManagementMode,
+    configuredWorkingInputTargetTokens: config.workingInputTargetTokens,
+    configuredWorkingInputTriggerTokens: config.workingInputTriggerTokens,
+    configuredSoftRemainingTokens: config.softRemainingTokens,
+    configuredHardRemainingTokens: config.hardRemainingTokens,
+    configuredMaxOutputReserve: config.maxOutputReserve,
+    configuredSafetyMarginTokens: config.safetyMarginTokens,
+    configuredFallbackContextLength: config.assumedContextLength,
+  };
+}
 
 export function canonicalTelemetryValue(value: unknown, semantic = false): unknown {
   if (Array.isArray(value)) return value.map(item => canonicalTelemetryValue(item, semantic));
