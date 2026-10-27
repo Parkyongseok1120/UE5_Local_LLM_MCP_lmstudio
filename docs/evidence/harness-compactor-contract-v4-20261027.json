@@ -1,0 +1,486 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "v3 C1-C8 execution authority, provider trust, CAS/signatures, archive access, source identity and final exact measurement remain owners of their existing contracts."
+  ],
+  "proposed": [
+    "Implemented v4 C9-C16 in U0-U7 with approved control-case and mandatory rewrite exceptions; U8 documents and packages the evidence."
+  ],
+  "doNotDuplicate": [
+    "Reuse ReadLedger, EvidenceManager, BudgetBroker, ContextManager, prepareRoundInput, PredictionStreamRenderer and SystemPrefixTelemetry. No global workflow manager."
+  ],
+  "invariants": [
+    "Size hints never create authority, coverage, unchanged proof or current body visibility.",
+    "B-layer finishResearch call locations and count and transition-authority tests remain unchanged.",
+    "Optional guidance cannot evict mandatory objective source pins.",
+    "No installation, LM Studio settings changes, push or PR.",
+    "Telemetry never authorizes access or continuation."
+  ],
+  "impactedSurfaces": [
+    "Manifest/generated tool contracts; plugin budget, source ledger, input composition and renderer.",
+    "Unreal direct mutation argument normalization and public schema.",
+    "Analyzer, synthetic tests, contract documents and portable package allowlist."
+  ],
+  "validationPlan": [
+    "Clean plugin build and full suite; all four generators check.",
+    "Unreal agent and Unity node suites; full Python suite under UTF-8 with stable HEAD and artifacts.",
+    "Package document inclusion, link resolution and reproducible ZIP.",
+    "Evidence packet validator checks structure only; real-model W7 remains user-operated."
+  ],
+  "claims": [
+    {
+      "id": "C9",
+      "claim": "Protected main source readers alone define the batch floor; archive policy remains unchanged.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:201",
+          "observation": "Protected main source readers alone define the batch floor; archive policy remains unchanged."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/budget-broker-v4.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:201",
+          "symbol": "C9 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:201",
+          "symbol": "C9 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/budget-broker-v4.test.cjs",
+          "symbol": "C9 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:201",
+          "observation": "Unknown first-read batches may still be rejected by greedy reservations."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C10",
+      "claim": "Trusted returned size observations are scoped estimates for reservations, never source coverage or authority.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:70",
+          "observation": "Trusted returned size observations are scoped estimates for reservations, never source coverage or authority."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/read-ledger-sizehint.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:70",
+          "symbol": "C10 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:70",
+          "symbol": "C10 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/read-ledger-sizehint.test.cjs",
+          "symbol": "C10 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:70",
+          "observation": "A stale size hint cannot prove current content; missing line totals cannot estimate a line range."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C11",
+      "claim": "Elective guidance changes wait for actual rewrites; restored first rounds preserve the previous answer while compacting.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:72",
+          "observation": "Elective guidance changes wait for actual rewrites; restored first rounds preserve the previous answer while compacting."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/round-input-rewrite-policy.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:72",
+          "symbol": "C11 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:72",
+          "symbol": "C11 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/round-input-rewrite-policy.test.cjs",
+          "symbol": "C11 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:72",
+          "observation": "Phase changes, applicability invalidation and budget removal are authorized immediate exceptions with explicit causes."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C12",
+      "claim": "Typed runtime facts are bounded by registry caps and priority; essential facts survive budget pressure and omission notices stay private.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:225",
+          "observation": "Typed runtime facts are bounded by registry caps and priority; essential facts survive budget pressure and omission notices stay private."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/context-manager-runtime-data.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:225",
+          "symbol": "C12 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:225",
+          "symbol": "C12 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/context-manager-runtime-data.test.cjs",
+          "symbol": "C12 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:225",
+          "observation": "Priority-zero data may exceed its allowance; only final exact input measurement authorizes dispatch."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C13",
+      "claim": "Report supplements are limited to review/explain objectives and source-located findings; normalized delivered prefixes are suppressed consistently.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:43",
+          "observation": "Report supplements are limited to review/explain objectives and source-located findings; normalized delivered prefixes are suppressed consistently."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-stream-echo.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:43",
+          "symbol": "C13 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:43",
+          "symbol": "C13 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-stream-echo.test.cjs",
+          "symbol": "C13 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:43",
+          "observation": "The 90-percent prefix rule is a specified heuristic; it does not establish semantic identity of paraphrases."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C14",
+      "claim": "Omitted expectedOccurrences resolves to one through the shared Unreal argument owner; invalid explicit values remain errors.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js:113",
+          "observation": "Omitted expectedOccurrences resolves to one through the shared Unreal argument owner; invalid explicit values remain errors."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/expected-occurrences-default.test.js",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js:113",
+          "symbol": "C14 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js:113",
+          "symbol": "C14 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/expected-occurrences-default.test.js",
+          "symbol": "C14 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-mutation-arguments.js:113",
+          "observation": "Unity server behavior is outside this change and its tree contains no expectedOccurrences identifier."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C15",
+      "claim": "Explain requests without an explicit task topic omit design guidance while explicit-topic requests remain eligible.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:370",
+          "observation": "Explain requests without an explicit task topic omit design guidance while explicit-topic requests remain eligible."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:370",
+          "symbol": "C15 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:370",
+          "symbol": "C15 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs",
+          "symbol": "C15 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:370",
+          "observation": "Objective/topic classification remains the established heuristic; no semantic classifier redesign was made."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    },
+    {
+      "id": "C16",
+      "claim": "Prefix telemetry reuses the exact measured template without additional tokenization or prompt serialization; analyzer joins causes and prefill by round.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:48",
+          "observation": "Prefix telemetry reuses the exact measured template without additional tokenization or prompt serialization; analyzer joins causes and prefill by round."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/telemetry-v3.test.cjs",
+          "observation": "Synthetic regression passed; aggregate results and log aliases are recorded in the companion document."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:48",
+          "symbol": "C16 repository contract entry"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:48",
+          "symbol": "C16 policy owner"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/telemetry-v3.test.cjs",
+          "symbol": "C16 synthetic assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-telemetry.ts:48",
+          "observation": "Exact prefix characters describe submitted inputs, not a measured server KV-cache hit count or latency reduction."
+        }
+      ],
+      "unknowns": [
+        "Real-model W7 follow-up runs, installation state and latency improvement are not measured by this task."
+      ]
+    }
+  ],
+  "limitations": [
+    "Greedy plus floor cannot know total streamed requests; unknown first reads may still be denied.",
+    "Diagnostic guidance may wait until the next actual rewrite; tool-result diagnostic text remains available.",
+    "Long model reasoning and claim-to-fact matching precision remain outside scope.",
+    "No measured prefill or re-read reduction percentage.",
+    "The capacity-27936 U0 case passed before modification and is retained as a control, per user approval; an actual turn-start compaction/batch integration test was added.",
+    "Engine applicability invalidation, phase changes and budget guidance removal remain immediate per user approval."
+  ],
+  "validationResults": {
+    "proofScope": "local source/build/synthetic tests; no v4 real-model W7",
+    "runtimeBuildId": "ef-build-v2-ceab9be45b4d19747ed2c45e8700e757f4cd1839e8ac244cabc6546eef670fd6",
+    "plugin": {
+      "passed": 1180,
+      "failed": 0,
+      "skipped": 0,
+      "baselinePassed": 1131
+    },
+    "agent": {
+      "passed": 370,
+      "failed": 0,
+      "skipped": 2,
+      "baselinePassed": 365
+    },
+    "unity": {
+      "passed": 132,
+      "failed": 0,
+      "skipped": 5,
+      "baselinePassed": 132
+    },
+    "python": {
+      "passed": 1489,
+      "failed": 0,
+      "skipped": 41,
+      "baselinePassed": 1487,
+      "baselineFailed": 0,
+      "durationSeconds": 239.31
+    },
+    "generatedChecks": [
+      "tool-contract",
+      "design-guidance",
+      "unity-tool-contract",
+      "runtime-identity"
+    ],
+    "package": "passed full Python suite, including new document inclusion, link validation and manifest/zip reproducibility",
+    "logs": "${DIAGNOSTICS}/harness-contract-v4-20261027/*.txt",
+    "packetValidation": "structure_valid; facts_not_verified",
+    "unperformed": [
+      "installation",
+      "LM Studio restart",
+      "v4 real-model W7",
+      "push",
+      "PR"
+    ]
+  }
+}
