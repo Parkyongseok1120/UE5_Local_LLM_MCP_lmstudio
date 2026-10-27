@@ -818,6 +818,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy,
               inputRepeatReceipts: evidenceManager.repeatReceipts(modelInput),
               knownResultBytes: evidenceManager.knownResultBytes,
+              estimatedResultBytes: evidenceManager.estimatedResultBytes,
               retryMinimum: budgetBroker.retryMinimum,
 }),
           },
@@ -1662,12 +1663,10 @@ event: decision.trigger === "research_recovery_exhausted"
       executionFailure = error;
       throw error;
     } finally {
-      // The note is terminal state like the window: a canceled or failed
-      // execution must still hand its accepted judgments to the next turn.
+      // Persist accepted judgments even on cancellation or failure.
       try { persistTerminalNote(); }
       catch (error) { cleanupFailures.push(String(error)); }
-      // No new model work during shutdown. Persist returned evidence and only
-      // RoundTransaction-approved planning; the next execution must remeasure.
+      // Shutdown persists evidence and approved planning; no new model work.
       try {
         if (workingContext) {
           // Transfer ownership first: a failed close must not be attempted twice.

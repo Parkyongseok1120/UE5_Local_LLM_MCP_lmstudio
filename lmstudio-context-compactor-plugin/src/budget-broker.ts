@@ -220,8 +220,24 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
 
+/** Conservative response estimate, never source availability or authority. */
+export function estimateReadResponseBytes(hint: { sizeBytes: number | null; totalLines: number | null } | null,
+  selector: Record<string, unknown> = {}): number | undefined {
+  if (!hint || !Number.isSafeInteger(hint.sizeBytes) || hint.sizeBytes! < 0
+    || ["offsetBytes", "nextOffsetBytes", "offset", "startOffset", "maxBytes"].some(key => selector[key] !== undefined)) return undefined;
+  let bodyBytes = hint.sizeBytes!, lines = hint.totalLines ?? Math.ceil(bodyBytes / 32);
+  if (selector.startLine !== undefined || selector.endLine !== undefined) {
+    const start = Number(selector.startLine), end = Number(selector.endLine);
+    if (!Number.isSafeInteger(hint.totalLines) || hint.totalLines! <= 0
+      || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return undefined;
+    lines = end - start + 1; bodyBytes = Math.ceil(bodyBytes * lines / hint.totalLines!);
+  }
+  const bytes = Math.ceil(bodyBytes * 1.15) + lines * 8 + 2560;
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
+}
+
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
-  args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum) {
+  args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum, estimatedBytes?: number) {
   const capability = capabilityFor(tool, { name: tool.name, arguments: args });
   if (capability && !needsReadReservation(tool, { name: tool.name, arguments: args })) {
     batch.accountFixed(id);
@@ -258,9 +274,11 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const adaptive = field !== null && contract.adaptiveDefault && args[field] === undefined
     && contract.defaultValue > DEFAULT_READ_FLOOR_BYTES;
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
-  const requested = field ? tokens(args[field] === undefined
+  const ceilingFromHint = Number.isSafeInteger(estimatedBytes) && estimatedBytes! > 0
+    ? Math.max(contract.minimum, Math.ceil(estimatedBytes! * 1.25)) : Infinity;
+  const requested = field ? Math.min(tokens(args[field] === undefined
     ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : Number(args[field])) : 3072;
+    : Number(args[field])), ceilingFromHint) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;
