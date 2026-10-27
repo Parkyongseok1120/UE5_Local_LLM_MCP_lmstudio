@@ -107,6 +107,10 @@ def _normalize(result: CapabilityResult) -> dict[str, Any]:
         "allowed": allowed,
         "mode": str(retry.get("mode") or "different_arguments") if allowed else "none",
     }
+    minimum = retry.get("minimum")
+    if (allowed and isinstance(minimum, dict) and minimum.get("field") in ("maxChars", "byteBudget", "maxBytes")
+            and type(minimum.get("value")) is int and minimum["value"] > 0):
+        source["retry"]["minimum"] = {"field": minimum["field"], "value": minimum["value"]}
     return source
 
 
@@ -144,6 +148,7 @@ def failure(
     *,
     retry_allowed: bool = False,
     retry_mode: str = "different_arguments",
+    retry_minimum: dict[str, Any] | None = None,
     **payload: Any,
 ) -> CapabilityResult:
     return CapabilityResult(
@@ -154,6 +159,7 @@ def failure(
             "retry": {
                 "allowed": bool(retry_allowed),
                 "mode": retry_mode if retry_allowed else "none",
+                **({"minimum": retry_minimum} if retry_allowed and retry_minimum else {}),
             },
             **payload,
         },

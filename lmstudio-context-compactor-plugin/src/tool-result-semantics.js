@@ -53,4 +53,27 @@ function retainedEffectFacts(value) {
     if (value?.[key] !== undefined) out[key] = value[key];
   return out;
 }
-module.exports = { resultSemantics, retainedEffectFacts };
+// Reuse the bounded, ambiguity-rejecting transport decoder. Lazy loading keeps
+// the compaction memory's existing semantics dependency acyclic at load time.
+function decodeEnvelope(result) {
+  const { value, error } = require("./compaction-tool-memory.js").decodeToolResultRecord(result);
+  if (!value) return { ok: false, errorCode: "INVALID_RESULT_ENVELOPE", message: error || "Invalid result",
+    retry: { allowed: false, mode: "none" } };
+  const bareSdkError = typeof value.error === "string" && Object.keys(value).every(k => k === "error" || k === "envelopeIsError");
+  const rawCode = value.errorCode || value.errorcode || value.error_code || value.code;
+  const failed = resultSemantics(value).operationStatus === "failed" || Boolean(rawCode);
+  const errorCode = failed ? String(rawCode || (bareSdkError ? "HARNESS_BUDGET_DENIED" : "TOOL_FAILED")).toUpperCase() : undefined;
+  const retry = value.retry && typeof value.retry === "object" ? value.retry : {};
+  const modes = ["none", "same_arguments", "different_arguments", "reduce_scope", "after_state_change"];
+  const allowed = failed && retry.allowed === true && modes.includes(retry.mode) && retry.mode !== "none";
+  const minimum = retry.minimum;
+  const validMinimum = allowed && minimum && ["maxChars", "byteBudget", "maxBytes"].includes(minimum.field)
+    && Number.isSafeInteger(minimum.value) && minimum.value > 0;
+  return { ok: !failed && resultSemantics(value).operationStatus === "completed", errorCode,
+    message: String(value.message || value.error || "").slice(0, 4000),
+    retry: { allowed, mode: allowed ? retry.mode : "none", ...(validMinimum ? { minimum: { field: minimum.field, value: minimum.value } } : {}) },
+    // A bare SDK error is not proof of budget denial. The guard trace supplies
+    // that authority (the same SDK envelope also carries scope/user denials).
+    sdkDenial: bareSdkError, value };
+}
+module.exports = { resultSemantics, retainedEffectFacts, decodeEnvelope };

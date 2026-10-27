@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "errorEnvelope": {
+    "fields": ["ok", "errorCode", "message", "retry"],
+    "retryModes": ["none", "same_arguments", "different_arguments", "reduce_scope", "after_state_change"],
+    "minimum": {"field": "maxChars|byteBudget|maxBytes", "value": "positive integer in the named field unit"},
+    "description": "Failed results retain errorCode and retry. A retry minimum is scoped to the returned tool/request, and must survive wire normalization. SDK bare errors require guard evidence before counting as budget denial."
+  },
   "description": "Default Direct Model Mode catalog. These capabilities remain visible without task, route, planner, checkpoint, or synthesis state.",
   "ragEssential": [
     "unreal_get_active_project",

@@ -12,7 +12,7 @@ import { isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistr
 import type { RoundVerdict } from "./execution-contracts";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
-import { resultSemantics } from "./tool-result-semantics.js";
+import { resultSemantics, decodeEnvelope } from "./tool-result-semantics.js";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
 import { extractPriorContinuityState } from "./continuity-memory.js";
 const identity = require("./evidence-identity.js") as {
@@ -141,10 +141,13 @@ export class EvidenceManager {
     const noNewEvidence = Boolean(screening && screening.readResults > 0 && screening.failedReads === 0
       && screening.newDeliveries === 0 && screening.focusedReads === 0 && screening.otherResults === 0
       && (observed.restoredWorkingEvidenceUnits === 0 || repeatRestoreOnly));
+    const envelopes = observationRecords(messages, this.tools, { confirmedPairsOnly: true })
+      .filter(record => record.trustedRead && record.request && record.tool)
+      .map(record => ({ tool: record.tool!, request: record.request!, envelope: decodeEnvelope(record.content) }));
     const verdict: RoundVerdict = Object.freeze({ progressed: observed.usefulProgress && !repeatRestoreOnly,
-      noNewEvidence, failedReads: screening?.failedReads ?? 0, budgetDenied: Object.freeze([...budgetDenied]),
+      noNewEvidence, failedReads: screening?.failedReads ?? envelopes.filter(r => r.envelope.errorCode).length, budgetDenied: Object.freeze([...budgetDenied]),
       mutationOutcomes: new ToolCapabilityRegistry(this.tools).mutationOutcomes(messages) });
-    const progress: ReadDelta = { ...observed, repeatRestoreOnly, noNewEvidence, verdict,
+    const progress: ReadDelta = { ...observed, repeatRestoreOnly, noNewEvidence, verdict, envelopes,
       usableSourceEvidence: Boolean(screening && screening.newDeliveries + screening.focusedReads > 0),
       progressed: observed.progressed && !repeatRestoreOnly, usefulProgress: observed.usefulProgress && !repeatRestoreOnly };
     Object.freeze(progress);
@@ -528,6 +531,7 @@ export type ReadScreening = {
  * regained availability stays measured even when it repeats an earlier restore. */
 export type ReadDelta = RecoveryProgress & {
   readonly verdict: RoundVerdict;
+  readonly envelopes: Array<{ tool: RemoteToolLike; request: ToolCallRequest; envelope: ReturnType<typeof decodeEnvelope> }>;
   repeatRestoreOnly: boolean; noNewEvidence: boolean; usableSourceEvidence: boolean;
 };
 
@@ -788,7 +792,8 @@ export function sourceObservationFailed(value: Record<string, unknown>): boolean
  * identify a range within the query, rather than a different semantic query. */
 export function observationRecords(messages: Array<ChatMessage>, tools: Array<RemoteToolLike> = [],
   options: { confirmedPairsOnly?: boolean; resolveProjection?: ProjectionResolver } = {}) {
-  const records: Array<{ content: unknown; value: Record<string, unknown> | undefined; trustedRead: boolean }> = [];
+  const records: Array<{ content: unknown; value: Record<string, unknown> | undefined; trustedRead: boolean;
+    request?: ToolCallRequest; tool?: RemoteToolLike }> = [];
   const history = Chat.empty(); for (const message of messages) history.append(message);
   const pairs = workingContextModule.exchangeIndex(history);
   // Do not manufacture observations out of canceled, orphaned or duplicate
@@ -809,7 +814,8 @@ export function observationRecords(messages: Array<ChatMessage>, tools: Array<Re
       const archived = ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index"].includes(String(decoded?.kind));
       const localArchive = trusted && request.name === "evidence_first_read_context" && localObservationTools.has(matches[0]);
       const projection = decoded && trusted ? options.resolveProjection?.(decoded, request) : null;
-      records.push({ content: result.content, trustedRead: Boolean(trusted), value: projection || (decoded && trusted && !localArchive ? {
+      records.push({ content: result.content, request, tool: matches.length === 1 ? matches[0] : undefined,
+        trustedRead: Boolean(trusted), value: projection || (decoded && trusted && !localArchive ? {
         ...identity.normalizeObservation(decoded, request, matches[0].pluginIdentifier || "local"), canonicalReadObservation: true,
         ...(archived ? { kind: "untrusted_archive_representation" } : {}),
       } : decoded) });

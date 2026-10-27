@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from direct_rag_evidence import evidence_metadata_fits, fit_evidence_payload
+from direct_rag_evidence import evidence_metadata_fits, evidence_metadata_minimum, fit_evidence_payload
 from direct_rag_project_engine import project_engine_version
 from direct_rag_project_selectors import classify_project_selectors, exact_project_descriptor
 from direct_rag_result import CapabilityResult, failure
@@ -199,7 +199,9 @@ def engine_local_symbol(runtime: Any, arguments: dict[str, Any], limit: int) -> 
         payload["coverage"] = {k: v for k, v in payload["coverage"].items() if k != "observedTypeCandidates"}
         payload["coverage"]["observedTypeCandidatesOmitted"] = len(observed)
     if not evidence_metadata_fits(payload, max_chars=limit):
-        return scoped_failure("OUTPUT_LIMIT_EXCEEDED", "Local source identity does not fit the configured result limit.")
+        return scoped_failure("OUTPUT_LIMIT_EXCEEDED", "Local source identity does not fit the configured result limit. Increase maxChars and the detail/transport limit if it is lower.",
+                              retry_allowed=True, retry_mode="different_arguments",
+                              retry_minimum={"field": "maxChars", "value": evidence_metadata_minimum(payload)})
     payload, truncated = fit_evidence_payload(payload, max_chars=limit - 64)
     if truncated:
         payload["evidenceEnvelopeTruncated"] = True

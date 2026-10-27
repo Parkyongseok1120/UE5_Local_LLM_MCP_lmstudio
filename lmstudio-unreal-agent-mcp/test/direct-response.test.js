@@ -3,6 +3,14 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+test("v3 agent failure wire conforms to the shared retry modes", () => {
+  for (const mode of ["same_arguments", "different_arguments", "reduce_scope", "after_state_change"]) {
+    const wire = toMcpResult(failure("INVALID_ARGUMENT", "test", {retryAllowed:true,retryMode:mode}));
+    assert.deepEqual(wire.structuredContent.retry,{allowed:true,mode});
+    assert.deepEqual(JSON.parse(wire.content[0].text),wire.structuredContent);
+  }
+});
+
 const {
   failure,
   normalizeDirectPayload,

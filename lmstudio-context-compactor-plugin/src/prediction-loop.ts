@@ -277,7 +277,7 @@ export function createPredictionLoopHandler(
     // are never sealed into the durable window.
     const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
       | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-      | "repetition_check" | "mutation_focus", string>();
+      | "repetition_check" | "mutation_focus" | "tool_retry", string>();
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -813,6 +813,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy,
               inputRepeatReceipts: evidenceManager.repeatReceipts(modelInput),
               knownResultBytes: evidenceManager.knownResultBytes,
+              retryMinimum: budgetBroker.retryMinimum,
 }),
           },
           { maxTokens: roundOutputReserve },
@@ -965,6 +966,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const budgetDenied = [...runtimeToolTrace.values()].filter(call => call.validationState === "denied_batch_budget")
           .map(call => String(call.providerRequestId || call.callKey));
         const recoveryProgress = evidenceManager.observe(screening.messages, modelInputId, screening, budgetDenied);
+        const retryGuidance: Array<Record<string, unknown>> = [];
+        for (const { tool, request, envelope } of recoveryProgress.envelopes) {
+          budgetBroker.observeResult(tool, request.arguments as Record<string, unknown>, envelope);
+          if (envelope.errorCode) retryGuidance.push({ tool: tool.name, errorCode: envelope.errorCode, retry: envelope.retry });
+        }
+        if (retryGuidance.length) runtimeFacts.set("tool_retry", "Returned tool retry contracts: " + JSON.stringify(retryGuidance.slice(0, 4)));
+        else runtimeFacts.delete("tool_retry");
         for (const result of recoveryProgress.verdict.mutationOutcomes) {
           if (result === "applied") objective.mutationState = "applied";
           else if (objective.mutationState !== "applied") objective.mutationState = "attempted";

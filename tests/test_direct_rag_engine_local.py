@@ -124,6 +124,20 @@ def test_transport_keeps_metadata_inside_actual_configured_envelope(source, monk
     assert rendered["structuredContent"]["sourceMode"] == "engine_local"
 
 
+def test_metadata_retry_minimum_survives_wire_and_fits_on_retry(source):
+    from direct_rag_result import to_mcp_tool_result, failure
+    result = query(source, maxChars=2000)
+    assert result["errorCode"] == "OUTPUT_LIMIT_EXCEEDED"
+    assert result["retry"]["allowed"] is True
+    assert result["retry"]["mode"] == "different_arguments"
+    minimum = result["retry"]["minimum"]
+    assert minimum["field"] == "maxChars" and minimum["value"] > 2000
+    wire = to_mcp_tool_result(failure("OUTPUT_LIMIT_EXCEEDED", "small", retry_allowed=True,
+                                    retry_minimum=minimum), tool_name="unreal_symbol_lookup")
+    assert wire["structuredContent"]["retry"]["minimum"] == minimum
+    assert query(source, maxChars=minimum["value"], detail="full")["ok"] is True
+
+
 def test_lookup_started_before_clear_cannot_repopulate_later_module_catalogs(source, monkeypatch):
     original = headers._local_catalog
     cleared = False

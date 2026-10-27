@@ -2,7 +2,7 @@ import type { LLMActionOpts, PredictionLoopHandlerController } from "@lmstudio/s
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readBudgetDenialMessage, reserveReadResult, type BatchReservation } from "./budget-broker";
+import { readBudgetDenialMessage, reserveReadResult, type BatchReservation, type RetryMinimum } from "./budget-broker";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
@@ -114,6 +114,7 @@ export function createToolGuard(options: {
   inputRepeatReceipts?: Map<string, string | { receipt: string; arguments?: Record<string, unknown> }>;
   /** Bytes the same request returned before while its source was unchanged. */
   knownResultBytes?: (name: string, args: Record<string, unknown>) => number | undefined;
+  retryMinimum?: (tool: RemoteToolLike, args: Record<string, unknown>) => RetryMinimum | undefined;
 }): RoundToolGuard {
   const { ctl, emitter, roundTools, config, scope, toolPlanningRetryRound, toolPlanningRetryBlockedFingerprints,
     batchReservation, reservationIds, toolGeneration, traceCall } = options;
@@ -160,13 +161,15 @@ export function createToolGuard(options: {
       // The same read is still verbatim in this input: let the server confirm it unchanged.
       const reservation = batchReservation
         ? reserveReadResult(batchReservation, reservationId, allowedTool, proposedArguments,
-          options.knownResultBytes?.(request.name, proposedArguments))
+          options.knownResultBytes?.(request.name, proposedArguments), options.retryMinimum?.(allowedTool, proposedArguments))
         : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false, denialReason: undefined, limit: undefined };
       if (!reservation.allowed) {
         traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed",
           budgetDenialReason: reservation.denialReason, budgetAtDenial: batchReservation?.snapshot(), readResultLimit: reservation.limit,
           ...("allowance" in reservation ? { budgetAllowance: reservation.allowance } : {}) });
-        deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined));
+        const minimum = "requiredMinimum" in reservation ? reservation.requiredMinimum : undefined;
+        deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined)
+          + (minimum ? ` Required minimum: ${minimum.field}=${minimum.value}.` : ""));
         return;
       }
       const present = reservation.arguments.repeatReceipt === undefined

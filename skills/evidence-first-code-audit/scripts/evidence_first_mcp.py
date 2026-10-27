@@ -192,14 +192,21 @@ def bounded_validation_result(result: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
+def _failure(error: str, code: str) -> dict[str, Any]:
+    return {"ok": False, "error": error, "errorCode": code,
+            "retry": {"allowed": True, "mode": "different_arguments"}}
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     if name == "evidence_first_contract":
         mode = arguments.get("mode", "audit")
         if not isinstance(mode, str) or mode not in MODES:
-            return {"ok": False, "error": "mode must be audit, architecture, or codegen"}, True
+            return _failure("mode must be audit, architecture, or codegen", "INVALID_ARGUMENT"), True
         return contract_payload(mode), False
     if name == "evidence_first_validate":
         result = bounded_validation_result(validate_packet(arguments.get("packet")))
+        if not result.get("ok"):
+            result = {**result, **_failure(str(result.get("error") or "Evidence packet validation failed"), "VALIDATION_FAILED")}
         return result, not bool(result.get("ok"))
     if name == "evidence_first_status":
         return {
@@ -209,7 +216,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], boo
             "safeMode": os.environ.get("EVIDENCE_FIRST_SAFE_MODE", "1") != "0",
             "skillRoot": str(SKILL_ROOT),
         }, False
-    return {"ok": False, "error": f"Unknown tool: {name}"}, True
+    return _failure(f"Unknown tool: {name}", "UNKNOWN_TOOL"), True
 
 
 class McpServer:

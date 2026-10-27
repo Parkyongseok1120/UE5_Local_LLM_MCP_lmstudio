@@ -123,10 +123,14 @@ def evidence_metadata_fits(
 ) -> bool:
     """Check the immutable response metadata without clipping exact identities."""
 
+    return evidence_metadata_minimum(payload, reserve_chars=reserve_chars) <= max_chars
+
+
+def evidence_metadata_minimum(payload: dict[str, Any], *, reserve_chars: int = 256) -> int:
+    """The same immutable-envelope floor used by fitting and retry guidance."""
     projected = dict(payload)
     projected["evidence"] = ""
-    rendered = render_model_json(projected)
-    return len(rendered) + max(0, reserve_chars) <= max_chars
+    return len(render_model_json(projected)) + max(0, reserve_chars)
 
 
 def fit_evidence_payload(

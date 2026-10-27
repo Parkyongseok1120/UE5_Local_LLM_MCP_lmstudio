@@ -234,6 +234,8 @@ function decodeToolResultRecord(content) {
           "canonicalProject", "canonicalProjectRoot", "path", "sha256", "hash", "changed", "saved", "dirty"]
           .filter(key => structured[key] !== undefined && embedded[key] !== undefined
             && structured[key] !== embedded[key]);
+        if (isRecord(embedded) && structured.retry !== undefined && embedded.retry !== undefined
+          && JSON.stringify(structured.retry) !== JSON.stringify(embedded.retry)) conflictingEnvelopeFields.push("retry");
       } catch { /* A human-readable text summary is not a second structured contract. */ }
     }
     if (conflictingEnvelopeFields.length) return { error: "conflicting_envelope" };

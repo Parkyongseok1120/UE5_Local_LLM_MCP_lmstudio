@@ -6,7 +6,14 @@ import {
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { localObservationTools } from "./tool-capability-registry";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
+import { telemetryFingerprint } from "./evidence-telemetry";
+import { decodeEnvelope } from "./tool-result-semantics.js";
 const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
+export type RetryMinimum = { field: string; value: number };
+function retryScope(tool: RemoteToolLike, args: Record<string, unknown>) {
+  const { maxChars, byteBudget, maxBytes, repeatReceipt, ...scope } = args;
+  return telemetryFingerprint({ provider: tool.pluginIdentifier, tool: tool.name, scope });
+}
 
 export type Watermarks = {
   contextLength: number; configuredTargetTokens: number; configuredTriggerTokens: number;
@@ -24,6 +31,16 @@ const tokens = (n: number) => Math.max(0, Math.trunc(Number.isFinite(n) ? n : 0)
  * Byte-derived result reservations are estimates; only the next fully templated
  * exact measurement authorizes generation. */
 export class BudgetBroker {
+  // Execution-local, request-scope-specific retry floors. Never carried to the
+  // next user turn or borrowed across tools, projects, queries or operations.
+  private readonly retryFloors = new Map<string, RetryMinimum>();
+  observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
+    const key = retryScope(tool, args);
+    if (envelope.ok) this.retryFloors.delete(key);
+    else if ("minimum" in envelope.retry && envelope.retry.minimum) this.retryFloors.set(key, { ...envelope.retry.minimum });
+    while (this.retryFloors.size > 256) this.retryFloors.delete(this.retryFloors.keys().next().value!);
+  }
+  retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>) => this.retryFloors.get(retryScope(tool, args));
   constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
     & Partial<Pick<DirectConfig, "workingInputScaling">>) { }
   watermarks(measured: ContextMeasurement, mandatoryFloorTokens = 0, hasReadTools = true, minimumReadTokens = 2048): Watermarks {
@@ -192,12 +209,18 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 const DEFAULT_READ_FLOOR_BYTES = 8192;
 
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
-  args: Record<string, unknown>, knownResultBytes?: number) {
+  args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum) {
   const contract = readResultContract(tool);
   const { field } = contract;
+  if (retryMinimum?.field === field) contract.minimum = Math.max(contract.minimum, retryMinimum.value);
+  const requestedWindow = Number(args[field ?? ""] ?? contract.defaultValue);
+  const requiredMinimum = field ? { field, value: contract.minimum } : undefined;
+  if (contract.minimum > contract.maximum) return { allowed: false, arguments: args, reservedTokens: 0,
+    bounded: field !== null, denialReason: "minimum_exceeds_published_limit", requiredMinimum,
+    limit: { field, requested: requestedWindow, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" } };
   // Known responses use the same allowance as receive(). Preserve the published
   // request window; the actual returned size, not that ceiling, is reserved.
-  if (Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0) {
+  if (Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0 && requestedWindow >= contract.minimum) {
     const exact = Math.ceil(knownResultBytes! / UTF8_BYTES_PER_TOKEN_ESTIMATE) + ENVELOPE_TOKENS;
     const reserved = batch.reserve(id, exact, exact);
     const requested = Number(args[field ?? ""] ?? contract.defaultValue);
@@ -205,7 +228,7 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
       limit: { field, requested, effective: requested, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" } };
     return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
       limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
-      denialReason: batch.denialReason(id, exact) || "invalid_reservation",
+      denialReason: batch.denialReason(id, exact) || "invalid_reservation", requiredMinimum,
       allowance: { availableTokens: batch.available, minimumTokens: exact, capacityTokens: batch.capacity } };
   }
   // Character contracts allow for UTF-8/JSON expansion and envelope overhead.
@@ -227,7 +250,7 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const reserved = batch.reserve(id, Math.ceil(allocation * multiplier) + envelopeTokens, minimumTokens);
   if (!reserved) return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
     limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
-    denialReason: batch.denialReason(id, minimumTokens) || "invalid_reservation",
+    denialReason: batch.denialReason(id, minimumTokens) || "invalid_reservation", requiredMinimum,
     allowance: { availableTokens: batch.available, minimumTokens, capacityTokens: batch.capacity } };
   const boundedValue = Math.min(allocation, Math.floor((reserved - envelopeTokens) / multiplier));
   return {
