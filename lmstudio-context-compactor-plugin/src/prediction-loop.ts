@@ -8,7 +8,7 @@ import {
 import crypto from "node:crypto";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
-import { BudgetBroker, readBudgetFeedback } from "./budget-broker";
+import { BudgetBroker, minimumReadResultTokens, readBudgetFeedback } from "./budget-broker";
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput, type GuidanceRetention } from "./round-input";
@@ -700,7 +700,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           : ctl.abortSignal;
         const historyBeforeRound = Chat.from(workingHistory);
         const batchReservation = config.contextManagementMode === "legacy" || config.observeOnly
-          ? null : budgetBroker.beginBatch(finalMeasurement, roundTools.some(hasReadCapability));
+          ? null : budgetBroker.beginBatch(finalMeasurement, roundTools.some(hasReadCapability),
+            minimumReadResultTokens(roundTools.filter(hasReadCapability)));
         const reservationIds = new Map<string, string>();
         const roundModelStartedAt = Date.now();
         const captured = await runOneToolRound(

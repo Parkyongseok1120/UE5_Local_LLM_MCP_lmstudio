@@ -154,6 +154,8 @@ export type WorkingInputScaling = "auto" | "fixed";
 // fully templated exact measurement remains the sole authority for dispatch.
 /** Conservative UTF-8 bytes per model token for returned JSON/code/CJK text. */
 export const UTF8_BYTES_PER_TOKEN_ESTIMATE = 2.5;
+export const ENVELOPE_TOKENS = 256;
+export const UNKNOWN_SIZE_MARGIN_TOKENS = 1024;
 /** Room for the structured tool request a research round generates before its
  * results return. The next round's full output reserve is subtracted by that
  * round's own hard ceiling, so it is not reserved twice. */

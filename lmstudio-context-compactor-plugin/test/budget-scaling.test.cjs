@@ -79,7 +79,7 @@ test("returned bytes are converted to estimated tokens and still detect overrun"
   assert.equal(batch.reserve("a", 4096), 4096);
   assert.equal(batch.receive("a", 9000), true);
   assert.equal(batch.exceeded, false);
-  assert.equal(batch.snapshot().entries[0].tokens, 3728);
+  assert.equal(batch.snapshot().entries[0].tokens, 3856);
   assert.equal(batch.reserve("b", 4096), 4096);
   assert.equal(batch.receive("b", 12000), true);
   assert.equal(batch.exceeded, true);

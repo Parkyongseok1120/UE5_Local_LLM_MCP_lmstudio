@@ -323,7 +323,7 @@ for (const mixed of [true, false]) test(`read recovery ${mixed ? "consumes two s
   const ctl=fakeController(Chat.from([{role:"user",content:"Report from the evidence already gathered."}]),model,{
     contextManagementMode:"deterministic",maxOutputReserve:8192,safetyMarginTokens:2048,
     workingInputTargetTokens:40000,workingInputTriggerTokens:56000,auditFinalMaxTokens:4096,auditFinalSeconds:1,
-  },[read,write]);
+  },[read,write,{name:"search_files",pluginIdentifier:"mcp/unity-tools",description:"Search fixture",parametersJsonSchema:{type:"object",properties:{maxChars:{type:"integer",minimum:128,maximum:4096}}}}]);
   await handlePredictionLoop(ctl);
   assert.equal(calls,2);assert.equal(denials,1);
   assert.equal(ctl.session.disposed,true);

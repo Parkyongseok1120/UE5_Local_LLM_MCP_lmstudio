@@ -1,6 +1,7 @@
 import {
   MIN_WORKING_SPACE_TOKENS, PINNED_WORKING_SET_MIN_CHARS, PINNED_WORKING_SET_SHARE, POST_TOOL_REQUEST_TOKENS,
-  SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO, UTF8_BYTES_PER_TOKEN_ESTIMATE, type ContextMeasurement, type DirectConfig
+  SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO, UTF8_BYTES_PER_TOKEN_ESTIMATE, ENVELOPE_TOKENS,
+  UNKNOWN_SIZE_MARGIN_TOKENS, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { localObservationTools } from "./tool-capability-registry";
@@ -72,9 +73,9 @@ export class BudgetBroker {
     return Math.max(PINNED_WORKING_SET_MIN_CHARS,
       Math.floor(tokens(water.effectiveLowWaterTokens) * PINNED_WORKING_SET_SHARE * UTF8_BYTES_PER_TOKEN_ESTIMATE));
   }
-  beginBatch(measured: ContextMeasurement, hasReadTools = true) {
+  beginBatch(measured: ContextMeasurement, hasReadTools = true, reserveFloor = 0) {
     const budget = this.watermarks(measured, 0, hasReadTools);
-    return new BatchReservation(Math.max(0, budget.hardInputCeiling - measured.inputTokens - budget.requiredPostToolOverhead));
+    return new BatchReservation(Math.max(0, budget.hardInputCeiling - measured.inputTokens - budget.requiredPostToolOverhead), reserveFloor);
   }
 }
 
@@ -84,7 +85,7 @@ export class BatchReservation {
   private entries = new Map<string, { tokens: number; reservedTokens: number; actualEnvelopeBytes: number | null;
     overrun: boolean; state: "held" | "consumed" | "released" }>();
   private closed = false;
-  constructor(readonly capacity: number) { }
+  constructor(readonly capacity: number, readonly reserveFloor = 0) { }
   get used() { return [...this.entries.values()].reduce((n, e) => n + (e.state === 'released' ? 0 : e.tokens), 0); }
   get available() { return Math.max(0, this.capacity - this.used); }
   get exceeded() { return this.used > this.capacity || [...this.entries.values()].some(e => e.overrun); }
@@ -99,7 +100,9 @@ export class BatchReservation {
   }
   reserve(id: string, requested: number, minimum = requested): number {
     if (this.closed || this.exceeded || this.entries.has(id)) return 0;
-    const amount = Math.min(tokens(requested), this.available);
+    let amount = Math.min(tokens(requested), this.available);
+    if (this.available - amount < this.reserveFloor && this.available - this.reserveFloor >= tokens(minimum))
+      amount = this.available - this.reserveFloor;
     if (amount < tokens(minimum) || amount === 0) return 0;
     this.entries.set(id, { tokens: amount, reservedTokens: amount, actualEnvelopeBytes: null,
       overrun: false, state: 'held' }); return amount;
@@ -114,7 +117,7 @@ export class BatchReservation {
     if (!entry || entry.state !== "held") return false;
     // Account received bytes using the reservation allowance, without claiming
     // they are exact model tokens. The next model input is measured separately.
-    entry.tokens = Math.ceil(tokens(actualEnvelopeBytes) / UTF8_BYTES_PER_TOKEN_ESTIMATE) + 128;
+    entry.tokens = Math.ceil(tokens(actualEnvelopeBytes) / UTF8_BYTES_PER_TOKEN_ESTIMATE) + ENVELOPE_TOKENS;
     entry.actualEnvelopeBytes = tokens(actualEnvelopeBytes);
     entry.overrun = entry.tokens > entry.reservedTokens;
     entry.state = "consumed";
@@ -123,7 +126,7 @@ export class BatchReservation {
   close() { if (this.closed) return; for (const id of this.entries.keys()) this.settle(id, 'canceled'); this.closed = true; }
   snapshot() {
     return {
-      capacity: this.capacity, used: this.used, available: this.available, closed: this.closed,
+      capacity: this.capacity, reserveFloor: this.reserveFloor, used: this.used, available: this.available, closed: this.closed,
       accountingUnit: "conservative_byte_derived_allowance_not_exact_model_tokens",
       held: [...this.entries.values()].filter(e => e.state === "held").reduce((n, e) => n + e.tokens, 0),
       consumed: [...this.entries.values()].filter(e => e.state === "consumed").reduce((n, e) => n + e.tokens, 0),
@@ -173,7 +176,7 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
   const actionable = sources.length ? sources : tools;
   const minimumFor = (tool: RemoteToolLike) => {
     const c = readResultContract(tool);
-    return c.field ? Math.ceil(c.minimum * c.multiplier) + 1024 : 4096;
+    return c.field ? Math.ceil(c.minimum * c.multiplier) + UNKNOWN_SIZE_MARGIN_TOKENS : 3072 + UNKNOWN_SIZE_MARGIN_TOKENS;
   };
   const sourceMinimum = actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
   // Once returned evidence is archived, acquisition and rehydration are both
@@ -187,42 +190,37 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
-/** Headroom over a known earlier result size: metadata and a grown file. */
-const KNOWN_SIZE_SLACK = 1.25;
-const KNOWN_SIZE_MARGIN_BYTES = 512;
 
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
   args: Record<string, unknown>, knownResultBytes?: number) {
   const contract = readResultContract(tool);
   const { field } = contract;
-  // A local archive read's answer is known before it runs: reserve its exact
-  // size, as receive() will account it, so a page does not hold the CJK worst
-  // case of its maxChars while a parallel peer is denied.
-  if (contract.archiveEnvelope && Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0) {
-    const exact = Math.ceil(knownResultBytes! / UTF8_BYTES_PER_TOKEN_ESTIMATE) + 256;
+  // Known responses use the same allowance as receive(). Preserve the published
+  // request window; the actual returned size, not that ceiling, is reserved.
+  if (Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0) {
+    const exact = Math.ceil(knownResultBytes! / UTF8_BYTES_PER_TOKEN_ESTIMATE) + ENVELOPE_TOKENS;
     const reserved = batch.reserve(id, exact, exact);
     const requested = Number(args[field ?? ""] ?? contract.defaultValue);
-    if (reserved) return { allowed: true, arguments: args, reservedTokens: reserved, bounded: field !== null,
-      limit: { field, requested, effective: requested, unit: "utf16_code_units" } };
+    if (reserved) return { allowed: true, arguments: field ? { ...args, [field]: requested } : args, reservedTokens: reserved, bounded: field !== null,
+      limit: { field, requested, effective: requested, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" } };
+    return { allowed: false, arguments: args, reservedTokens: 0, bounded: field !== null,
+      limit: { field, requested, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" },
+      denialReason: batch.denialReason(id, exact) || "invalid_reservation",
+      allowance: { availableTokens: batch.available, minimumTokens: exact, capacityTokens: batch.capacity } };
   }
   // Character contracts allow for UTF-8/JSON expansion and envelope overhead.
   // This allocation does not replace the final exact tokenizer gate.
   const multiplier = field ? contract.multiplier : 1;
-  const envelopeTokens = 1024;
+  const envelopeTokens = UNKNOWN_SIZE_MARGIN_TOKENS;
   // An omitted byteBudget takes at most half of what the batch still has, so a
   // large default reads small files whole in a wide context and parallel reads
   // still fit a narrow one; never below the former fixed 8 KiB default.
   const adaptive = field !== null && contract.adaptiveDefault && args[field] === undefined
     && contract.defaultValue > DEFAULT_READ_FLOOR_BYTES;
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
-  // The same unchanged request returned this many bytes before: reserve about
-  // that, not a half-batch share, so parallel peers are not starved.
-  const known = field === "byteBudget" && Number.isSafeInteger(knownResultBytes) && knownResultBytes! > 0
-    ? Math.ceil(knownResultBytes! * KNOWN_SIZE_SLACK) + KNOWN_SIZE_MARGIN_BYTES : null;
   const requested = field ? tokens(args[field] === undefined
-    ? known !== null ? Math.min(contract.defaultValue, known)
-      : adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : known !== null ? Math.min(Number(args[field]), known) : Number(args[field])) : 3072;
+    ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
+    : Number(args[field])) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;

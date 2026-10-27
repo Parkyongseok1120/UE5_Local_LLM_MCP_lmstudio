@@ -223,9 +223,10 @@ test('a read whose earlier result size is known reserves about that size', async
   known.tool.parametersJsonSchema.properties.byteBudget = {type:'integer', minimum:1024, maximum:65536, $comment:'direct-json-text-utf8'};
   await known.invoke();
   assert.equal(known.outcome.type, 'allow');
-  assert.equal(known.outcome.args.byteBudget, Math.ceil(3000 * 1.25) + 512);
+  assert.equal(known.trace.find(event => event.reservedToolResultTokens)?.reservedToolResultTokens, 1456);
+  assert.equal(known.outcome.args.byteBudget, 24576, "known response size does not change the published request window");
   const unknown = fixture('read_file', 'mcp/unreal-agent', {}, {batchReservation: new BatchReservation(40000)});
   unknown.tool.parametersJsonSchema.properties.byteBudget = {type:'integer', minimum:1024, maximum:65536, $comment:'direct-json-text-utf8'};
   await unknown.invoke();
-  assert.ok(unknown.outcome.args.byteBudget > Math.ceil(3000 * 1.25) + 512, JSON.stringify(unknown.outcome.args));
+  assert.ok(unknown.trace.find(event => event.reservedToolResultTokens)?.reservedToolResultTokens > 1456);
 });
