@@ -1,5 +1,6 @@
 "use strict";
 const { committedChange } = require("./direct-change-evidence");
+const { normalizeExpectedOccurrences } = require("./direct-mutation-arguments");
 
 const fs = require("node:fs");
 const fsp = fs.promises;
@@ -103,7 +104,7 @@ function patchFailure(result, relativePath, item) {
           : "PATCH_CAS_FAILED"
     ),
     relativePath,
-    expectedOccurrences: item?.expectedOccurrences ?? 1,
+    expectedOccurrences: normalizeExpectedOccurrences(item?.expectedOccurrences).value,
   };
   return error;
 }

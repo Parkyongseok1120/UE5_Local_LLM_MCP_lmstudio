@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { replaceFileArgumentError } = require("./direct-mutation-arguments");
+const { replaceFileArgumentError, normalizeExpectedOccurrences } = require("./direct-mutation-arguments");
 const {
   bundleMutationUsage,
   constrainMutationLimits,
@@ -67,9 +67,10 @@ function assertPatchTypes(patch) {
   if (typeof patch.newText !== "string") {
     throw new Error(`patch.newText must be a string: ${patch.path}`);
   }
-  if (!Number.isInteger(patch.expectedOccurrences) || patch.expectedOccurrences !== 1) {
+  const occurrences = normalizeExpectedOccurrences(patch.expectedOccurrences);
+  if (occurrences.error) {
     throw new Error(
-      `apply_edit_bundle: expectedOccurrences must be the integer 1 for each focused patch: ${patch.path}`,
+      `apply_edit_bundle: ${occurrences.error}: ${patch.path}`,
     );
   }
   assertOptionalString(patch, "expectedHash", "patch");

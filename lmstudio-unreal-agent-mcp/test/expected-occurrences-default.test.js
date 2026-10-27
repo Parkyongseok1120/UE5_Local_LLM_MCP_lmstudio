@@ -29,3 +29,9 @@ test("catalog schema: expectedOccurrences has default 1 and is not required",()=
  assert.equal(schema.properties.expectedOccurrences.default,1);
  assert.ok(schema.oneOf.every(branch=>!branch.required?.includes("expectedOccurrences")));
 });
+test("explicit invalid occurrences are never coerced or defaulted",()=>{
+ const {normalizeExpectedOccurrences}=require("../src/direct-mutation-arguments");
+ for(const value of [null,"1",[1],2,0,NaN,Infinity])assert.ok(normalizeExpectedOccurrences(value).error,String(value));
+ assert.deepEqual(normalizeExpectedOccurrences(undefined),{value:1});
+ assert.deepEqual(normalizeExpectedOccurrences(1),{value:1});
+});

@@ -115,6 +115,7 @@ function focusedPatchArguments() {
     expectedOccurrences: {
       type: "integer",
       const: 1,
+      default: 1,
     },
     ...fileVersionArguments(),
   };
@@ -131,7 +132,7 @@ function multiPatchArguments() {
 // oldText, edits[], or whole lines proven by a read's rangeSha256.
 function patchForms() {
   return [
-    { required: ["oldText", "newText", "expectedOccurrences"] },
+    { required: ["oldText", "newText"] },
     { required: ["edits"] },
     { required: ["startLine", "endLine", "expectedRangeSha256", "newText"] },
   ];
