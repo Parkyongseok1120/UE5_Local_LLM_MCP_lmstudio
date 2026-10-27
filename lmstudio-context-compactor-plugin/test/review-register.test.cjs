@@ -69,11 +69,11 @@ test("runtime register is incremental and private; headerless and fragmented ech
   const register = new ReviewRegister(); register.observe([assistant("`ReloadSound` never played")], 1);
   const history = Chat.from([{ role: "user", content: "Audit this project" }]);
   const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
-  const first = composeModelHistory(history, null, config, [], false, undefined, [register.fact()], new Map());
+  const first = composeModelHistory(history, null, config, [], false, undefined, [{key:"review_register",text:register.fact()}], new Map());
   assert.ok(first.privateDataParts.some(part => part.startsWith(REVIEW_REGISTER_HEADER)));
   const shown = new Map([[first.dataBlock.anchor, first.dataBlock.parts]]);
   register.observe([assistant("`RunSpeed` unused")], 2);
-  const second = composeModelHistory(history, null, config, [], false, undefined, [register.fact()], shown);
+  const second = composeModelHistory(history, null, config, [], false, undefined, [{key:"review_register",text:register.fact()}], shown);
   assert.match(second.dataBlock.parts.join("\n"), /RunSpeed/);
   assert.doesNotMatch(second.dataBlock.parts.at(-1), /ReloadSound/);
   const echo = register.lines().join("\n") + "\n" + REVIEW_REGISTER_GUIDANCE + "\nActual report.\n";

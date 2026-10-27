@@ -29,7 +29,7 @@ const ledger = (bRow) => [
 ].join("\n");
 
 function compose(history, facts, shown, referenceData, allowance = 11929) {
-  return composeModelHistory(history, null, config, [], false, referenceData, facts, shown, false, allowance);
+  return composeModelHistory(history, null, config, [], false, referenceData, facts.map(text=>({key:"read_ledger",text})), shown, false, allowance);
 }
 
 test("a re-rendered ledger adds only its changed rows after the first block", () => {
@@ -121,7 +121,7 @@ test("a round that rewrites its input consolidates superseded data in the same r
   const current = ledger(`none (archived) ${"y".repeat(1500)}`);
   // Below the standing threshold an ordinary round only appends its delta.
   assert.notEqual(compose(history, [current], shown).dataBlock.replacesShown, true);
-  const rewritten = composeModelHistory(history, null, config, [], false, undefined, [current], shown, true);
+  const rewritten = composeModelHistory(history, null, config, [], false, undefined, [{key:"read_ledger",text:current}], shown, true);
   assert.equal(rewritten.dataBlock.replacesShown, true);
   assert.deepEqual(rewritten.dataBlock.parts, [current]);
   assert.equal(rewritten.runtimeDataChars, current.length);
@@ -142,12 +142,12 @@ test("the runtime-data rule is fixed system text, and absent in observe-only mod
   const { RUNTIME_DATA_INSTRUCTION } = require("../dist/execution-instructions");
   const history = exchange(Chat.from([{ role: "user", content: "Audit" }]), "r1");
   // The real loop always carries its tool-scope instruction, so a system message is composed.
-  const system = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts)
+  const system = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts.map(text=>({key:"read_ledger",text})))
     .history.getMessagesArray()[0].getText();
   assert.equal(system([]), `scope\n\n${RUNTIME_DATA_INSTRUCTION}`);
   assert.equal(system([ledger("in full")]), system([]), "same system text with or without data");
   const observe = readConfig({ getPluginConfig: () => ({ get: key => key === "observeOnly" ? true : undefined }) });
-  const observed = composeModelHistory(history, null, observe, ["scope"], false, undefined, [ledger("in full")]);
+  const observed = composeModelHistory(history, null, observe, ["scope"], false, undefined, [{key:"read_ledger",text:ledger("in full")}]);
   assert.doesNotMatch(observed.history.toString(), /data blocks the host inserted/);
 });
 

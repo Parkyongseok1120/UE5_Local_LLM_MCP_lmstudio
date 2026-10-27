@@ -148,6 +148,7 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
     restore_events: list[dict[str, Any]] = []
     outcome_events: list[dict[str, Any]] = []
     prefix_events: list[dict[str, Any]] = []
+    context_events: list[dict[str, Any]] = []
     review_events: list[dict[str, Any]] = []
     report_now_events: list[dict[str, Any]] = []
     tool_calls: Counter[str] = Counter()
@@ -171,6 +172,8 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
                 outcome_events.append(event)
             elif name == "system_prefix_fingerprint":
                 prefix_events.append(event)
+            elif name == "direct_context_measurement":
+                context_events.append(event)
             elif name == "report_review_scheduled":
                 review_events.append(event)
             elif name == "report_now":
@@ -305,6 +308,9 @@ def analyze_message(conversation: dict[str, Any], message_index: int) -> dict[st
         "workingContextRestores": [{k: e.get(k) for k in ("status", "windowStatus", "ledgerStatus", "accessInherited")} for e in restore_events],
         "executionOutcomes": [{k: e.get(k) for k in ("objectiveKind", "mutationState", "finalizationTrigger")} for e in outcome_events],
         "systemPrefixChanges": sum(e.get("changed") is True for e in prefix_events),
+        "runtimeDataByRound": [{k: e.get(k) for k in ("roundIndex", "availabilityMetadataTokens", "runtimeDataTokens",
+                                                     "runtimeDataCurrentChars", "runtimeDataSupersededChars")}
+                               for e in context_events],
         "systemPrefixes": [{k: e.get(k) for k in ("roundIndex", "systemHash", "previousSystemHash", "changed")} for e in prefix_events],
         "reportReviewMissing": [e.get("missing", []) for e in review_events],
         "toolCalls": sum(tool_calls.values()),

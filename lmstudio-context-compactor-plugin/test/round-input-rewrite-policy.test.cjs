@@ -78,7 +78,7 @@ test('budget omission is immediate but readmission waits for an actual rewrite',
 test('low-water candidates measure and adopt consolidated data even with guidance disabled',async()=>{
  const h=history();for(let i=0;i<50;i++)h.append('assistant','Progress '+i+' '+ 'p'.repeat(6000));
  const {result}=await prepare(h,{shownDataBlocks:new Map([['user',['Runtime evidence observation: '+ 'x'.repeat(8000)]]]),
-  getRuntimeFacts:()=>['Runtime evidence observation: '+ 'y'.repeat(3000)]});
+  getRuntimeFacts:()=>[{key:'review_register',text:'Runtime evidence observation: '+ 'y'.repeat(3000)}]});
  assert.ok(result.rewriteCauses.includes('low_water_compaction'));
  assert.equal(result.modelComposition.dataBlock.replacesShown,true);
  assert.doesNotMatch(result.modelInput.toString(),/xxxxxxxx/);

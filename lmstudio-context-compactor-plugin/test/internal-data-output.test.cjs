@@ -39,7 +39,7 @@ test("budget quotations, unknown logs and ordinary JSON survive", () => {
   assert.equal(stripInternalDataEcho(budget), budget, 'a non-injected protocol is not private');
   const config = readConfig({getPluginConfig(){return {get:()=>undefined}}});
   const ask = Chat.from([{role:'user',content:'Explain this exact message: '+budget}]);
-  const composition = composeModelHistory(ask, null, config, ['scope'], false, undefined, [budget]);
+  const composition = composeModelHistory(ask, null, config, ['scope'], false, undefined, [{key:"budget",text:budget}]);
   assert.ok(composition.history.toString().includes(budget));
   assert.ok(!composition.privateDataParts.includes(budget));
 });

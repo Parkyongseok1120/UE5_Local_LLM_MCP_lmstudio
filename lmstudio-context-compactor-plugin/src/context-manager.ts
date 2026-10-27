@@ -5,6 +5,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { BudgetBroker } from "./budget-broker";
+import { RUNTIME_FACTS, type RuntimeFactEntry } from "./execution-contracts";
 import { boundPastReasoning, resolveGenerationBudget, selectMeasuredCandidate } from "./context-budget";
 import { core, inputAvailability, modelNotes, workingContextModule, REASONING_SEPARATOR } from "./context-ports";
 import { stripInternalDataEcho } from "./internal-data-output";
@@ -215,6 +216,27 @@ export async function selectSoftCompaction(
 
 }
 
+/** Optional facts use one registry budget; priority zero survives even above it.
+ * Truncate only the tail: the output filter identifies private data by header. */
+export function admitRuntimeFacts(entries: readonly RuntimeFactEntry[], allowance: number): string[] {
+  const selected = entries.filter(entry => entry.text.trim()).map(entry => {
+    const { maxChars, priority } = RUNTIME_FACTS[entry.key];
+    const text = entry.text.trim();
+    if (text.length <= maxChars) return { ...entry, text, priority };
+    let keep = maxChars;
+    for (let i = 0; i < 3; i++) keep = maxChars - `…[truncated ${text.length - keep} chars]`.length;
+    return { ...entry, priority, text: text.slice(0, keep) + `…[truncated ${text.length - keep} chars]` };
+  }).sort((a, b) => a.priority - b.priority);
+  const omitted: string[] = [];
+  const notice = () => omitted.length ? `Runtime data omitted for budget: ${omitted.join(", ")}` : "";
+  let chars = selected.reduce((sum, entry) => sum + entry.text.length, 0);
+  for (let index = selected.length - 1; index >= 0 && chars + notice().length > allowance; index--) {
+    if (selected[index].priority === 0) break;
+    const [entry] = selected.splice(index, 1); chars -= entry.text.length; omitted.push(entry.key);
+  }
+  return [...selected.map(entry => entry.text), ...(omitted.length ? [notice()] : [])];
+}
+
 export function composeModelHistory(
   history: Chat,
   note: ContinuityNote | null,
@@ -222,7 +244,7 @@ export function composeModelHistory(
   systemInstructions: Array<string> = [],
   enableNoteProtocol = Boolean(note),
   referenceData?: string,
-  runtimeFacts: Array<string> = [],
+  runtimeFacts: readonly RuntimeFactEntry[] = [],
   shownBlocks?: ShownDataBlocks,
   consolidateShown = false,
   allowanceChars = Infinity,
@@ -230,14 +252,15 @@ export function composeModelHistory(
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
   const taskData = config.observeOnly ? "" : renderTaskProgress(messages);
-  const facts = runtimeFacts.map(value => String(value || "").trim()).filter(Boolean);
+  const facts = admitRuntimeFacts(runtimeFacts, allowanceChars);
   const systemIndexes = messages.map((message, index) => message.isSystemPrompt() ? index : -1)
     .filter((index) => index >= 0);
   const systemLayoutIsCompatible = systemIndexes.length === 0
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
-    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0, forcedRewrite: undefined };
+    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0,
+      runtimeDataCurrentChars: 0, runtimeDataSupersededChars: 0, forcedRewrite: undefined };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -325,14 +348,17 @@ export function composeModelHistory(
   });
   const latestUserText = latestUser >= 0 ? messages[latestUser].getText() : "";
   const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:",
-    REVIEW_REGISTER_HEADER];
+    REVIEW_REGISTER_HEADER, "Runtime data omitted for budget:"];
   const sentParts = [...blocks.values()].flat();
   const privateDataParts = sentParts.filter(part =>
     part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data") || part.startsWith("[Delivered report")
     || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
   // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
   const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
-  return { history: composed, overhead, privateDataParts, runtimeDataChars, forcedRewrite, ...(dataBlock ? { dataBlock } : {}) };
+  const runtimeDataCurrentChars = runtimeParts.reduce((sum, part) => sum + part.length, 0);
+  const runtimeDataSupersededChars = Math.max(0, runtimeDataChars - runtimeDataCurrentChars);
+  return { history: composed, overhead, privateDataParts, runtimeDataChars, runtimeDataCurrentChars,
+    runtimeDataSupersededChars, forcedRewrite, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
@@ -434,7 +460,7 @@ export type InputAssemblyOptions = {
   roundScopeInstructions: Array<string>; getRoundOutputReserve: () => number;
   modelInputId: string; noteEnabled: boolean; getNote: () => ContinuityNote | null;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
-  getRuntimeFacts?: (history: Chat) => Array<string>;
+  getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Execution-scoped exact-measurement cache owned by ContextManager. */
   measurementCache?: Map<string, ContextMeasurement>;
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
@@ -501,6 +527,8 @@ export function createInputAssembler(options: InputAssemblyOptions) {
         postProjectionTokens: projectionMeasurement?.exact ? projectionMeasurement.inputTokens : null,
         postCompactionTokens: compactionMeasurement?.exact ? compactionMeasurement.inputTokens : null,
         postMetadataTokens: metadataMeasurement?.exact ? metadataMeasurement.inputTokens : null,
+        runtimeDataTokens: metadataMeasurement?.exact && compactionMeasurement?.exact
+          ? metadataMeasurement.inputTokens - compactionMeasurement.inputTokens : null,
         postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
         finalExactInputTokens: measured.exact ? measured.inputTokens : null,
         stageFingerprints: { history: historyMeasurement?.templatedInputFingerprint ?? null,
@@ -512,6 +540,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
 };
     };
     const basicStages = (measured: ContextMeasurement) => ({
+      runtimeDataTokens: null,
       postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
       finalExactInputTokens: measured.exact ? measured.inputTokens : null,
       stageFingerprints: { final: measured.templatedInputFingerprint },
@@ -530,7 +559,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
         measurement: baseMeasurement,
         projection,
         metadataChars: 0,
-        metadataTokens: 0,
+        availabilityMetadataTokens: 0,
       };
     }
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
@@ -564,7 +593,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       measurement,
       projection,
       metadataChars: metadata.length,
-      metadataTokens: baseMeasurement.exact && measurement.exact
+      availabilityMetadataTokens: baseMeasurement.exact && measurement.exact
         ? Math.max(0, measurement.inputTokens - baseMeasurement.inputTokens) : null,
     };
   };
@@ -798,8 +827,10 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         compactionSucceeded: success, compactionRequested: Boolean(pressured),
         lowTargetMet: success, mandatoryFloorException: water.targetUnreachable, hardFit,
         nextActionFit: finalWater.nextActionFit, disposition, canRun,
-        metadataTokens: selected.assembled.metadataTokens, toolSchemaTokens: final.toolSchemaTokens,
+        availabilityMetadataTokens: selected.assembled.availabilityMetadataTokens, toolSchemaTokens: final.toolSchemaTokens,
         runtimeDataChars: selected.assembled.composition.runtimeDataChars,
+        runtimeDataCurrentChars: selected.assembled.composition.runtimeDataCurrentChars,
+        runtimeDataSupersededChars: selected.assembled.composition.runtimeDataSupersededChars,
         reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0
 }
     };

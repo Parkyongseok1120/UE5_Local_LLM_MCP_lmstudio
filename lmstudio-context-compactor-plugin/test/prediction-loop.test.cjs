@@ -4462,7 +4462,7 @@ test("B mode injects only current-input facts and reports measured prompt overhe
   assert.match(receivedHistory.toString(), /"rawPresence":"full"/u);
   assert.doesNotMatch(receivedHistory.toString(), /needsReRead|reviewCompleted|nextAction/u);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
-  assert.equal(measurement.inputAvailability.metadataTokens, 80);
+  assert.equal(measurement.inputAvailability.availabilityMetadataTokens, 80);
   assert.equal(measurement.finalInputTokens, 180);
 });
 

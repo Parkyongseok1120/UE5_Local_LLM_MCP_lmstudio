@@ -7,7 +7,7 @@ import { updateSemanticContext } from "./semantic-handoff";
 import { workingContextModule } from "./context-ports";
 import { EvidenceManager } from "./evidence-manager";
 import { FIRST_CONSUMER_RAW_GIT_MAX_CHARS, MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS,
-  type ContinuityNote, type DirectConfig, type RewriteCause } from "./execution-contracts";
+  type ContinuityNote, type DirectConfig, type RewriteCause, type RuntimeFactEntry } from "./execution-contracts";
 import { READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
@@ -51,7 +51,7 @@ type RoundInputOptions = {
   guidanceRetention?: GuidanceRetention;
   guidanceScope?: ToolScope;
   referenceRecovery?: boolean;
-  getRuntimeFacts?: (history: Chat) => string[];
+  getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Data blocks this execution already sent (owned by the prediction loop). */
   shownDataBlocks?: ShownDataBlocks;
   finalizationTrigger: string | null;

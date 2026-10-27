@@ -254,14 +254,14 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed) {
     callMetrics: causalMetrics.perCall,
     callStatusCounts: causalMetrics.statusCounts,
     excludedMetricCallCount: causalMetrics.excludedCallCount,
-    metadataTokens: measurements.reduce((sum, value) => (
-      sum + Number(value.inputAvailability?.metadataTokens || 0)
+    availabilityMetadataTokens: measurements.reduce((sum, value) => (
+      sum + Number(value.inputAvailability?.availabilityMetadataTokens || 0)
     ), 0),
     finalInputTokens: measurements.at(-1)?.finalInputTokens ?? null,
     modelInputs: measurements.map(value => ({
       modelInputId: value.modelInputId,
       finalInputTokens: value.finalInputTokens,
-      metadataTokens: value.inputAvailability?.metadataTokens ?? null,
+      availabilityMetadataTokens: value.inputAvailability?.availabilityMetadataTokens ?? null,
       compactionAppliedCount: value.compactionAppliedCount,
       compactionAppliedModes: value.compactionAppliedModes,
     })),
@@ -338,7 +338,7 @@ async function main() {
       totalCompactions: selected.reduce((sum, run) => sum + run.compactionCount, 0),
       errors: selected.filter(run => run.error).length,
       totalElapsedMs: selected.reduce((sum, run) => sum + run.elapsedMs, 0),
-      metadataTokens: selected.map(run => run.metadataTokens),
+      availabilityMetadataTokens: selected.map(run => run.availabilityMetadataTokens),
     }];
   }));
   const report = {

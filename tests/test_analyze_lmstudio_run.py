@@ -43,6 +43,19 @@ def test_synthetic_run_metrics() -> None:
     assert [s["roundIndex"] for s in report["reasoningSpikes"]] == [1]
 
 
+def test_v4_runtime_data_cost_is_distinct_from_availability_metadata() -> None:
+    events = [{"event": "direct_context_measurement", "roundIndex": 0, "availabilityMetadataTokens": 80,
+               "runtimeDataTokens": 1600, "runtimeDataCurrentChars": 3000, "runtimeDataSupersededChars": 1500},
+              {"event": "direct_context_measurement", "roundIndex": 1, "metadataTokens": 70}]
+    conversation = {"messages": [{"versions": [{"role": "assistant", "steps": [
+        {"type": "debugInfoBlock", "debugInfo": json.dumps(event)} for event in events]}]}]}
+    rows = analyze_message(conversation, 0)["runtimeDataByRound"]
+    assert rows[0] == {"roundIndex": 0, "availabilityMetadataTokens": 80, "runtimeDataTokens": 1600,
+                       "runtimeDataCurrentChars": 3000, "runtimeDataSupersededChars": 1500}
+    assert rows[1]["runtimeDataTokens"] is None
+    assert rows[1]["availabilityMetadataTokens"] is None
+
+
 def test_projection_counts_only_changed_and_uses_round_prefill() -> None:
     report = analyze_path(str(FIXTURE), 1)
 

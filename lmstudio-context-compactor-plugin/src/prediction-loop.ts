@@ -20,7 +20,7 @@ import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, seria
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
-import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective } from "./execution-contracts";
+import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
 import { classifyObjective } from "./tool-capability-registry";
 import { continuationStatusText } from "./prediction-ui";
@@ -277,9 +277,7 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
-      | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-      | "repetition_check" | "mutation_focus" | "tool_retry", string>();
+    const runtimeFacts = new Map<RuntimeFactKey, string>();
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -457,11 +455,13 @@ export function createPredictionLoopHandler(
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           // The projection view is derived from the input being assembled, so
           // the round that compacts a body already lists it.
-          getRuntimeFacts: (history: Chat) => {
+          getRuntimeFacts: (history: Chat): RuntimeFactEntry[] => {
             const projection = config.observeOnly ? null : partialProjectionFact(history.getMessagesArray()).fact;
             // Delivered vs visible vs verified, per file, once a body has left the input.
             const ledger = config.observeOnly ? null : evidenceManager.readLedgerFact(history, runtimeFacts.has("report_now"));
-            return [...(projection ? [projection] : []), ...(ledger ? [ledger] : []), ...runtimeFacts.values()];
+            return [...(projection ? [{key: "partial_projection" as const, text: projection}] : []),
+              ...(ledger ? [{key: "read_ledger" as const, text: ledger}] : []),
+              ...[...runtimeFacts].map(([key, text]) => ({key, text}))];
           },
           shownDataBlocks,
           finalizationTrigger: execution.finalizationTrigger,
@@ -594,6 +594,10 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           finalMessageCount: finalMeasurement.messageCount,
           postCompactionInputTokens: compacted || projectionApplied ? finalMeasurement.inputTokens : null,
           postCompactionRemainingTokens: compacted || projectionApplied ? finalMeasurement.remainingTokens : null,
+          ...(assembledInput.measureStages ? await assembledInput.measureStages() : assembledInput.stages),
+          availabilityMetadataTokens: assembledInput.availabilityMetadataTokens,
+          runtimeDataCurrentChars: modelComposition.runtimeDataCurrentChars,
+          runtimeDataSupersededChars: modelComposition.runtimeDataSupersededChars,
           runtimeContext: {
             effectiveContextTokens: "unknown",
             cachedPrefixTokens: "unknown",

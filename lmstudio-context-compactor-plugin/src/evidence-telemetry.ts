@@ -32,13 +32,13 @@ export function readLedgerTelemetry(screening: ReadScreening) {
     failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds };
 }
 export function inputAvailabilityTelemetry(input: { projection: InputAvailabilityProjection | null;
-  metadataChars: number; metadataTokens: number | null }, mode: DirectConfig["inputAvailabilityMode"]) {
+  metadataChars: number; availabilityMetadataTokens: number | null }, mode: DirectConfig["inputAvailabilityMode"]) {
   const projection = input.projection;
   return projection ? { mode, verificationBoundary: projection.verificationBoundary,
     hostInputVerification: projection.hostInputVerification, entries: projection.entries,
     omittedEntryCount: projection.omittedEntryCount, entryListComplete: projection.entryListComplete,
-    metrics: projection.metrics, metadataChars: input.metadataChars, metadataTokens: input.metadataTokens,
-    metadataTokenMeasurement: input.metadataTokens === null ? "unknown" : "prompt_delta" } : { mode: "off" };
+    metrics: projection.metrics, metadataChars: input.metadataChars, availabilityMetadataTokens: input.availabilityMetadataTokens,
+    metadataTokenMeasurement: input.availabilityMetadataTokens === null ? "unknown" : "prompt_delta" } : { mode: "off" };
 }
 
 /** Measurement only. Owned by one execution; no prompt text or cache policy. */
