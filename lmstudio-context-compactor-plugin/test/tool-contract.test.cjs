@@ -17,8 +17,8 @@ test("generated tool contract matches the manifest SSOT", () => {
   assert.equal(generated, renderContract(manifest));
 });
 
-test("observation tools are exactly the manifest's read and ephemeral tools", () => {
-  const observed = effects => Object.keys(effects).filter(name => ["read", "ephemeral"].includes(effects[name])).sort();
+test("observation tools are exactly the manifest's read tools; ephemeral proposals are separate", () => {
+  const observed = effects => Object.keys(effects).filter(name => effects[name] === "read").sort();
   assert.deepEqual([...UNREAL_OBSERVATION_TOOLS].sort(), observed(manifest.agentToolEffects));
   assert.deepEqual([...UNREAL_RAG_OBSERVATION_TOOLS].sort(), observed(manifest.ragToolEffects));
   assert.equal(UNREAL_OBSERVATION_TOOLS.has("write_file"), false);

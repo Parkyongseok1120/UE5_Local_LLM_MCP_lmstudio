@@ -27,13 +27,35 @@
       "read_file_range",
       "read_symbol",
       "read_unreal_logs",
-      "propose_file_deletions",
+      "workspace_status",
+      "git_status",
+      "git_log",
+      "git_changed_files",
+      "git_diff_file",
+      "git_read_file"
+    ],
+    "configuration": [
+      "unreal_set_active_project",
+      "set_active_project"
+    ],
+    "write": [
+      "write_file",
+      "replace_in_file",
+      "apply_edit_bundle",
+      "delete_file"
+    ],
+    "index_maintenance": [
+      "unreal_rag_refresh"
+    ],
+    "diagnostic_process": [
+      "build_unreal_project",
+      "run_unreal_automation_tests",
+      "run_command",
       "static_validate_project"
     ],
-    "configuration": ["unreal_set_active_project", "set_active_project"],
-    "write": ["write_file", "replace_in_file", "apply_edit_bundle", "delete_file"],
-    "index_maintenance": ["unreal_rag_refresh"],
-    "diagnostic_process": ["build_unreal_project", "run_unreal_automation_tests", "run_command"]
+    "ephemeral": [
+      "propose_file_deletions"
+    ]
   },
   "servers": {
     "rag": {
@@ -47,16 +69,20 @@
   },
   "malformedArgsPolicy": {
     "ragErrorCode": "INVALID_TOOL_ARGUMENTS",
-    "agentErrorCode": "INVALID_ARGUMENTS",
+    "agentErrorCode": "INVALID_ARGUMENT",
     "retryableWithCorrectedArguments": true
   },
   "conditionalExternalProcesses": {
     "unreal_rag_refresh": {
       "argument": "allowEditorLaunch",
       "requiredValue": true,
-      "scopes": ["editor_metadata", "all"],
+      "scopes": [
+        "editor_metadata",
+        "all"
+      ],
       "defaultScope": "project_source",
       "effect": "May start an Unreal Editor subprocess to create fresh metadata exports. Without explicit true, only existing exports may be ingested."
     }
-  }
+  },
+  "derivedFrom": "config/stable_tool_manifest.json"
 }

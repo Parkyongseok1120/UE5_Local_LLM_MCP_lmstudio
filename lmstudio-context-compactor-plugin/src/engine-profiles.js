@@ -2,15 +2,16 @@
 
 // Data only. CommonJS keeps the deterministic JS core runnable on Node 20
 // without a TypeScript loader; TypeScript consumers use this same table.
+const { namesForRole } = require("./tool-capability-core.js");
 const ENGINE_PROFILES = Object.freeze({
   unreal: Object.freeze({
     descriptorExtension: ".uproject",
     projectMarkers: [],
     providers: ["mcp/unreal-agent", "mcp/unreal-rag"],
     fileProvider: "mcp/unreal-agent",
-    fileTools: ["read_file", "read_file_range", "read_symbol", "write_file", "replace_in_file", "apply_edit_bundle", "delete_file"],
-    changeEvidenceTools: ["write_file", "replace_in_file", "apply_edit_bundle", "read_file", "read_file_range", "read_symbol"],
-    reportReadTools: ["read_file", "read_file_range"],
+    fileTools: namesForRole("file_evidence", "mcp/unreal-agent"),
+    changeEvidenceTools: namesForRole("change_evidence", "mcp/unreal-agent"),
+    reportReadTools: namesForRole("report_read", "mcp/unreal-agent"),
     networkingDocument: "unreal-networking",
   }),
   unity: Object.freeze({
@@ -18,9 +19,9 @@ const ENGINE_PROFILES = Object.freeze({
     projectMarkers: ["Assets", "Packages/manifest.json", "ProjectSettings/ProjectVersion.txt"],
     providers: ["mcp/unity-tools"],
     fileProvider: "mcp/unity-tools",
-    fileTools: ["read_file", "patch_file", "create_file", "structured_data_patch"],
-    changeEvidenceTools: ["patch_file", "create_file", "structured_data_patch", "read_file"],
-    reportReadTools: ["read_file"],
+    fileTools: namesForRole("file_evidence", "mcp/unity-tools"),
+    changeEvidenceTools: namesForRole("change_evidence", "mcp/unity-tools"),
+    reportReadTools: namesForRole("report_read", "mcp/unity-tools"),
     networkingDocument: "unity-networking",
   }),
 });

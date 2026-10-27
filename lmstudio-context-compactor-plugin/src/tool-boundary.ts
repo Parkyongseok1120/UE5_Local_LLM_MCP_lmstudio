@@ -7,7 +7,7 @@ import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
 import { createMessageEmitter, createToolGenerationTracker, toolPluginIdentifier } from "./prediction-ui";
-import { isObservationOnlyToolCall, readOnlyOperationProfiles, type RemoteToolLike } from "./tool-capability-registry";
+import { isObservationOnlyToolCall, resolveCapability, restrictedOperationProfiles, readOnlyOperationProfiles, type RemoteToolLike } from "./tool-capability-registry";
 import { bindProjectArguments, type ScopedTool } from "./tool-scope";
 import type { RoundToolGuard } from "./round-loop";
 
@@ -144,6 +144,11 @@ export function createToolGuard(options: {
       allowedTool as ScopedTool, request, projectBindingIdentity,
     );
     const proposedArguments = boundArguments || request.arguments || {};
+    const allowedOperations = restrictedOperationProfiles.get(allowedTool);
+    if (allowedOperations && !allowedOperations.includes(String(proposedArguments.action || ""))) {
+      traceCall(callId, {validationState:"denied_operation_profile",executionState:"not_executed"});
+      deny("Operation is outside the published focus profile."); return;
+    }
     if (readOnlyOperationProfiles.has(allowedTool)
       && !isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
       traceCall(callId, { validationState: "denied_read_profile_operation", executionState: "not_executed" });
@@ -156,7 +161,7 @@ export function createToolGuard(options: {
       deny("Fresh tool-planning retry cannot repeat an already successful identical read.");
       return;
     }
-    if (isObservationOnlyToolCall(allowedTool, { ...request, arguments: proposedArguments })) {
+    if (resolveCapability(allowedTool, { ...request, arguments: proposedArguments }).approval === "none") {
       const reservationId = String(callId);
       // The same read is still verbatim in this input: let the server confirm it unchanged.
       const reservation = batchReservation
@@ -229,6 +234,10 @@ export function createToolGuard(options: {
         projectBindingIdentity,
       );
       const finalArguments = reboundArguments || confirmedArguments;
+      if (allowedOperations && !allowedOperations.includes(String(finalArguments.action || ""))) {
+        traceCall(callId, {validationState:"denied_operation_profile",executionState:"not_executed"});
+        deny("Confirmed operation is outside the published focus profile."); return;
+      }
       emitter.replaceRequest(callId, { ...request, arguments: finalArguments });
       if (boundArguments || decision.toolArgsOverride || reboundArguments) {
         controller.allowAndOverrideParameters(finalArguments);

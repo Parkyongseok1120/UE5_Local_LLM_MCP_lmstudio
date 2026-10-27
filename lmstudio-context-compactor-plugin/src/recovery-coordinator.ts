@@ -13,7 +13,7 @@ export type ContinuationInput = {
 export type ContinuationDecision = { action: ContinuationAction; trigger: FinalizationTrigger | null };
 import { FRESH_TOOL_PLANNING_RETRY_INSTRUCTION } from "./execution-instructions";
 import { type RawToolIntentClassification } from "./raw-tool-intent";
-import { isObservationOnlyToolCall, isUnregisteredGitReadIntent, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import { hasRole, isObservationOnlyToolCall, isUnregisteredGitReadIntent, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 
 export type RecoveryPlan = {
   reason: string; toolNames: readonly string[]; outputReserve: number;
@@ -44,8 +44,8 @@ export class RecoveryCoordinator {
     return resume;
   }
   mutationProfile(registry: ToolCapabilityRegistry, targets: readonly string[]) {
-    return registry.tools.flatMap(tool => {
-      if (registry.isMutation(tool, { name: tool.name, arguments: {} }) || tool.name === "static_validate_project") return [tool];
+    return [...registry.mutationProfile(), ...registry.tools.flatMap(tool => {
+      if (hasRole(tool.name,"mutation_focus_validate",tool.pluginIdentifier)) return [tool];
       if (!["read_file", "read_file_range"].includes(tool.name) || !targets.length
         || !isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })) return [];
       const schema = tool.parametersJsonSchema as { properties?: Record<string, unknown> };
@@ -54,7 +54,7 @@ export class RecoveryCoordinator {
         ...schema, properties: { ...schema?.properties, path: { type: "string", enum: [...new Set(targets)] } },
       } });
       return [narrowed];
-    });
+    })];
   }
   private rounds = 0;
   private pages = 0;

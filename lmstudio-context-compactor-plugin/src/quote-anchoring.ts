@@ -1,5 +1,6 @@
 import type { ChatMessage } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
+import { namesForRole } from "./tool-capability-core.js";
 
 // Compares the code an evidence packet says it observed with the source text
 // this execution actually returned. The packet validator checks structure
@@ -7,8 +8,8 @@ import { toolMemory } from "./context-ports";
 // handler or specifier that no returned body contains is a mismatch we can
 // name. Advisory: nothing here blocks, rewrites a result, or verifies a fact.
 
-const SOURCE_READ_TOOLS = new Set(["read_file_range", "read_file", "read_symbol"]);
-const VALIDATE_TOOL = "evidence_first_validate";
+const SOURCE_READ_TOOLS = new Set(namesForRole("source_read"));
+const VALIDATE_TOOL = namesForRole("structure_validation")[0];
 const LINE_SLACK = 2;
 // A short cite inside a body may name its enclosing function, declared above it.
 const ENCLOSING_LOOKBACK = 30;

@@ -1,9 +1,23 @@
 {
   "version": 2,
   "errorEnvelope": {
-    "fields": ["ok", "errorCode", "message", "retry"],
-    "retryModes": ["none", "same_arguments", "different_arguments", "reduce_scope", "after_state_change"],
-    "minimum": {"field": "maxChars|byteBudget|maxBytes", "value": "positive integer in the named field unit"},
+    "fields": [
+      "ok",
+      "errorCode",
+      "message",
+      "retry"
+    ],
+    "retryModes": [
+      "none",
+      "same_arguments",
+      "different_arguments",
+      "reduce_scope",
+      "after_state_change"
+    ],
+    "minimum": {
+      "field": "maxChars|byteBudget|maxBytes",
+      "value": "positive integer in the named field unit"
+    },
     "description": "Failed results retain errorCode and retry. A retry minimum is scoped to the returned tool/request, and must survive wire normalization. SDK bare errors require guard evidence before counting as budget denial."
   },
   "description": "Default Direct Model Mode catalog. These capabilities remain visible without task, route, planner, checkpoint, or synthesis state.",
@@ -61,7 +75,7 @@
     "build_unreal_project",
     "run_unreal_automation_tests"
   ],
-  "toolEffectsDescription": "Single source for each tool's effect. read/ephemeral tools need no confirmation and are observation-only for the context compactor; mutation/long_running tools use host approval. Servers and the compactor's generated contract are checked against this map.",
+  "toolEffectsDescription": "Effects authorize approval classification only. Result kinds and operation roles define reservation, recovery and evidence handling; ephemeral proposals are not reads.",
   "agentToolEffects": {
     "get_workspace_info": "read",
     "list_unreal_projects": "read",
@@ -120,5 +134,586 @@
     },
     "fieldDefault": 32768,
     "maxBytesCeiling": 4096
+  },
+  "evidenceFirstToolEffects": {
+    "evidence_first_contract": "read",
+    "evidence_first_validate": "read",
+    "evidence_first_status": "read",
+    "evidence_first_read_context": "read"
+  },
+  "unityToolEffects": {
+    "unity_references": {
+      "collect": "mutation",
+      "query": "read",
+      "release": "mutation"
+    },
+    "unity_snapshot": {
+      "capture": "mutation",
+      "read": "read",
+      "diff": "read",
+      "release": "mutation",
+      "record_start": "long_running",
+      "record_status": "read",
+      "record_stop": "mutation"
+    },
+    "unity_debug_query": "read",
+    "unity_debug_action": "mutation",
+    "unity_symbols": {
+      "assemblies": "read",
+      "index": "long_running",
+      "status": "read",
+      "find": "read",
+      "source": "read",
+      "usages": "read",
+      "relations": "read",
+      "diagnostics": "read",
+      "omissions": "read",
+      "versions": "read"
+    },
+    "unity_static_validate": "read",
+    "unity_status": "read",
+    "unity_git": "read",
+    "list_directory": "read",
+    "search_files": "read",
+    "read_file": "read",
+    "patch_file": "mutation",
+    "create_file": "mutation",
+    "structured_data_read": "read",
+    "structured_data_patch": "mutation",
+    "unity_find": "read",
+    "unity_object_read": "read",
+    "unity_object_patch": "mutation",
+    "unity_scene": {
+      "list": "read",
+      "create": "mutation",
+      "rename": "mutation",
+      "reparent": "mutation",
+      "activate": "mutation",
+      "add_component": "mutation",
+      "save": "mutation",
+      "delete": "mutation",
+      "remove_component": "mutation"
+    },
+    "unity_asset": "mutation",
+    "unity_prefab": {
+      "read": "read",
+      "contents": "read",
+      "overrides": "read",
+      "patch": "mutation",
+      "create": "mutation",
+      "instantiate": "mutation",
+      "apply": "mutation",
+      "revert": "mutation"
+    },
+    "unity_approval": {
+      "request": "mutation",
+      "status": "read"
+    },
+    "unity_logs": "read",
+    "unity_editor": "long_running",
+    "unity_operation": {
+      "get": "read",
+      "cancel": "mutation"
+    },
+    "unity_tests": {
+      "list": "read",
+      "run": "long_running",
+      "status": "read",
+      "results": "read",
+      "cancel": "mutation",
+      "release": "mutation"
+    },
+    "workspace_status": "read",
+    "git_status": "read",
+    "git_log": "read",
+    "git_changed_files": "read",
+    "git_diff_file": "read",
+    "git_read_file": "read"
+  },
+  "capabilityProviders": {
+    "mcp/unreal-agent": {
+      "effects": "agentToolEffects",
+      "scope": "unreal"
+    },
+    "mcp/unreal-rag": {
+      "effects": "ragToolEffects",
+      "scope": "unreal"
+    },
+    "mcp/unity-tools": {
+      "effects": "unityToolEffects",
+      "scope": "unity"
+    },
+    "mcp/evidence-first": {
+      "effects": "evidenceFirstToolEffects",
+      "scope": "common"
+    },
+    "local": {
+      "effects": "localToolEffects",
+      "scope": "common"
+    }
+  },
+  "operationContracts": {
+    "mcp/unreal-agent": {
+      "get_workspace_info": {
+        "resultKind": "metadata"
+      },
+      "list_unreal_projects": {
+        "resultKind": "metadata"
+      },
+      "get_active_project": {
+        "resultKind": "metadata"
+      },
+      "set_active_project": {
+        "resultKind": "mutation_result"
+      },
+      "detect_unreal_project": {
+        "resultKind": "metadata"
+      },
+      "list_directory": {
+        "resultKind": "metadata",
+        "roles": [
+          "api_lookup"
+        ]
+      },
+      "search_files": {
+        "resultKind": "search_hits",
+        "roles": [
+          "engine_source",
+          "api_lookup"
+        ]
+      },
+      "read_file": {
+        "resultKind": "source_body",
+        "roles": [
+          "source_read",
+          "engine_source",
+          "file_evidence",
+          "change_evidence",
+          "report_read"
+        ]
+      },
+      "read_file_range": {
+        "resultKind": "source_body",
+        "roles": [
+          "source_read",
+          "engine_source",
+          "file_evidence",
+          "change_evidence",
+          "report_read"
+        ]
+      },
+      "read_symbol": {
+        "resultKind": "source_body",
+        "roles": [
+          "source_read",
+          "engine_source",
+          "file_evidence",
+          "change_evidence"
+        ]
+      },
+      "read_unreal_logs": {
+        "resultKind": "metadata"
+      },
+      "write_file": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence",
+          "source_write"
+        ]
+      },
+      "replace_in_file": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence",
+          "source_write"
+        ]
+      },
+      "apply_edit_bundle": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence",
+          "source_write"
+        ]
+      },
+      "propose_file_deletions": {
+        "resultKind": "proposal"
+      },
+      "delete_file": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence"
+        ]
+      },
+      "static_validate_project": {
+        "resultKind": "validation",
+        "roles": [
+          "mutation_focus_validate"
+        ]
+      },
+      "build_unreal_project": {
+        "resultKind": "metadata"
+      },
+      "run_unreal_automation_tests": {
+        "resultKind": "metadata"
+      },
+      "run_command": {
+        "resultKind": "metadata"
+      },
+      "workspace_status": {
+        "resultKind": "metadata"
+      },
+      "git_status": {
+        "resultKind": "metadata"
+      },
+      "git_log": {
+        "resultKind": "metadata"
+      },
+      "git_changed_files": {
+        "resultKind": "metadata"
+      },
+      "git_diff_file": {
+        "resultKind": "metadata"
+      },
+      "git_read_file": {
+        "resultKind": "source_body"
+      }
+    },
+    "mcp/unreal-rag": {
+      "unreal_get_active_project": {
+        "resultKind": "metadata"
+      },
+      "unreal_set_active_project": {
+        "resultKind": "mutation_result"
+      },
+      "unreal_rag_search": {
+        "resultKind": "search_hits",
+        "roles": [
+          "api_lookup"
+        ]
+      },
+      "unreal_symbol_lookup": {
+        "resultKind": "search_hits",
+        "roles": [
+          "api_lookup"
+        ],
+        "minimumEnvelopeChars": 2000
+      },
+      "unreal_rag_health": {
+        "resultKind": "metadata"
+      },
+      "unreal_rag_rebuild_status": {
+        "resultKind": "metadata"
+      },
+      "unreal_rag_refresh": {
+        "resultKind": "metadata"
+      },
+      "unreal_rag_capabilities": {
+        "resultKind": "metadata"
+      }
+    },
+    "mcp/unity-tools": {
+      "unity_references": {
+        "actions": {
+          "collect": {
+            "resultKind": "mutation_result"
+          },
+          "query": {
+            "resultKind": "metadata"
+          },
+          "release": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "unity_snapshot": {
+        "actions": {
+          "capture": {
+            "resultKind": "mutation_result"
+          },
+          "read": {
+            "resultKind": "metadata"
+          },
+          "diff": {
+            "resultKind": "metadata"
+          },
+          "release": {
+            "resultKind": "mutation_result"
+          },
+          "record_start": {
+            "resultKind": "metadata"
+          },
+          "record_status": {
+            "resultKind": "metadata"
+          },
+          "record_stop": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "unity_debug_query": {
+        "resultKind": "metadata"
+      },
+      "unity_debug_action": {
+        "resultKind": "mutation_result"
+      },
+      "unity_symbols": {
+        "actions": {
+          "assemblies": {
+            "resultKind": "metadata"
+          },
+          "index": {
+            "resultKind": "metadata"
+          },
+          "status": {
+            "resultKind": "metadata"
+          },
+          "find": {
+            "resultKind": "search_hits"
+          },
+          "source": {
+            "resultKind": "source_body"
+          },
+          "usages": {
+            "resultKind": "search_hits"
+          },
+          "relations": {
+            "resultKind": "metadata"
+          },
+          "diagnostics": {
+            "resultKind": "metadata"
+          },
+          "omissions": {
+            "resultKind": "metadata"
+          },
+          "versions": {
+            "resultKind": "metadata"
+          }
+        }
+      },
+      "unity_static_validate": {
+        "resultKind": "validation"
+      },
+      "unity_status": {
+        "resultKind": "metadata"
+      },
+      "unity_git": {
+        "resultKind": "metadata"
+      },
+      "list_directory": {
+        "resultKind": "metadata",
+        "roles": [
+          "api_lookup"
+        ]
+      },
+      "search_files": {
+        "resultKind": "search_hits",
+        "roles": [
+          "engine_source",
+          "api_lookup"
+        ]
+      },
+      "read_file": {
+        "resultKind": "source_body",
+        "roles": [
+          "source_read",
+          "engine_source",
+          "file_evidence",
+          "change_evidence",
+          "report_read"
+        ]
+      },
+      "patch_file": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence"
+        ]
+      },
+      "create_file": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence"
+        ]
+      },
+      "structured_data_read": {
+        "resultKind": "metadata"
+      },
+      "structured_data_patch": {
+        "resultKind": "mutation_result",
+        "roles": [
+          "file_evidence",
+          "change_evidence"
+        ]
+      },
+      "unity_find": {
+        "resultKind": "metadata"
+      },
+      "unity_object_read": {
+        "resultKind": "metadata"
+      },
+      "unity_object_patch": {
+        "resultKind": "mutation_result"
+      },
+      "unity_scene": {
+        "actions": {
+          "list": {
+            "resultKind": "metadata"
+          },
+          "create": {
+            "resultKind": "mutation_result"
+          },
+          "rename": {
+            "resultKind": "mutation_result"
+          },
+          "reparent": {
+            "resultKind": "mutation_result"
+          },
+          "activate": {
+            "resultKind": "mutation_result"
+          },
+          "add_component": {
+            "resultKind": "mutation_result"
+          },
+          "save": {
+            "resultKind": "mutation_result"
+          },
+          "delete": {
+            "resultKind": "mutation_result"
+          },
+          "remove_component": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "unity_asset": {
+        "resultKind": "mutation_result"
+      },
+      "unity_prefab": {
+        "actions": {
+          "read": {
+            "resultKind": "metadata"
+          },
+          "contents": {
+            "resultKind": "metadata"
+          },
+          "overrides": {
+            "resultKind": "metadata"
+          },
+          "patch": {
+            "resultKind": "mutation_result"
+          },
+          "create": {
+            "resultKind": "mutation_result"
+          },
+          "instantiate": {
+            "resultKind": "mutation_result"
+          },
+          "apply": {
+            "resultKind": "mutation_result"
+          },
+          "revert": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "unity_approval": {
+        "actions": {
+          "request": {
+            "resultKind": "mutation_result"
+          },
+          "status": {
+            "resultKind": "metadata"
+          }
+        }
+      },
+      "unity_logs": {
+        "resultKind": "metadata"
+      },
+      "unity_editor": {
+        "resultKind": "metadata"
+      },
+      "unity_operation": {
+        "actions": {
+          "get": {
+            "resultKind": "metadata"
+          },
+          "cancel": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "unity_tests": {
+        "actions": {
+          "list": {
+            "resultKind": "metadata"
+          },
+          "run": {
+            "resultKind": "metadata"
+          },
+          "status": {
+            "resultKind": "metadata"
+          },
+          "results": {
+            "resultKind": "metadata"
+          },
+          "cancel": {
+            "resultKind": "mutation_result"
+          },
+          "release": {
+            "resultKind": "mutation_result"
+          }
+        }
+      },
+      "workspace_status": {
+        "resultKind": "metadata"
+      },
+      "git_status": {
+        "resultKind": "metadata"
+      },
+      "git_log": {
+        "resultKind": "metadata"
+      },
+      "git_changed_files": {
+        "resultKind": "metadata"
+      },
+      "git_diff_file": {
+        "resultKind": "metadata"
+      },
+      "git_read_file": {
+        "resultKind": "source_body"
+      }
+    },
+    "mcp/evidence-first": {
+      "evidence_first_contract": {
+        "resultKind": "metadata"
+      },
+      "evidence_first_validate": {
+        "resultKind": "validation",
+        "roles": [
+          "structure_validation"
+        ]
+      },
+      "evidence_first_status": {
+        "resultKind": "metadata"
+      },
+      "evidence_first_read_context": {
+        "resultKind": "archive_page",
+        "localOnly": true,
+        "minimumEnvelopeChars": 2048
+      }
+    },
+    "local": {
+      "read_attached_document": {
+        "resultKind": "source_body",
+        "localOnly": true
+      }
+    }
+  },
+  "localToolEffects": {
+    "read_attached_document": "read"
   }
 }

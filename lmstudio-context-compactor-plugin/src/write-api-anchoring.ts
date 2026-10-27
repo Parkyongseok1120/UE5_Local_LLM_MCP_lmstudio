@@ -1,6 +1,7 @@
 import type { ChatMessage } from "@lmstudio/sdk";
 import { toolMemory } from "./context-ports";
 import { returnedSourceLines } from "./quote-anchoring";
+import { namesForRole } from "./tool-capability-core.js";
 
 // Across recorded write sessions the model never read engine source before
 // editing, and 51 of 57 builds failed on headers and engine members it had
@@ -9,8 +10,8 @@ import { returnedSourceLines } from "./quote-anchoring";
 // multi-minute build reports only the first of them. Advisory: nothing here
 // blocks, rewrites an edit, or decides that a name is wrong.
 
-const MUTATION_TOOLS = new Set(["replace_in_file", "apply_edit_bundle", "write_file"]);
-const LOOKUP_TOOLS = new Set(["unreal_symbol_lookup", "unreal_rag_search", "search_files", "list_directory"]);
+const MUTATION_TOOLS = new Set(namesForRole("source_write"));
+const LOOKUP_TOOLS = new Set(namesForRole("api_lookup"));
 // Core value and math types every module uses; flagging them would bury the
 // names that actually break builds (wrong headers, members of the wrong class).
 const CORE_TYPES = new Set(["FMath", "FString", "FName", "FText", "FVector", "FVector2D", "FRotator", "FQuat", "FTransform",

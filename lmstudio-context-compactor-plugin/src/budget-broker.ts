@@ -4,7 +4,8 @@ import {
   UNKNOWN_SIZE_MARGIN_TOKENS, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
-import { localObservationTools } from "./tool-capability-registry";
+import { localObservationTools, capabilityFor, needsReadReservation } from "./tool-capability-registry";
+import { operationCapabilities } from "./tool-capability-core.js";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { decodeEnvelope } from "./tool-result-semantics.js";
@@ -124,6 +125,10 @@ export class BatchReservation {
     this.entries.set(id, { tokens: amount, reservedTokens: amount, actualEnvelopeBytes: null,
       overrun: false, state: 'held' }); return amount;
   }
+  accountFixed(id: string) {
+    if (!this.closed && !this.entries.has(id)) this.entries.set(id, {tokens:ENVELOPE_TOKENS,
+      reservedTokens:ENVELOPE_TOKENS,actualEnvelopeBytes:null,overrun:false,state:"consumed"});
+  }
   settle(id: string, outcome: "returned" | "denied" | "failed" | "canceled"): boolean {
     const entry = this.entries.get(id);
     if (!entry || entry.state !== "held") return false;
@@ -154,13 +159,17 @@ export class BatchReservation {
   }
 }
 
-export function readResultContract(tool: RemoteToolLike) {
+export function readResultContract(tool: RemoteToolLike, args: Record<string, unknown> = {}) {
   const properties = (tool.parametersJsonSchema as { properties?: Record<string, { minimum?: number; maximum?: number; default?: number; $comment?: string }> })?.properties || {};
   const nativeBytes = (READ_RESULT_CONTRACTS.nativeByteTools[tool.pluginIdentifier || ""] || []).includes(tool.name);
   const field = properties.byteBudget ? "byteBudget" : properties.maxChars ? "maxChars"
     : nativeBytes && properties.maxBytes ? "maxBytes" : null;
   const contract = field ? properties[field] : {};
-  const archiveEnvelope = tool.name === "evidence_first_read_context" && localObservationTools.has(tool);
+  const capability = capabilityFor(tool, { name: tool.name, arguments: args });
+  const archiveEnvelope = capability?.resultKind === "archive_page";
+  // The manifest floor is in UTF-16 characters. Byte contracts need a safe
+  // UTF-8 allowance; do not treat a character count as a byte count.
+  const manifestMinimum = field ? (capability?.minimumEnvelopeChars || 0) * (field === "maxChars" ? 1 : 3) : 0;
   // A provider's source-file ceiling is not a useful default batch allocation.
   // Bound an omitted native window to 4 KiB; explicit requests can still ask
   // for more. Bytes already account for UTF-8, unlike character limits.
@@ -180,8 +189,8 @@ export function readResultContract(tool: RemoteToolLike) {
     : field === "maxBytes" ? 1.25 / UTF8_BYTES_PER_TOKEN_ESTIMATE : 1.25,
     // The archive's schema accepts maxChars=1 for range validation, but its
     // identity envelope needs usable headroom before any body can be returned.
-    minimum: archiveEnvelope ? Math.max(ARCHIVE_READ_CONTRACT.minimumEnvelopeChars, tokens(contract.minimum ?? 1))
-      : tokens(contract.minimum ?? (field === "maxChars" ? 128 : 1024)),
+    minimum: Math.max(manifestMinimum, archiveEnvelope ? Math.max(ARCHIVE_READ_CONTRACT.minimumEnvelopeChars, tokens(contract.minimum ?? 1))
+      : tokens(contract.minimum ?? (field === "maxChars" ? 128 : 1024))),
     maximum: tokens(contract.maximum ?? (field === "maxBytes" ? 2 * 1024 * 1024 : field === "byteBudget" ? 65536 : 4096)) };
 }
 
@@ -189,8 +198,9 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
   // Require an actionable source read when source readers are exposed. The
   // auxiliary archive reader may have no refs yet, so it cannot certify that
   // source acquisition fits. The guard reserves the actual selected request.
-  const sources = tools.filter(tool => tool.name !== "evidence_first_read_context");
-  const actionable = sources.length ? sources : tools;
+  const readers = tools.filter(tool => operationCapabilities(tool).some(op => ["source_body", "search_hits", "archive_page"].includes(op.resultKind)));
+  const sources = readers.filter(tool => operationCapabilities(tool).some(op => ["source_body", "search_hits"].includes(op.resultKind)));
+  const actionable = sources.length ? sources : readers;
   const minimumFor = (tool: RemoteToolLike) => {
     const c = readResultContract(tool);
     return c.field ? Math.ceil(c.minimum * c.multiplier) + UNKNOWN_SIZE_MARGIN_TOKENS : 3072 + UNKNOWN_SIZE_MARGIN_TOKENS;
@@ -200,7 +210,7 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
   // required lifecycle operations. A cheap source read cannot certify that
   // the archive is usable. This reserves either operation, not their sum:
   // parallel requests still compete in the existing shared batch broker.
-  const archive = archiveRequired && tools.find(tool => tool.name === "evidence_first_read_context"
+  const archive = archiveRequired && readers.find(tool => capabilityFor(tool)?.resultKind === "archive_page"
     && localObservationTools.has(tool));
   return Math.max(sourceMinimum, archive ? minimumFor(archive) : 0);
 }
@@ -210,7 +220,12 @@ const DEFAULT_READ_FLOOR_BYTES = 8192;
 
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
   args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum) {
-  const contract = readResultContract(tool);
+  const capability = capabilityFor(tool, { name: tool.name, arguments: args });
+  if (capability && !needsReadReservation(tool, { name: tool.name, arguments: args })) {
+    batch.accountFixed(id);
+    return { allowed: true, arguments: args, reservedTokens: ENVELOPE_TOKENS, bounded: false, limit: undefined };
+  }
+  const contract = readResultContract(tool, args);
   const { field } = contract;
   if (retryMinimum?.field === field) contract.minimum = Math.max(contract.minimum, retryMinimum.value);
   const requestedWindow = Number(args[field ?? ""] ?? contract.defaultValue);

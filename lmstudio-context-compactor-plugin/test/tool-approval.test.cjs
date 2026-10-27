@@ -41,6 +41,18 @@ function fixture(name = 'unreal_set_active_project', provider = 'mcp/unreal-rag'
 }
 
 // 2026-10-25 run, round 1: a message captured before its second request was
+test('v3 focus operation boundary is checked after confirmation overrides',async()=>{
+  const {restrictedOperationProfiles}=require('../dist/tool-capability-registry');
+  for(const action of ['create','list']){
+    const f=fixture('unity_scene','mcp/unity-tools');
+    restrictedOperationProfiles.set(f.tool,['create']);f.request.arguments.action='create';
+    f.ctl.requestConfirmToolCall=async()=>({type:'allow',toolArgsOverride:{action,project:'C:/Game'}});
+    await f.invoke();assert.equal(f.outcome.type,action==='create'?'allow':'deny');
+    if(action==='list')assert.equal(f.trace.at(-1).validationState,'denied_operation_profile');
+  }
+});
+
+// 2026-10-25 run, round 1: a message captured before its second request was
 // finalized showed that request under a fallback id, then again when finalized.
 test('a request captured before its registration is shown once', () => {
   const {ChatMessage} = require('@lmstudio/sdk');

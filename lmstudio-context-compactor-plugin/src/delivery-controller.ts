@@ -153,7 +153,7 @@ export function verificationScopeNotice(history: Chat, finalText: string): strin
   for (const message of messages.slice(start)) {
     for (const request of message.getToolCallRequests()) names.set(String(request.id || ""), request.name);
     for (const result of message.getToolCallResults()) {
-      if (names.get(String(result.toolCallId || "")) !== "evidence_first_validate") continue;
+      if (!require("./tool-capability-core.js").hasRole(names.get(String(result.toolCallId || "")), "structure_validation")) continue;
       const raw = (result as { content?: unknown }).content;
       const content = typeof raw === "string" ? raw : JSON.stringify(raw ?? "");
       if (/\\?"factualEvidenceVerified\\?"\s*:\s*true/u.test(content)) factual++;

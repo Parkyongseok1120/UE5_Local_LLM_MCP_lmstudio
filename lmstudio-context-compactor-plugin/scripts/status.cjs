@@ -8,6 +8,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/config-defaults.ts",
   "src/generated-runtime-identity.ts",
   "src/generated-tool-contract.ts",
+  "src/generated-tool-capability-data.js",
   "src/generated-unity-tool-contract.ts",
   "src/tool-result-semantics.js",
   "src/interrupted-calls.js",
@@ -46,6 +47,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/runtime-identity.ts",
   "src/tool-boundary.ts",
   "src/tool-capability-registry.ts",
+  "src/tool-capability-core.js",
   "src/engine-profiles.js",
 
   "src/index.ts",

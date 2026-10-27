@@ -1,4 +1,6 @@
-import { UNITY_OBSERVATION_TOOL_NAMES, UNITY_READ_OPERATIONS, UNITY_TOOL_EFFECTS } from "./generated-unity-tool-contract";
+import { UNITY_OBSERVATION_TOOL_NAMES } from "./generated-unity-tool-contract";
+import { capabilityFor, operationCapabilities, hasRole, needsReadReservation, localObservationTools } from "./tool-capability-core.js";
+export { capabilityFor, hasRole, needsReadReservation, localObservationTools };
 import type { TaskObjective } from "./execution-contracts";
 import { resultSemantics } from "./tool-result-semantics.js";
 import type { ChatMessage } from "@lmstudio/sdk";
@@ -27,19 +29,19 @@ export type RemoteToolLike = Tool & {
 };
 
 // Only locally constructed tool objects can receive local read authority.
-export const localObservationTools = new WeakSet<object>();
 // Mixed tools: only the listed actions are observations. unity_references collect/release,
 // unity_snapshot capture/record_start/record_stop/release and unity_symbols index start worker
 // processes or change retained state, so they are not read operations.
-const readOperations: Readonly<Record<string, readonly string[]>> = UNITY_READ_OPERATIONS;
+function readActions(tool: RemoteToolLike): string[] { return operationCapabilities(tool).filter(op => op.action && op.effect === "read").map(op => op.action); }
 export const readOnlyOperationProfiles = new WeakSet<object>();
+export const restrictedOperationProfiles = new WeakMap<object, readonly string[]>();
 // Generated from config/stable_tool_manifest.json (the servers' effect SSOT);
 // never inferred from an arbitrary remote server's readOnlyHint.
 export const UNREAL_RAG_OBSERVATION_TOOLS = new Set(UNREAL_RAG_OBSERVATION_TOOL_NAMES);
 
 export function hasReadCapability(tool: RemoteToolLike): boolean {
   return isObservationOnlyToolCall(tool, { name: tool.name, arguments: {} })
-    || (tool.pluginIdentifier === ENGINE_PROFILES.unity.fileProvider && Boolean(readOperations[tool.name]));
+    || readActions(tool).length > 0;
 }
 
 export const UNITY_OBSERVATION_TOOLS = new Set(UNITY_OBSERVATION_TOOL_NAMES);
@@ -57,32 +59,12 @@ function hasReadAuthority(
   tool: RemoteToolLike,
   request: Pick<ToolCallRequest, "name" | "arguments">,
 ): boolean {
-  const plugin = String(tool.pluginIdentifier || "").trim().toLowerCase();
-  const name = String(request.name || tool.name || "").trim();
-  const args = request.arguments && typeof request.arguments === "object"
-    ? request.arguments as Record<string, unknown> : {};
-
-  if (name !== tool.name) return false;
-  if (localObservationTools.has(tool)) return true;
-  if (plugin === "mcp/evidence-first"
-    && ["evidence_first_contract", "evidence_first_validate", "evidence_first_status"].includes(name)) return true;
-  if (plugin === ENGINE_PROFILES.unity.fileProvider) {
-    if (UNITY_OBSERVATION_TOOLS.has(name)) return true;
-    if (readOperations[name]) return readOperations[name].includes(String(args.action || ""));
-    return false;
-  }
-  if (plugin === "mcp/unreal-rag") {
-    return UNREAL_RAG_OBSERVATION_TOOLS.has(name);
-  }
-  if (plugin === ENGINE_PROFILES.unreal.fileProvider) {
-    return UNREAL_OBSERVATION_TOOLS.has(name);
-  }
-  return false;
+  return capabilityFor(tool, request)?.effect === "read";
 }
 
 export type ToolCapability = {
   provider: string; name: string; scope: "unity" | "unreal" | "common";
-  effect: "read" | "approval_required"; approval: "none" | "host";
+  effect: "read" | "ephemeral" | "approval_required"; approval: "none" | "host";
   recoveryEligible: boolean; resultClass: "observation" | "operation";
   continuation: "archive_offset" | "published_schema" | "none"; rehydratable: boolean;
 };
@@ -93,11 +75,13 @@ export function capabilityScope(tool: { pluginIdentifier?: string }): "unity" | 
 }
 export function resolveCapability(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">): ToolCapability {
   const read = hasReadAuthority(tool, request);
+  const capability = capabilityFor(tool, request);
+  const ephemeral = capability?.effect === "ephemeral";
   return {
 provider: tool.pluginIdentifier || "local", name: tool.name, scope: capabilityScope(tool),
-    effect: read ? "read" : "approval_required", approval: read ? "none" : "host", recoveryEligible: read,
+    effect: read ? "read" : ephemeral ? "ephemeral" : "approval_required", approval: read || ephemeral ? "none" : "host", recoveryEligible: read,
     resultClass: read ? "observation" : "operation", rehydratable: read,
-    continuation: read ? (tool.name === "evidence_first_read_context" ? "archive_offset" : "published_schema") : "none"
+    continuation: read ? (capability?.resultKind === "archive_page" ? "archive_offset" : "published_schema") : "none"
 };
 }
 export function isObservationOnlyToolCall(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) {
@@ -133,14 +117,28 @@ export class ToolCapabilityRegistry {
     this.tools = tools.filter(t => !this.collisions.includes(t.name));
   }
   resolve(name: string) { return this.tools.find(t => t.name === name); }
+  mutationProfile() {
+    return this.tools.flatMap(tool => {
+      const actions = operationCapabilities(tool).filter(op => op.effect === "mutation" && op.action).map(op => op.action);
+      if (!actions.length) return this.isMutation(tool, {name:tool.name,arguments:{}}) ? [tool] : [];
+      const schema = tool.parametersJsonSchema as {properties?:Record<string,unknown>;required?:string[]};
+      const narrowed = Object.create(tool) as RemoteToolLike;
+      Object.defineProperty(narrowed,"parametersJsonSchema",{enumerable:true,value:{...schema,
+        properties:{...schema?.properties,action:{type:"string",enum:actions}},required:[...new Set([...(schema?.required||[]),"action"])]}});
+      restrictedOperationProfiles.set(narrowed,actions);
+      return [narrowed];
+    });
+  }
+  resultKind(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) {
+    return this.resolve(tool.name) === tool ? capabilityFor(tool, request)?.resultKind ?? null : null;
+  }
+  needsReadReservation(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) {
+    return this.resolve(tool.name) === tool && needsReadReservation(tool, request);
+  }
+  isSourceBody(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) { return this.resultKind(tool, request) === "source_body"; }
   isMutation(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">): boolean {
     if (request.name !== tool.name || this.resolve(tool.name) !== tool) return false;
-    const provider = String(tool.pluginIdentifier || "").toLowerCase();
-    if (provider === ENGINE_PROFILES.unreal.fileProvider) return UNREAL_AGENT_MUTATIONS.has(tool.name);
-    if (provider === "mcp/unreal-rag") return UNREAL_RAG_MUTATIONS.has(tool.name);
-    if (provider !== ENGINE_PROFILES.unity.fileProvider) return false;
-    const effect = UNITY_TOOL_EFFECTS[tool.name];
-    return (typeof effect === "string" ? effect : effect?.[String((request.arguments as Record<string, unknown>)?.action || "")]) === "mutation";
+    return capabilityFor(tool, request)?.effect === "mutation";
   }
   mutationOutcomes(messages: readonly ChatMessage[]): readonly ("applied" | "failed")[] {
     const requests = new Map<string, ToolCallRequest | null>();
@@ -165,15 +163,14 @@ export class ToolCapabilityRegistry {
    * providers stay: only what the request ruled out is withheld. */
   reviewProfile() {
     return this.tools.filter(tool => {
-      const plugin = String(tool.pluginIdentifier || "").trim().toLowerCase();
-      return !(plugin === ENGINE_PROFILES.unreal.fileProvider && UNREAL_AGENT_MUTATIONS.has(tool.name))
-        && !(plugin === "mcp/unreal-rag" && UNREAL_RAG_MUTATIONS.has(tool.name));
+      const capability = capabilityFor(tool);
+      return !(capability?.scope === "unreal" && capability.effect === "mutation");
     });
   }
   readProfile() {
     return this.tools.filter(hasReadCapability).map(tool => {
-      const actions = tool.pluginIdentifier === ENGINE_PROFILES.unity.fileProvider ? readOperations[tool.name] : undefined;
-      if (!actions) return tool;
+      const actions = readActions(tool);
+      if (!actions.length) return tool;
       const schema = (tool.parametersJsonSchema || {}) as { properties?: Record<string, unknown>; required?: string[] };
       // Preserve the SDK tool implementation/remote session while narrowing the
       // model-facing operation schema. The guard independently enforces it.

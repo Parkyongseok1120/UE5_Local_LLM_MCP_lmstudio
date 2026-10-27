@@ -238,7 +238,8 @@ function provenanceFromMessages(messages) {
 }
 
 // A structure validator proves a packet is well formed, never that its facts are true.
-const STRUCTURE_ONLY_TOOLS = new Set(["evidence_first_validate"]);
+const { namesForRole } = require("./tool-capability-core.js");
+const STRUCTURE_ONLY_TOOLS = new Set(namesForRole("structure_validation"));
 function structureOnlyResult(value, toolName) {
   return STRUCTURE_ONLY_TOOLS.has(String(toolName || ""))
     || (isRecord(value) && typeof value.validationScope === "string" && value.factualEvidenceVerified === false);

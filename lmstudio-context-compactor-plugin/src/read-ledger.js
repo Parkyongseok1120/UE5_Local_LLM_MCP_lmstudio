@@ -12,7 +12,8 @@
 const { normalizeRanges } = require("./evidence-ranges.js");
 const { fileSourceKey } = require("./evidence-identity.js");
 
-const SOURCE_READ_TOOLS = new Set(["read_file", "read_file_range", "read_symbol"]);
+const { namesForRole } = require("./tool-capability-core.js");
+const SOURCE_READ_TOOLS = new Set(namesForRole("source_read"));
 const SHA256 = /^[A-Fa-f0-9]{64}$/u;
 const MAX_ENTRIES = 64;
 const MAX_RANGES = 16;

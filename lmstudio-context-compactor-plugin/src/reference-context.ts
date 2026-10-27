@@ -70,8 +70,9 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 const text = (value: unknown, max: number = REFERENCE_LIMITS.textChars): string | undefined => typeof value === "string"
   ? sanitizeDerivedOperationalText(value).slice(0, max) : undefined;
 const integer = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
-const readFailureTool = (tool: string) => ["read_file", "read_file_range", "read_symbol"].includes(tool);
-const ENGINE_SOURCE_TOOLS = new Set(["read_file", "read_file_range", "read_symbol", "search_files"]);
+const { hasRole, namesForRole } = require("./tool-capability-core.js");
+const readFailureTool = (tool: string) => hasRole(tool, "source_read");
+const ENGINE_SOURCE_TOOLS = new Set(namesForRole("engine_source"));
 /** The engine root of an engine:// result: its absolute path minus the
  * engine-relative path it was requested by. Anything else names no root. */
 function engineRootOfRead(value: Record<string, any>): string {

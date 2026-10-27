@@ -18,6 +18,29 @@ def _manifest() -> dict:
     )
 
 
+def test_derived_tool_contract_matches_effects_and_error_spelling():
+    manifest = _manifest()
+    contract = json.loads((ROOT / "config/tool_contract.json").read_text(encoding="utf-8-sig"))
+    assert contract["derivedFrom"] == "config/stable_tool_manifest.json"
+    assert contract["malformedArgsPolicy"]["agentErrorCode"] == "INVALID_ARGUMENT"
+    classes = contract["sideEffectClasses"]
+    effects = {**manifest["agentToolEffects"], **manifest["ragToolEffects"]}
+    assert set(classes["read_only"]) == {n for n, e in effects.items() if e == "read"}
+    assert set(classes["ephemeral"]) == {n for n, e in effects.items() if e == "ephemeral"}
+    assert set(classes["diagnostic_process"] + classes["index_maintenance"]) == {n for n, e in effects.items() if e == "long_running"}
+    assert set(classes["configuration"] + classes["write"]) == {n for n, e in effects.items() if e == "mutation"}
+    kinds = {"source_body", "search_hits", "archive_page", "validation", "metadata", "proposal", "mutation_result"}
+    for provider, descriptor in manifest["capabilityProviders"].items():
+        operations = manifest["operationContracts"][provider]
+        effects = manifest[descriptor["effects"]]
+        assert set(operations) == set(effects)
+        for name, effect in effects.items():
+            rows = operations[name]["actions"] if isinstance(effect, dict) else {"default": operations[name]}
+            if isinstance(effect, dict):
+                assert set(rows) == set(effect)
+            assert all(row["resultKind"] in kinds for row in rows.values())
+
+
 def test_default_rag_catalog_matches_direct_manifest(tmp_path: Path) -> None:
     del tmp_path
     definitions = direct_rag_tool_definitions()
