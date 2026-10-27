@@ -534,7 +534,7 @@ class WorkingContext {
   /** How often this conversation went back to a file (re-reads, UNCHANGED
    * repeats, archive pages): the reads it evidently still needs. */
   readUse(key) {
-    return this.readLedger.entries().filter(entry => (entry.sourceKey || entry.key) === key)
+    return this.readLedger.entries().filter(entry => entry.sourceKey ? entry.sourceKey === key : entry.key === pathKey(key))
       .reduce((total, entry) => total + Math.max(0, entry.deliveries - 1) + entry.archivePages + entry.redundant, 0);
   }
 

@@ -191,7 +191,10 @@ test("v3 mutation timeout final instruction declares unapplied changes", async (
     } };
   const ctl = fakeController(Chat.from([{ role: "user", content: "수정 진행해봐" }]), model,
     { auditCompletionMode: "bounded", auditResearchSeconds: 1, reportReviewMode: "off" });
-  await handlePredictionLoop(ctl);
+  // AbortSignal.timeout does not keep Node 20's test process alive by itself.
+  const keepAlive = setInterval(() => {}, 1000);
+  try { await handlePredictionLoop(ctl); }
+  finally { clearInterval(keepAlive); }
   assert.equal(inputs.length, 2);
   assert.match(inputs[1], /요청한 변경은 적용되지 않았습니다:/u);
 });

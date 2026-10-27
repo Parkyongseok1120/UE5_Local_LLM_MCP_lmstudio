@@ -146,6 +146,22 @@ test("the working-set budget is a share of low water with an edit-only floor", (
   assert.equal(broker.pinnedWorkingSetChars({ effectiveLowWaterTokens: 2000 }), 6144);
 });
 
+test("legacy read-use keys stay case-folded while scoped source keys stay distinct", () => {
+  const context = store();
+  try {
+    const facts = { path: "project://Source/GameMode.cpp", key: "source/gamemode.cpp", sourceVersion: "a".repeat(64),
+      lines: [1, 10], bytes: null, complete: false, totalLines: null, size: null, chars: 10 };
+    context.readLedger.record(facts, { round: 1 }); context.readLedger.record(facts, { round: 2 });
+    assert.equal(context.readUse("Source/GameMode.cpp"), 1);
+    const a = { ...facts, sourceKey: "source:project-a" }, b = { ...facts, sourceKey: "source:project-b" };
+    context.readLedger.record(a, { round: 3 }); context.readLedger.record(a, { round: 4 });
+    context.readLedger.record(b, { round: 5 });
+    assert.equal(context.readUse(a.sourceKey), 1);
+    assert.equal(context.readUse(b.sourceKey), 0);
+    assert.equal(context.readUse("source:unknown"), 0);
+  } finally { context.close(); }
+});
+
 function lowWaterFixture(preferred) {
   const config = readConfig({ getPluginConfig() { return { get: key => ({ contextManagementMode: "deterministic",
     workingInputTargetTokens: 6000, workingInputTriggerTokens: 9000, workingInputScaling: "fixed",
