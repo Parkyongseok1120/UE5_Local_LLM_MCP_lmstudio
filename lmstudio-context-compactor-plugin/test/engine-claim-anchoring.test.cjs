@@ -41,6 +41,18 @@ const rpcClaim = (severity = "P1", extra = {}) => ({ mode: "audit", claims: [{
     observation: "HandleServerFire calls ClientConfirmHit() after ApplyPointDamage." }],
   behaviorPath: [], counterEvidence: ["none"], unknowns: [], ...extra }] });
 
+test("v3 engine line returned via search_files backs the fact", () => {
+  const uri = "engine://Engine/Source/Runtime/Engine/Private/Controller.cpp";
+  const messages = exchange(projectRead(), "search-controller", "search_files",
+    { path: uri, pattern: "bCanEverTick" }, { ok: true, results: [
+      { path: uri, line: 58, text: "PrimaryActorTick.bCanEverTick = true;" },
+    ] });
+  const claim = rpcClaim("P1", { claim: "Disable PlayerController actor tick: bCanEverTick = false.",
+    evidence: [{ kind: "framework_source", location: uri + ":58", observation: "Constructor tick default." }] });
+  assert.deepEqual(packetEngineClaimGaps(claim, returnedEngineEvidence(messages), "unreal"), []);
+  assert.equal(packetEngineClaimGaps(claim, returnedEngineEvidence(projectRead()), "unreal").length, 1);
+});
+
 test("the catalogue ships the Client RPC and PlayerController tick facts as data", () => {
   const ids = bundledEngineClaimFacts.map(fact => fact.id);
   assert.ok(ids.includes("ue.net.client-rpc-callspace"));

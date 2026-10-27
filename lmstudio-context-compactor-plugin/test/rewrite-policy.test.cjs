@@ -62,6 +62,21 @@ function store() {
   return new WorkingContext({ conversation: "rewrite", lineage: `rewrite-${Math.random()}`, repository: "fixture", workspace: "fixture" });
 }
 
+test("v3 projectionExhausted is measured after low-water compaction", async () => {
+  const config = configFor({ workingInputScaling: "fixed", workingInputTargetTokens: 4000, workingInputTriggerTokens: 6700 });
+  const w = water(config);
+  const history = withProse(Chat.from([{ role: "user", content: "Review the synthetic fixture" }]),
+    w.effectiveHighWaterTokens + 2000, 12);
+  const wc = store();
+  try {
+    const { result, byEvent } = await prepare(config, history, wc);
+    assert.equal(result.kind, "ready");
+    assert.ok(byEvent("working_context_projection").some(e => e.pinsReleased));
+    assert.ok(result.finalMeasurement.inputTokens < w.effectiveHighWaterTokens);
+    assert.equal(result.projectionExhausted, false);
+  } finally { wc.close(); }
+});
+
 test("a projection that settles below the midpoint keeps the conversation", async () => {
   const config = configFor();
   const w = water(config);

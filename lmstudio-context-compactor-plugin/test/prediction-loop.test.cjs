@@ -98,6 +98,101 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
   return ctl;
 }
 
+// v3 uses a synthetic prior audit and returned declarations only.
+for (const objective of ["mutate", "review"]) test(`v3 ${objective === "mutate"
+  ? "mutation objective under working-set pressure reaches a mutation tool call"
+  : "review objective under the same pressure finalizes with trigger context_working_set_exhausted"}`, async () => {
+  const history = Chat.from([{ role: "user", content: "Audit these synthetic declarations." }]);
+  const bodies = Array.from({ length: 4 }, (_, i) => ({
+    ok: true, path: `project://Source/Fixture${i}.cpp`, sha256: String(i + 1).repeat(64),
+    startLine: 1, endLine: 2, totalLines: 2, content: `int Field${i * 2};\nint Field${i * 2 + 1};`,
+  }));
+  const findings = bodies.flatMap((_, i) => [0, 1].map(j =>
+    `Source/Fixture${i}.cpp:${j + 1} \x60Field${i * 2 + j}\x60 has a bug: missing initialization.`)).join("\n");
+  for (const [i, body] of bodies.entries()) {
+    history.append(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+      toolCallRequest: { type: "function", id: "audit-" + i, name: "read_file", arguments: { path: body.path } } }] }));
+    history.append(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult",
+      toolCallId: "audit-" + i, content: JSON.stringify(body) }] }));
+  }
+  history.append("assistant", findings);
+  history.append("user", objective === "mutate" ? "수정 진행해봐" : "이 근거를 검토해줘");
+  let rounds = 0, mutations = 0;
+  const tools = [
+    { name: "read_file", pluginIdentifier: "mcp/unreal-agent", description: "Read fixture", parametersJsonSchema: { type: "object",
+      properties: { path: { type: "string" }, byteBudget: { type: "integer", minimum: 2048, maximum: 65536 } } } },
+    { name: "apply_edit_bundle", pluginIdentifier: "mcp/unreal-agent", description: "Apply fixture edits",
+      parametersJsonSchema: { type: "object", properties: {} } },
+  ];
+  const model = { identifier: "v3-pressure-fixture", async getContextLength() { return 84224; },
+    applyPromptTemplate: measuredCataloguePrompt,
+    async countTokens(text) { return text.startsWith("[") ? 100 : rounds === 1 ? 67000 : 30000; },
+    async act(chat, offered, opts) {
+      const n = rounds++;
+      if (n === 0 || n === 1) {
+        if (n === 0) opts.onMessage(ChatMessage.create("assistant", findings));
+        for (const [i, body] of (n === 0 ? bodies : bodies.slice(0, 1)).entries()) {
+          const id = `r${n}-${i}`;
+          opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest",
+            toolCallRequest: { type: "function", id, name: "read_file", arguments: { path: body.path } } }] }));
+          opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id,
+            content: JSON.stringify(body) }] }));
+        }
+        opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+        opts.onRoundEnd(); throw opts.signal.reason;
+      }
+      if (n === 2 && objective === "mutate") {
+        assert.ok(offered.some(t => t.name === "apply_edit_bundle"), "mutation authority must survive context pressure");
+        const request = { type: "function", id: "mutation", name: "apply_edit_bundle", arguments: {} };
+        await opts.guardToolCall(0, 1, { toolCallRequest: request, allow() { mutations++; },
+          allowAndOverrideParameters() { mutations++; }, deny(reason) { assert.fail(reason); } });
+        opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "toolCallRequest", toolCallRequest: request }] }));
+        opts.onMessage(ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "mutation",
+          content: JSON.stringify({ ok: true, applied: true }) }] }));
+        opts.onPredictionCompleted({ stats: { stopReason: "toolCalls" } });
+        opts.onRoundEnd(); throw opts.signal.reason;
+      }
+      if (objective === "review") assert.equal(offered.length, 0);
+      assert.ok(n < 5, "bounded synthetic execution");
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", objective === "mutate" ? "Changes applied." : "Review is partial."));
+    } };
+  const ctl = fakeController(history, model, { contextManagementMode: "hybrid", projectEngine: "unreal",
+    maxOutputReserve: 8192, safetyMarginTokens: 2048, workingInputTargetTokens: 46000,
+    workingInputTriggerTokens: 56000, designGuidanceMode: "off", semanticHandoff: false,
+    reportReviewMode: "off", toolStagnationAction: "off" }, tools);
+  await handlePredictionLoop(ctl);
+  assert.ok(ctl.debugValues.some(e => e.event === "working_context_projection" && e.pinsReleased));
+  if (objective === "mutate") assert.equal(mutations, 1);
+  else assert.ok(ctl.debugValues.some(e => e.finalizationTrigger === "context_working_set_exhausted"));
+});
+
+test("v3 mutation timeout final instruction declares unapplied changes", async () => {
+  const inputs = [];
+  const model = { identifier: "v3-timeout", async getContextLength() { return 84224; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 1000; },
+    async act(chat, tools, opts) {
+      inputs.push(chat.toString());
+      if (inputs.length === 1) {
+        await new Promise(resolve => opts.signal.addEventListener("abort", resolve, { once: true }));
+        throw opts.signal.reason;
+      }
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", "Timeout report."));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "수정 진행해봐" }]), model,
+    { auditCompletionMode: "bounded", auditResearchSeconds: 1, reportReviewMode: "off" });
+  await handlePredictionLoop(ctl);
+  assert.equal(inputs.length, 2);
+  assert.match(inputs[1], /요청한 변경은 적용되지 않았습니다:/u);
+});
+test("v3 mutation partial report starts with unapplied changes", () => {
+  const { DeliveryController } = require("../dist/delivery-controller");
+  const owner = new DeliveryController([], { kind: "mutate", requiredEffects: new Set(["read", "mutation"]), mutationState: "none" });
+  assert.match(owner.partialReport(Chat.from([{ role: "user", content: "수정 진행해봐" }]), "research_timeout").text,
+    /^요청한 변경은 적용되지 않았습니다:/u);
+});
+
 test("B04/O03 production handler rejects an inexact input before model dispatch or durable commit", async () => {
   let calls = 0;
   const model = { async getContextLength() { return 38912; },
