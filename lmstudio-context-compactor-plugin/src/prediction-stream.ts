@@ -5,6 +5,8 @@ import type {
 } from "@lmstudio/sdk";
 import { InternalDataOutputFilter, stripInternalDataEcho } from "./internal-data-output";
 import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol } from "./raw-tool-intent";
+import { ChatMessage } from "@lmstudio/sdk";
+const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 
 type SplitVisibleAnswer = (text: string) => {
   visibleText: string;
@@ -23,14 +25,61 @@ type StreamState = {
   consumed: boolean;
   dataFilter: InternalDataOutputFilter;
   protocolFilter: ToolProtocolOutputFilter;
+  echoFilter: DeliveredPrefixEchoFilter;
+  visibleText: string;
 };
 
 export type StreamedAssistant = {
   streamed: boolean;
   visibleText: string;
+  duplicateSuppressed?: boolean;
+  suppressedChars?: number;
 };
 
 const FOOTER_MARKER = "\n<!-- direct-continuity-note-v1 -->";
+
+/** A supplement may echo a delivered answer before producing its actual delta.
+ * Hold only a possible prefix; unrelated replies and short partial matches pass. */
+export class DeliveredPrefixEchoFilter {
+  private buffer = "";
+  private passthrough = false;
+  private readonly prefix: string;
+  duplicateSuppressed = false;
+  suppressedChars = 0;
+  constructor(deliveredPrefix = "") { this.prefix = this.normalize(deliveredPrefix); }
+  private normalize(value: string) { return value.replace(/\s+/gu, " ").trim(); }
+  push(text: string): string {
+    if (this.passthrough || !this.prefix) return text;
+    this.buffer += text;
+    const current = this.normalize(this.buffer);
+    if (this.prefix.startsWith(current)) return "";
+    let matched = 0;
+    while (matched < current.length && matched < this.prefix.length && current[matched] === this.prefix[matched]) matched++;
+    this.passthrough = true;
+    if (matched < this.prefix.length * 0.9) return this.drain();
+    // Map the normalized mismatch back to the original text, preserving the delta.
+    let normalized = 0, cut = this.buffer.length, started = false;
+    for (const match of this.buffer.matchAll(/\s+|\S+/gu)) {
+      const whitespace = /^\s/u.test(match[0]);
+      if (whitespace && !started) continue;
+      const length = whitespace ? 1 : match[0].length;
+      if (normalized + length > matched) { cut = match.index! + (whitespace ? 0 : matched - normalized); break; }
+      normalized += length; started = true;
+    }
+    if (cut > 0 && /[\uDC00-\uDFFF]/u.test(this.buffer[cut] || "") && /[\uD800-\uDBFF]/u.test(this.buffer[cut - 1])) cut--;
+    this.duplicateSuppressed = true; this.suppressedChars += cut;
+    this.buffer = this.buffer.slice(cut);
+    return this.drain();
+  }
+  finish(): string {
+    if (!this.passthrough && this.prefix && this.normalize(this.buffer).length >= this.prefix.length * 0.9) {
+      this.duplicateSuppressed = true; this.suppressedChars += this.buffer.length; this.buffer = "";
+    }
+    this.passthrough = true;
+    return this.drain();
+  }
+  private drain() { const text = this.buffer; this.buffer = ""; return text; }
+}
 
 export class GenerationRepetitionDetector {
   private text = "";
@@ -73,6 +122,18 @@ export class GenerationRepetitionDetector {
 
 export class PredictionStreamRenderer {
   private readonly states = new Map<number, StreamState>();
+  private readonly consumedMessages = new WeakMap<ChatMessage, StreamedAssistant>();
+  private fallbackSuppressed = 0;
+  get suppressedChars() { return this.fallbackSuppressed + [...this.states.values()].reduce((n, s) => n + s.echoFilter.suppressedChars, 0); }
+  consumeMessage(message: ChatMessage): StreamedAssistant {
+    let result = this.consumedMessages.get(message);
+    if (!result) { result = this.consumeAssistant(message.getText()); this.consumedMessages.set(message, result); }
+    return result;
+  }
+  visibleMessage(message: ChatMessage): ChatMessage {
+    if (!message.isAssistantMessage() || !message.getText()) return message;
+    const copy = ChatMessage.from(message); copy.replaceText(this.consumeMessage(message).visibleText); return copy;
+  }
 
   constructor(
     private readonly ctl: Pick<PredictionLoopHandlerController, "createContentBlock">,
@@ -80,6 +141,7 @@ export class PredictionStreamRenderer {
     private readonly protectContinuityFooter: boolean,
     private readonly suppressReasoning = false,
     private readonly internalDataParts: readonly string[] = [],
+    private readonly deliveredPrefix?: string,
   ) {}
 
   private state(roundIndex: number): StreamState {
@@ -90,6 +152,7 @@ export class PredictionStreamRenderer {
         sawFragment: false, finished: false, consumed: false,
         dataFilter: new InternalDataOutputFilter(this.internalDataParts),
         protocolFilter: new ToolProtocolOutputFilter(),
+        echoFilter: new DeliveredPrefixEchoFilter(this.deliveredPrefix), visibleText: "",
       };
       this.states.set(roundIndex, state);
     }
@@ -111,8 +174,9 @@ export class PredictionStreamRenderer {
   }
 
   private appendVisible(state: StreamState, text: string, fragment: LLMPredictionFragmentWithRoundIndex): void {
-    text = state.dataFilter.push(state.protocolFilter.push(text));
+    text = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.push(text)));
     if (!text) return;
+    state.visibleText += text;
     this.answerBlock(state).appendText(text, {
       tokensCount: fragment.tokensCount,
       fromDraftModel: fragment.containsDrafted,
@@ -164,12 +228,13 @@ export class PredictionStreamRenderer {
     if (state.finished) return;
     state.finished = true;
     if (!state.footerSeen && state.pendingVisible) {
-      const visible = state.dataFilter.push(state.protocolFilter.push(state.pendingVisible));
-      if (visible) this.answerBlock(state).appendText(visible);
+      const visible = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.push(state.pendingVisible)));
+      if (visible) { state.visibleText += visible; this.answerBlock(state).appendText(visible); }
       state.pendingVisible = "";
     }
-    const remaining = state.dataFilter.push(state.protocolFilter.finish()) + state.dataFilter.finish();
-    if (remaining) this.answerBlock(state).appendText(remaining);
+    const remaining = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.finish()) + state.dataFilter.finish())
+      + state.echoFilter.finish();
+    if (remaining) { state.visibleText += remaining; this.answerBlock(state).appendText(remaining); }
     if (state.thinkingBlock) {
       state.thinkingBlock.setStyle({ type: "thinking", ended: true, title: "생각" });
     }
@@ -181,13 +246,21 @@ export class PredictionStreamRenderer {
     const entry = [...this.states.entries()]
       .sort(([left], [right]) => left - right)
       .find(([, state]) => state.sawFragment && !state.consumed);
-    if (!entry) return { streamed: false, visibleText: stripUnexecutedToolProtocol(stripInternalDataEcho(this.splitVisibleAnswer(rawText).visibleText, this.internalDataParts)) };
+    if (!entry) {
+      const echo = new DeliveredPrefixEchoFilter(this.deliveredPrefix);
+      const text = stripInternalDataEcho(stripUnexecutedToolProtocol(this.splitVisibleAnswer(visibleAssistantText(rawText)).visibleText), this.internalDataParts);
+      const visibleText = echo.push(text) + echo.finish();
+      this.fallbackSuppressed += echo.suppressedChars;
+      return { streamed: false, visibleText,
+        duplicateSuppressed: echo.duplicateSuppressed, suppressedChars: echo.suppressedChars };
+    }
     const [roundIndex, state] = entry;
     this.finish(roundIndex);
     state.consumed = true;
     return {
       streamed: true,
-      visibleText: stripUnexecutedToolProtocol(stripInternalDataEcho(this.splitVisibleAnswer(state.rawVisible).visibleText, this.internalDataParts)),
+      visibleText: state.visibleText, duplicateSuppressed: state.echoFilter.duplicateSuppressed,
+      suppressedChars: state.echoFilter.suppressedChars,
     };
   }
 }

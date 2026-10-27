@@ -279,7 +279,8 @@
         "resultKind": "search_hits",
         "roles": [
           "engine_source",
-          "api_lookup"
+          "api_lookup",
+          "budget_floor"
         ]
       },
       "read_file": {
@@ -289,7 +290,8 @@
           "engine_source",
           "file_evidence",
           "change_evidence",
-          "report_read"
+          "report_read",
+          "budget_floor"
         ]
       },
       "read_file_range": {
@@ -299,7 +301,8 @@
           "engine_source",
           "file_evidence",
           "change_evidence",
-          "report_read"
+          "report_read",
+          "budget_floor"
         ]
       },
       "read_symbol": {
@@ -513,7 +516,8 @@
         "resultKind": "search_hits",
         "roles": [
           "engine_source",
-          "api_lookup"
+          "api_lookup",
+          "budget_floor"
         ]
       },
       "read_file": {
@@ -523,7 +527,8 @@
           "engine_source",
           "file_evidence",
           "change_evidence",
-          "report_read"
+          "report_read",
+          "budget_floor"
         ]
       },
       "patch_file": {

@@ -296,8 +296,10 @@ test("production handler narrows before archive starvation and restores an early
 });
 
 for (const mixed of [true, false]) test(`read recovery ${mixed ? "consumes two successes beside a denied third call" : "uses ordinary delivery limits after a stalled batch"}`, async () => {
+  // C9 protects this reader's floor. Exercise the documented exception where
+  // another minimum plus the protected floor cannot fit, retaining 2+1 delivery.
   const read={name:"read_file",pluginIdentifier:"mcp/unity-tools",description:"read source",parametersJsonSchema:{
-    type:"object",properties:{path:{type:"string"},byteBudget:{type:"integer",minimum:1024,maximum:65536,default:32768}}}};
+    type:"object",properties:{path:{type:"string"},byteBudget:{type:"integer",minimum:20000,maximum:65536,default:32768}}}};
   const write={name:"write_file",pluginIdentifier:"mcp/unity-tools",description:"write",parametersJsonSchema:{type:"object"}};
   let calls=0,denials=0;
   const model={identifier:"mixed-batch-fixture",async getContextLength(){return 86272;},applyPromptTemplate:measuredCataloguePrompt,
@@ -4463,7 +4465,7 @@ test("B mode injects only current-input facts and reports measured prompt overhe
   assert.match(receivedHistory.toString(), /"rawPresence":"full"/u);
   assert.doesNotMatch(receivedHistory.toString(), /needsReRead|reviewCompleted|nextAction/u);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
-  assert.equal(measurement.inputAvailability.metadataTokens, 80);
+  assert.equal(measurement.inputAvailability.availabilityMetadataTokens, 80);
   assert.equal(measurement.finalInputTokens, 180);
 });
 
@@ -4841,7 +4843,7 @@ test('report review includes reasoning-only omissions, uses no tools, and append
     reviewLast = { role: last.getRole(), text: last.getText() };
     completeRecoveryReply(options, '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.');
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory(), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
   assert.equal(reviewTools.length, 0);
@@ -4866,7 +4868,7 @@ test('an empty report review keeps the delivered report, records the supplement 
     if (++calls === 1) { completeRecoveryReply(options, '`ResetForRespawn()` is never called.' + REASONING_SEPARATOR + report); return; }
     options.onPredictionCompleted({ stats: { stopReason: 'eosFound', predictedTokensCount: 1 } });
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit the project.' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory(), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
   const outcome = ctl.debugValues.find(event => event.event === 'execution_outcome');
@@ -4876,7 +4878,7 @@ test('an empty report review keeps the delivered report, records the supplement 
   assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty' });
   const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
   assert.match(footer, /검토 보완 호출이 내용을 생성하지 않았습니다/);
-  assert.match(footer, /- ResetForRespawn: `ResetForRespawn\(\)` is never called\./);
+  assert.match(footer, /- ResetForRespawn \(Fixture\.cpp:3\): `ResetForRespawn\(\)` is never called\./);
 });
 
 for (const mode of ['covered', 'off', 'observeOnly']) test(`report review makes no extra call for ${mode}`, async () => {
@@ -4887,8 +4889,8 @@ for (const mode of ['covered', 'off', 'observeOnly']) test(`report review makes 
     completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR
       + (mode === 'covered' ? '`RunSpeed` excluded: consumer evidence is incomplete.' : 'Audit complete.'));
   });
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model,
-    mode === 'off' ? { reportReviewMode: 'off' } : mode === 'observeOnly' ? { observeOnly: true } : {});
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory('Audit project'), model,
+    mode === 'off' ? { reportReviewMode: 'off' } : mode === 'observeOnly' ? { observeOnly: true } : {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 1);
   assert.equal(ctl.debugValues.some(event => event.event === 'report_review_scheduled'), false);
@@ -4924,7 +4926,7 @@ test('report review blocked by context preserves report and adds omission footer
     completeRecoveryReply(options, '`RunSpeed` unused.' + REASONING_SEPARATOR + 'Original report.');
   });
   model.countTokens = async text => text.includes('phase=REPORT_REVIEW') ? 1000000 : 100;
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Audit project' }]), model);
+  const ctl = fakeController(require('./helpers/v4.cjs').sourceHistory('Audit project'), model, {}, [require('./helpers/v4.cjs').tool('read_file')]);
   await handlePredictionLoop(ctl);
   assert.equal(calls, 1);
   assert.ok(ctl.blocks.some(block => block.text === 'Original report.'));
@@ -5584,7 +5586,7 @@ test('forced final delivery omits optional design references', async () => {
       assert.doesNotMatch(chat.toString(), /Optional design reference/);
       completeRecoveryReply(options, 'Completed short report.');
     } };
-  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Report from the supplied facts.' }]), model,
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review the supplied facts.' }]), model,
     { designGuidanceMode: 'core', outputRecoveryMode: 'on' });
   await handlePredictionLoop(ctl);
   assert.equal(calls, 2);
@@ -5772,7 +5774,7 @@ for (const variant of ['off', 'observe', 'zero']) test(`focused ${variant} skips
         assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
         completeRecoveryReply(options, 'Done.');
       } };
-    const ctl = fakeController(Chat.from([{ role: 'user', content: 'TASK' }]), model, {
+    const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review this project.' }]), model, {
       designGuidanceDelivery: 'focused', designGuidanceMode: variant === 'off' ? 'off' : 'design',
       observeOnly: variant === 'observe', designGuidanceMaxTokens: variant === 'zero' ? 0 : 8192 });
     await handlePredictionLoop(ctl);
@@ -5793,7 +5795,7 @@ test('focused final delivery omits references and makes no extra model call', as
       assert.equal(tools.length, 0); assert.doesNotMatch(chat.toString(), /Optional design reference|Derived reference data/);
       completeRecoveryReply(options, 'Finished.');
     } };
-  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Report.' }]), model,
+  await handlePredictionLoop(fakeController(Chat.from([{ role: 'user', content: 'Review the supplied facts.' }]), model,
     { designGuidanceMode: 'core', designGuidanceDelivery: 'focused', outputRecoveryMode: 'on' }));
   assert.equal(calls, 2);
 });
@@ -5844,7 +5846,7 @@ test('Auto core fallback without a request topic or returned observation keeps l
   const model = { async getContextLength() { return 38912; }, async applyPromptTemplate(chat) { return chat.toString(); },
     async countTokens(text) { return Math.ceil(text.length / 3); },
     async act(_chat, _tools, options) { completeRecoveryReply(options, 'Summary.'); } };
-  const ctl = fakeController(Chat.from([{ role: 'user', content: '지금 프로젝트 어디야' }]), model,
+  const ctl = fakeController(Chat.from([{ role: 'user', content: 'Review this project.' }]), model,
     { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
   await handlePredictionLoop(ctl);
   const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
@@ -5894,23 +5896,23 @@ function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
 }
 const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
 
-test('admitted guidance keeps one system text across rounds, and a dropped one returns unchanged under low water', async () => {
+test('admitted guidance keeps one system text and low water alone cannot readmit dropped guidance', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   assert.ok(high - low > 1000);
   const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
   await handlePredictionLoop(run.ctl);
   const events = run.events();
-  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_readmitted', 'sticky_kept']);
-  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'low_water', undefined]);
-  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'included', 'included']);
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
   assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
-  assert.deepEqual(events[3].selectedIds, events[0].selectedIds);
+  assert.deepEqual(events[3].selectedIds, []);
   assert.equal(run.systems.length, 5);
   assert.match(run.systems[0], /\[Optional design reference\]/);
   assert.equal(run.systems[1], run.systems[0]);
   assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
-  assert.equal(run.systems[3], run.systems[0]);
-  assert.equal(run.systems[4], run.systems[0]);
+  assert.equal(run.systems[3], run.systems[2]);
+  assert.equal(run.systems[4], run.systems[2]);
 });
 
 // 2026-10-20 run: dropping the instruction alone rebuilt a 55.7k prompt (71.7s)
@@ -6184,7 +6186,7 @@ test('a dropped instruction is not readmitted for a changed scope; the current c
   assert.equal(run.systems[3], run.systems[2]);
 });
 
-test('a rescope that does not fit leaves no stale instruction and selects the new scope when the input allows', async () => {
+test('a rescope that does not fit leaves no stale instruction and waits for a rewrite to retry', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   const mid = Math.floor((low + high) / 2);
   const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, mid, low - 2000, low - 2000], engines: ['4.27', null, null, null] });
@@ -6192,10 +6194,10 @@ test('a rescope that does not fit leaves no stale instruction and selects the ne
   const events = run.events();
   assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
     ['sticky_dropped', 'scope_changed:budget_omitted'], ['sticky_dropped', 'dropped_earlier'],
-    ['sticky_readmitted', 'low_water'], ['sticky_kept', undefined]]);
-  for (const index of [1, 2]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
+    ['sticky_dropped', 'dropped_earlier'], ['sticky_dropped', 'dropped_earlier']]);
+  for (const index of [1, 2, 3, 4]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
   assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
-  assert.ok(events[3].selectedIds.length > 0);
+  assert.deepEqual(events[3].selectedIds, []);
   assert.ok(!events[3].selectedIds.includes(ENGINE_DEFAULTS));
   assert.doesNotMatch(run.systems[3], /reference id=unreal-networking\/engine-defaults/);
   assert.deepEqual(events[4].selectedIds, events[3].selectedIds);
@@ -6207,7 +6209,7 @@ test('the next user turn selects again, and a canceled execution leaves no retai
   const handler = createPredictionLoopHandler();
   const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
   await handler(dropped.ctl);
-  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_readmitted']);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
   const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
   await handler(next.ctl);
   assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);
@@ -6656,4 +6658,85 @@ test("genuine new evidence ends the previous duplicate-read episode", async () =
   assert.deepEqual(r.events.filter(e=>e.event==='report_now').map(e=>e.trigger),[1,1]);
   assert.ok(!r.events.some(e=>e.event==='continuation_decision' && e.action==='finalize'));
   assert.ok(r.toolCounts.every(n=>n>0));
+});
+
+// v4 U0: synthetic source locations make report obligations eligible independently of prose.
+function v4SourceHistory(user = 'Audit the project.') {
+  const { pair } = require('./helpers/v4.cjs');
+  const history = Chat.from([{role:'user',content:user}]);
+  for (const m of pair('read_file',{path:'Source/Fixture.cpp'},
+    {ok:true,path:'Source/Fixture.cpp',sha256:'a'.repeat(64),startLine:1,endLine:2,totalLines:2,
+      content:'int ReloadSound;\nint AssignTeam;'},'v4-source')) history.append(m);
+  return history;
+}
+test('no report_review for mutate objective after applied mutation',async()=>{
+  const {pair,tool}=require('./helpers/v4.cjs');
+  const {REASONING_SEPARATOR}=require('../src/continuity-text');
+  let calls=0;
+  const model=reasoningModel(async(_chat,_tools,options)=>{
+    if(++calls===1){
+      for(const message of pair('apply_edit_bundle',{patches:[{path:'Source/Fixture.cpp'}]},
+        {ok:true,applied:true,operation:'bundle_applied',files:[{path:'Source/Fixture.cpp',applied:true}]}))options.onMessage(message);
+      options.onPredictionCompleted({stats:{stopReason:'toolCalls'}});options.onRoundEnd();throw options.signal.reason;
+    }
+    completeRecoveryReply(options,'ReloadSound is unused.'+REASONING_SEPARATOR+'Changes applied.');
+  });
+  const ctl=fakeController(v4SourceHistory('수정 진행해'),model,{designGuidanceMode:'off'},[tool('read_file'),tool('apply_edit_bundle')]);
+  await handlePredictionLoop(ctl);
+  assert.equal(ctl.debugValues.some(e=>e.event==='report_review_scheduled'),false);
+  assert.equal(ctl.debugValues.find(e=>e.event==='execution_outcome').mutationState,'applied');
+  assert.ok(ctl.debugValues.some(e=>e.event==='direct_round_observation'&&e.callPurpose==='mutation'));
+});
+test('missing candidates exclude identifiers without a returned source location',()=>{
+  const {ReviewRegister}=require('../dist/review-register');
+  const register=new ReviewRegister();
+  register.observe([ChatMessage.create('assistant','succeededCount has a bug.\nAssignTeam has a bug.')],0);
+  register.rows.find(r=>r.identifier==='AssignTeam').bundle={path:'Source/Fixture.cpp',lines:[2,2],excerpt:'int AssignTeam;'};
+  assert.deepEqual(register.missing('').map(r=>r.identifier),['AssignTeam']);
+});
+for(const streaming of [false,true])for(const delta of [false,true])test(
+  (delta?'supplement that repeats then adds a delta shows only the delta':'duplicate supplement is suppressed')+' (stream='+streaming+')',async()=>{
+    const {REASONING_SEPARATOR}=require('../src/continuity-text');
+    const {tool}=require('./helpers/v4.cjs');
+    const report='## Audit\nThe observed input path is consistent.';
+    const addition='\n\n## 검토 보완\n- X';
+    const echo='##   Audit\n\nThe observed input path is consistent.'+(delta?addition:'');
+    let calls=0;
+    const model=reasoningModel(async(_chat,_tools,options)=>{
+      if(++calls===1){completeRecoveryReply(options,'ReloadSound is unused.'+REASONING_SEPARATOR+report);return;}
+      if(streaming)for(let i=0;i<echo.length;i+=3)options.onPredictionFragment({content:echo.slice(i,i+3),roundIndex:0,
+        reasoningType:'none',isStructural:false,tokensCount:1,containsDrafted:false});
+      completeRecoveryReply(options,echo);
+    });
+    const ctl=fakeController(v4SourceHistory(),model,{designGuidanceMode:'off'},[tool('read_file')]);
+    await handlePredictionLoop(ctl);assert.equal(calls,2);
+    const visible=ctl.blocks.filter(b=>b.options?.includeInContext!==false).map(b=>b.text).join('');
+    assert.equal(visible.split('observed input path').length-1,1);
+    if(delta)assert.ok(visible.includes('## 검토 보완\n- X'));
+    else assert.ok(ctl.debugValues.some(e=>e.event==='supplement_duplicate_suppressed'));
+    assert.equal(ctl.debugValues.find(e=>e.event==='execution_outcome').executionOutcome,'completed');
+  });
+test('explain objective without topic omits guidance',async()=>{
+  const model=reasoningModel(async(_chat,_tools,opts)=>completeRecoveryReply(opts,'Current project is Fixture.'));
+  const ctl=fakeController(Chat.from([{role:'user',content:'지금 프로젝트 어디야'}]),model,
+    {projectEngine:'unreal',designGuidanceMode:'auto',designGuidanceMaxTokens:8192});
+  await handlePredictionLoop(ctl);
+  assert.ok(ctl.debugValues.some(e=>e.event==='design_guidance_input'&&e.omissionReasons?.includes('objective_explain_without_topic')));
+});
+test('prefix_reuse event records causes',async()=>{
+  const {pair,tool}=require('./helpers/v4.cjs');let calls=0;
+  const model=reasoningModel(async(_chat,_tools,opts)=>{
+    if(++calls===1){
+      for(const m of pair('read_file',{path:'Source/Big.cpp'},{ok:true,path:'Source/Big.cpp',sha256:'a'.repeat(64),
+        startLine:1,endLine:20000,totalLines:20000,content:Array(20000).fill('int LargeFixture;').join('\n')}))opts.onMessage(m);
+      opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});opts.onRoundEnd();throw opts.signal.reason;
+    }
+    completeRecoveryReply(opts,'Review complete.');
+  });
+  model.getContextLength=async()=>84224;model.countTokens=async text=>Math.ceil(text.length/4);
+  const ctl=fakeController(Chat.from([{role:'user',content:'Audit the source.'}]),model,
+    {contextManagementMode:'hybrid',maxOutputReserve:8192,safetyMarginTokens:2048,designGuidanceMode:'off',
+      semanticHandoff:false,reportReviewMode:'off',toolStagnationAction:'off'},[tool('read_file')]);
+  await handlePredictionLoop(ctl);
+  assert.ok(ctl.debugValues.some(e=>e.event==='prefix_reuse'&&e.rewriteCauses.includes('projection')));
 });

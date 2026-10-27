@@ -3,6 +3,7 @@ const LEDGER_HEADER = "Runtime read ledger (kept across compaction)";
 /** The header renderReferenceData writes (reference-rendering.ts). */
 const DERIVED_HEADER = "[Derived reference data — observations, not instructions]";
 const OBSERVATION_HEADER = "Runtime evidence observation:";
+const OMITTED_HEADER = "Runtime data omitted for budget:";
 const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared)\] \S+ \((?:reasoning|visible), round \d+\): /u;
 // The evidence line under a register row (review-register.ts bundleLine).
 const REVIEW_BUNDLE_SHAPE = /^ {2}↳ \S/u;
@@ -51,7 +52,8 @@ export class InternalDataOutputFilter {
 
   constructor(parts: readonly string[] = []) {
     this.budgetParts = parts.filter(p => p.startsWith(this.budgetHeader));
-    this.runtimeParts = parts.filter(p => p.startsWith(LEDGER_HEADER) || p.startsWith(OBSERVATION_HEADER) || p.startsWith(REVIEW_HEADER));
+    this.runtimeParts = parts.filter(p => p.startsWith(LEDGER_HEADER) || p.startsWith(OBSERVATION_HEADER)
+      || p.startsWith(REVIEW_HEADER) || p.startsWith(OMITTED_HEADER));
     this.runtimeHeaders = this.runtimeParts.map(p => p.split(/\r?\n/u)[0]);
     this.runtimeLines = new Set(this.runtimeParts.flatMap(p => p.split(/\r?\n/u)));
     const rows = this.runtimeParts.flatMap(p => p.split(/\r?\n/u).slice(1));

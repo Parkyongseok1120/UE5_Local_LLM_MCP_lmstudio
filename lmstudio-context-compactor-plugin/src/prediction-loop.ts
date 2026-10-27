@@ -16,13 +16,13 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
-import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective } from "./execution-contracts";
+import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
-import { classifyObjective } from "./tool-capability-registry";
+import { classifyObjective, hasMutationCapability } from "./tool-capability-registry";
 import { continuationStatusText } from "./prediction-ui";
 import { NotePersistence } from "./note-persistence";
 import { sealAndRelease } from "./terminal-persistence";
@@ -37,7 +37,7 @@ import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTP
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
-import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, stripUnexecutedToolProtocol, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
+import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
 import { decideReasoningRecovery, reasoningRecoveryOutputCap, repetitionFact } from "./reasoning-recovery";
@@ -155,6 +155,7 @@ export function createPredictionLoopHandler(
     const reviewRegister = new ReviewRegister();
     // Returned bodies and searches the register cites as each judgment's evidence.
     const reviewEvidence = new ReviewEvidenceIndex(allModelTools);
+    reviewEvidence.observe(originalHistory.getMessagesArray());
     evidenceManager.initializeChangeOrigins(originalHistory);
     // A review-only request withholds the file/project mutation schemas it
     // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
@@ -276,9 +277,7 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<"budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
-      | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-      | "repetition_check" | "mutation_focus" | "tool_retry", string>();
+    const runtimeFacts = new Map<RuntimeFactKey, string>();
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -446,6 +445,7 @@ export function createPredictionLoopHandler(
           objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted: recoveryCoordinator.episodeStarted,
           allowReadRecovery: execution.canStartReadRecovery,
           reasoningRecovery: reasoningRecoveryRound,
+          turnStart: roundIndex === 0 && restoredWindow?.windowStatus === "restored",
           // The same headroom clamp bounds a final report's enlarged cap.
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
@@ -455,11 +455,13 @@ export function createPredictionLoopHandler(
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
           // The projection view is derived from the input being assembled, so
           // the round that compacts a body already lists it.
-          getRuntimeFacts: (history: Chat) => {
+          getRuntimeFacts: (history: Chat): RuntimeFactEntry[] => {
             const projection = config.observeOnly ? null : partialProjectionFact(history.getMessagesArray()).fact;
             // Delivered vs visible vs verified, per file, once a body has left the input.
             const ledger = config.observeOnly ? null : evidenceManager.readLedgerFact(history, runtimeFacts.has("report_now"));
-            return [...(projection ? [projection] : []), ...(ledger ? [ledger] : []), ...runtimeFacts.values()];
+            return [...(projection ? [{key: "partial_projection" as const, text: projection}] : []),
+              ...(ledger ? [{key: "read_ledger" as const, text: ledger}] : []),
+              ...[...runtimeFacts].map(([key, text]) => ({key, text}))];
           },
           shownDataBlocks,
           finalizationTrigger: execution.finalizationTrigger,
@@ -592,6 +594,10 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           finalMessageCount: finalMeasurement.messageCount,
           postCompactionInputTokens: compacted || projectionApplied ? finalMeasurement.inputTokens : null,
           postCompactionRemainingTokens: compacted || projectionApplied ? finalMeasurement.remainingTokens : null,
+          ...(assembledInput.measureStages ? await assembledInput.measureStages() : assembledInput.stages),
+          availabilityMetadataTokens: assembledInput.availabilityMetadataTokens,
+          runtimeDataCurrentChars: modelComposition.runtimeDataCurrentChars,
+          runtimeDataSupersededChars: modelComposition.runtimeDataSupersededChars,
           runtimeContext: {
             effectiveContextTokens: "unknown",
             cachedPrefixTokens: "unknown",
@@ -636,18 +642,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             : boundedAudit ? "research" : "off",
           auditFinalizationTrigger: finalizing ? execution.finalizationTrigger : undefined,
           attachmentCount: attachmentContext.attachmentCount,
-          inputAvailability: assembledInput.projection ? {
-            mode: config.inputAvailabilityMode,
-            verificationBoundary: assembledInput.projection.verificationBoundary,
-            hostInputVerification: assembledInput.projection.hostInputVerification,
-            entries: assembledInput.projection.entries,
-            omittedEntryCount: assembledInput.projection.omittedEntryCount,
-            entryListComplete: assembledInput.projection.entryListComplete,
-            metrics: assembledInput.projection.metrics,
-            metadataChars: assembledInput.metadataChars,
-            metadataTokens: assembledInput.metadataTokens,
-            metadataTokenMeasurement: assembledInput.metadataTokens === null ? "unknown" : "prompt_delta",
-          } : { mode: "off" },
+          inputAvailability: inputAvailabilityTelemetry(assembledInput, config.inputAvailabilityMode),
           compactionDetails: compacted && compactionCheckpoint ? {
             omittedMessageCount: compactionCheckpoint.omittedMessageCount,
             retainedMessageCount: retainedIndexes.length,
@@ -673,7 +668,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const roundController = continuingReport ? visibleTranscript.continuationController() : visibleTranscript.controller;
         const roundEmitter = continuingReport ? createMessageEmitter(roundController, modelTools) : emitter;
         const internalDataParts = modelComposition?.privateDataParts || [];
-        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport, internalDataParts);
+        const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport,
+          internalDataParts, reviewingReport ? reportContinuation : undefined);
         const continuationStatus = continuingReport ? ctl.createStatus({ status: "loading", text: "답변 이어 작성 중" }) : null;
         const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
         let generationRepetitionReported = false;
@@ -707,8 +703,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             minimumReadResultTokens(roundTools.filter(hasReadCapability)));
         const reservationIds = new Map<string, string>();
         const roundModelStartedAt = Date.now();
-        if (config.showDebugInfo) ctl.debug({ event: "system_prefix_fingerprint", executionId, modelInputId, roundIndex,
-          ...systemPrefix.observe(modelInput.getMessagesArray()) });
+        if (config.showDebugInfo) systemPrefix.record(ctl, { executionId, modelInputId, roundIndex },
+          modelInput.getMessagesArray(), finalMeasurement, prepared.rewriteCauses);
         const captured = await runOneToolRound(
           tokenSource,
           modelInput,
@@ -800,14 +796,9 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
               let visibleMessage = message;
               let textStreamed = false;
               if (message.isAssistantMessage() && message.getText()) {
-                const streamed = stream.consumeAssistant(message.getText());
-                const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
-                const visibleText = streamed.streamed ? streamed.visibleText : stripUnexecutedToolProtocol(fallback.visibleText);
+                const streamed = stream.consumeMessage(message);
                 textStreamed = streamed.streamed;
-                if (visibleText !== message.getText()) {
-                  visibleMessage = ChatMessage.from(message);
-                  visibleMessage.replaceText(visibleText);
-                }
+                visibleMessage = stream.visibleMessage(message);
               }
               liveMessages.set(message, { visibleMessage, textStreamed });
               roundEmitter.emit(visibleMessage, textStreamed, true);
@@ -818,6 +809,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               toolPlanningRetryBlockedFingerprints: recoveryCoordinator.blockedFingerprints, batchReservation, reservationIds, toolGeneration, traceCall, readApprovalPolicy,
               inputRepeatReceipts: evidenceManager.repeatReceipts(modelInput),
               knownResultBytes: evidenceManager.knownResultBytes,
+              estimatedResultBytes: evidenceManager.estimatedResultBytes,
               retryMinimum: budgetBroker.retryMinimum,
 }),
           },
@@ -835,8 +827,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         continuationStatus?.remove();
         // Completion/recovery must assess the same prose the user receives.
         // Preserve captured originals for diagnostics and tool evidence.
-        const visibleCaptured = { ...captured,
-          messages: captured.messages.map(message => modelHistoryMessage(message, internalDataParts)) };
+        const visibleCaptured = { ...captured, messages: captured.messages.map(message => reviewingReport
+          ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts)) };
+        if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
+          executionId, roundIndex, deliveredChars: reportContinuation.length, suppressedChars: stream.suppressedChars });
         deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
         if (!hasUnexecutedRawToolSyntax(visibleTranscript.lastAnswerText))
           deliveryController.retainReportPrefix(visibleTranscript.lastAnswerText);
@@ -890,18 +884,16 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           let textAlreadyStreamed = live?.textStreamed || false;
           if (message.isAssistantMessage() && message.getText()) {
             const extracted = modelNotes.splitVisibleAnswer(message.getText());
-            historyMessage = modelHistoryMessage(message, internalDataParts);
+            historyMessage = reviewingReport ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts);
             if (hasUnexecutedRawToolSyntax(visibleAssistantOutput(historyMessage.getText()).visibleText)) {
               const sanitized = ChatMessage.from(historyMessage);
               sanitized.replaceText("[Unexecuted raw tool-call text omitted from subsequent model input; no tool was dispatched.]");
               historyMessage = sanitized;
             }
             if (!live) {
-              const streamed = stream.consumeAssistant(message.getText());
-              const fallback = visibleAssistantOutput(message.getText(), internalDataParts);
+              const streamed = stream.consumeMessage(message);
               textAlreadyStreamed = streamed.streamed;
-              visibleMessage = ChatMessage.from(message);
-              visibleMessage.replaceText(streamed.streamed ? streamed.visibleText : stripUnexecutedToolProtocol(fallback.visibleText));
+              visibleMessage = stream.visibleMessage(message);
             }
             if (extracted.hasFooter) {
               if (transaction.planningCommitted && noteEnabled && extracted.note) {
@@ -1088,7 +1080,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             predictionUsage: captured.predictionUsage,
             callPurpose: finalizing
               ? reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
-              : recoveryCoordinator.mutationFocus ? "mutation_focus" : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
+              : recoveryCoordinator.mutationFocus ? "mutation_focus"
+                : ["mutate", "build"].includes(objective.kind) && roundTools.some(hasMutationCapability) ? "mutation"
+                : reasoningRecoveryRound ? "reasoning_recovery" : toolPlanningRetryRound ? "fresh_planning_retry"
                 : researchRecoveryRound ? "read_only_research_recovery" : "research",
             roundModelElapsedMs,
             modelPrefillMs: captured.timing.promptProcessingMs,
@@ -1399,7 +1393,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex += 1;
             continue;
           }
-          if (reviewingReport && !visibleTextFromMessages(captured.messages).trim()) reportReviewEmpty = true;
+          if (reviewingReport && !visibleTextFromMessages(visibleCaptured.messages).trim()) reportReviewEmpty = true;
           if (deliveryState !== "complete") ctl.createStatus({
             status: deliveryState === "no_answer" ? "error" : "canceled",
             text: safePartialReport
@@ -1449,6 +1443,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
           // Repeated again, or no retry is left: report from what was returned.
           runtimeFacts.delete("repetition_check");
+          const unresolvedContract = engineClaimFact(gaps);
+          if (unresolvedContract) runtimeFacts.set("engine_claim_check", unresolvedContract);
           workingHistory = historyBeforeRound;
           execution.finishResearch("research_repetition");
           ctl.createStatus({ status: "done", text: "추론이 다시 반복되어 조사를 마치고, 확인된 근거로 최종 보고를 작성합니다." });
@@ -1522,6 +1518,7 @@ event: decision.trigger === "research_recovery_exhausted"
           continue;
         }
         if (!config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted
+          && (objective.kind === "review" || objective.kind === "explain")
           && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
           && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
           const answer = visibleTranscript.lastAnswerText;
@@ -1662,12 +1659,10 @@ event: decision.trigger === "research_recovery_exhausted"
       executionFailure = error;
       throw error;
     } finally {
-      // The note is terminal state like the window: a canceled or failed
-      // execution must still hand its accepted judgments to the next turn.
+      // Persist accepted judgments even on cancellation or failure.
       try { persistTerminalNote(); }
       catch (error) { cleanupFailures.push(String(error)); }
-      // No new model work during shutdown. Persist returned evidence and only
-      // RoundTransaction-approved planning; the next execution must remeasure.
+      // Shutdown persists evidence and approved planning; no new model work.
       try {
         if (workingContext) {
           // Transfer ownership first: a failed close must not be attempted twice.

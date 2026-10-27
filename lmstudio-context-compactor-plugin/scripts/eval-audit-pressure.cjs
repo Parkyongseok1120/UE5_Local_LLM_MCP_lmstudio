@@ -407,7 +407,7 @@ async function oneRun(model, modelInfo, group, phase, pairIndex, seed, contractT
       modelInputId: value.modelInputId,
       finalInputTokens: value.finalInputTokens,
       finalRemainingTokens: value.finalRemainingTokens,
-      metadataTokens: value.inputAvailability?.metadataTokens ?? null,
+      availabilityMetadataTokens: value.inputAvailability?.availabilityMetadataTokens ?? null,
       compactionAppliedCount: value.compactionAppliedCount,
       compactionAppliedModes: value.compactionAppliedModes,
       inputAvailabilityEntries: value.inputAvailability?.entries || [],

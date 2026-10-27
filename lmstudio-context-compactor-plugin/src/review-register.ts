@@ -178,7 +178,7 @@ export class ReviewRegister {
       if (row.status === "cleared") return false;
       if (row.status === "needs_recheck") return !answer.split(/\r?\n/u).some(line => line.includes(row.identifier)
         && /미확인|미검증|재검토|needs_recheck|unverified|not verified|recheck|withdraw/iu.test(line));
-      return !answer.includes(row.identifier);
+      return Boolean(row.bundle?.path) && !answer.includes(row.identifier);
     });
   }
 }

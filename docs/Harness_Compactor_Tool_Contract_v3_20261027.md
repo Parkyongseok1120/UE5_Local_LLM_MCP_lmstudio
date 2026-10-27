@@ -294,6 +294,8 @@ T6는 1121/0, T7은1127/0이었다. C8 최초 focused 30/0, analyzer·workspace�
 
 ## 6. 잔여 한계와 사람이 수행할 단계
 
+W7 1회차(`1793075034058`): 수정 턴 기능 통과. 남은 비용·예산 결함 D1–D9는 [v4 계약](Harness_Compactor_Tool_Contract_v4_20261027.md)에서 다룸.
+
 - claim과 source 사실의 의미 매칭 정밀도는 이번 범위 밖이다. 기존 휴리스틱의 오매칭 사례를 fixture로 고정했으며 사실 증명으로 승격하지 않는다.
 - 반환 text cache는 제한돼 있다. 캐시 일부를 잃으면 ‘반환 안 됨’ 공지를 억제하고 incomplete로 남긴다. bounded span cache 밖의 사실도 unknown이며 재구성/원문 없이는 정확한 인용 검증을 확정하지 않는다.
 - 이전 checkpoint 타깃이 경로만 가진 경우 project 권위가 새로 생기지 않는다. 실제 scoped sourceKey가 있을 때만 프로젝트를 특정한다.

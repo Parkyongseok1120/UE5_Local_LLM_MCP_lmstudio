@@ -35,6 +35,13 @@ export type RemoteToolLike = Tool & {
 function readActions(tool: RemoteToolLike): string[] { return operationCapabilities(tool).filter(op => op.action && op.effect === "read").map(op => op.action); }
 export const readOnlyOperationProfiles = new WeakSet<object>();
 export const restrictedOperationProfiles = new WeakMap<object, readonly string[]>();
+/** Telemetry of the offered surface; dispatch still checks the actual request. */
+export function hasMutationCapability(tool: RemoteToolLike): boolean {
+  if (readOnlyOperationProfiles.has(tool)) return false;
+  const allowed = restrictedOperationProfiles.get(tool);
+  return operationCapabilities(tool).some(op => op.effect === "mutation"
+    && (!op.action || !allowed || allowed.includes(op.action)));
+}
 // Generated from config/stable_tool_manifest.json (the servers' effect SSOT);
 // never inferred from an arbitrary remote server's readOnlyHint.
 export const UNREAL_RAG_OBSERVATION_TOOLS = new Set(UNREAL_RAG_OBSERVATION_TOOL_NAMES);

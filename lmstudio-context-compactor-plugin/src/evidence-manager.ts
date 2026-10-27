@@ -10,12 +10,14 @@ import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
 import { capabilityFor, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import type { RoundVerdict } from "./execution-contracts";
+import { estimateReadResponseBytes } from "./budget-broker";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics, decodeEnvelope } from "./tool-result-semantics.js";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
 import { extractPriorContinuityState } from "./continuity-memory.js";
 const identity = require("./evidence-identity.js") as {
+  fileSourceKey(value: Record<string, unknown>): string;
   sourceIdentity(value: Record<string, unknown>): string;
   sourceVersion(value: Record<string, unknown>): string;
   queryKey(value: Record<string, unknown>): string;
@@ -67,7 +69,10 @@ export class EvidenceManager {
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
   private sourceExecutionId = "";
+  // Observed default-project identity for estimates only; never a tool binding.
+  private readonly defaultEstimateProjects = new Map<string, string>();
   recordReturnedSources(messages: ChatMessage[], executionId: string) {
+    if (this.sourceExecutionId !== executionId) this.defaultEstimateProjects.clear();
     this.sourceExecutionId = executionId;
     const counts = new Map<string,number>();
     for(const message of messages) for(const request of message.getToolCallRequests())
@@ -75,6 +80,34 @@ export class EvidenceManager {
     for(const record of observationRecords(messages,this.tools,{confirmedPairsOnly:true})) {
       if(!record.trustedRead || !record.tool || !record.request || !record.value || counts.get(String(record.request.id))!==1)continue;
       const capability=capabilityFor(record.tool,record.request),kind=capability?.resultKind;
+      const observedProject = [record.value.canonicalProject, record.value.activeProject, record.value.canonicalProjectRoot]
+        .find(v => typeof v === "string" && v);
+      const value: Record<string, unknown> = { ...record.value, canonicalProject: observedProject || record.request.arguments?.project };
+      if (record.request.name === "get_active_project" && typeof observedProject !== "string")
+        this.defaultEstimateProjects.delete(record.tool.pluginIdentifier || "local");
+      if (decodeEnvelope(record.content).ok) {
+        if (record.request.arguments?.project === undefined && typeof observedProject === "string")
+          this.defaultEstimateProjects.set(record.tool.pluginIdentifier || "local", observedProject);
+        if (record.request.name === "list_directory" && typeof value.path === "string" && Array.isArray(value.entries)) {
+          for (const entry of value.entries as Array<Record<string, unknown>>) {
+            if (entry?.type !== "file" || typeof entry.name !== "string" || !entry.name
+              || /[\\/]/u.test(entry.name) || [".", ".."].includes(entry.name)
+              || !Number.isSafeInteger(entry.size) || Number(entry.size) < 0) continue;
+            this.ledger.recordSizeHint(identity.fileSourceKey({ ...value, path: String(value.path).replace(/[\\/]$/u, "") + "/" + entry.name }),
+              { sizeBytes: Number(entry.size), modifiedAt: entry.modifiedAt ?? null, totalLines: null, sha256: null, origin: "list_directory" });
+          }
+        } else if (kind === "source_body" && ["read_file", "read_file_range", "read_symbol"].includes(record.request.name)
+          && typeof value.path === "string" && !value.duplicate && !value.bodyOmitted) {
+          const facts = readLedgerModule.verifiedReadFacts(value);
+          const body = [value.content, value.text, value.body, value.code].find(v => typeof v === "string");
+          const range = value.range as { unit?: string; total?: number } | undefined;
+          const total = value.totalLines ?? (range?.unit === "line" ? range.total : undefined) ?? facts?.totalLines;
+          this.ledger.recordSizeHint(identity.fileSourceKey(value), {
+            ...(facts?.complete && typeof body === "string" ? { sizeBytes: Buffer.byteLength(body, "utf8") } : {}),
+            ...(Number.isSafeInteger(total) ? { totalLines: Number(total) } : {}),
+            ...(typeof value.sha256 === "string" ? { sha256: value.sha256 } : {}), origin: record.request.name });
+        }
+      }
       if(kind) this.ledger.recordReturnedSource({...record.value,
         sourceMode:record.value.sourceMode || record.request.arguments?.sourceMode,
         canonicalProject:record.value.canonicalProject || record.request.arguments?.project},kind,executionId,{contractLookup:capability.roles?.includes("contract_lookup")});
@@ -162,6 +195,23 @@ export class EvidenceManager {
   }
   observe(messages: Array<ChatMessage>, roundId?: string, screening?: ReadScreening, budgetDenied: readonly string[] = []): ReadDelta {
     if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
+    const registry = new ToolCapabilityRegistry(this.tools);
+    for (const record of observationRecords(messages, this.tools, { confirmedPairsOnly: true })) {
+      if (!record.tool || !record.request || !record.value || !registry.isMutation(record.tool, record.request)) continue;
+      if (record.request.name === "set_active_project") this.defaultEstimateProjects.delete(record.tool.pluginIdentifier || "local");
+      if (resultSemantics(record.value, record.tool.pluginIdentifier).operationStatus !== "completed") continue;
+      const value = record.value;
+      const files = Array.isArray(value.files) ? value.files : [value];
+      for (const item of files as Array<Record<string, unknown>>) {
+        if (!item || item.ok === false || item.applied === false) continue;
+        const path = item.path || (files.length === 1 && !Array.isArray(value.files) ? record.request.arguments?.path : undefined);
+        if (typeof path !== "string") continue;
+        this.ledger.invalidateSizeHint(identity.fileSourceKey({ ...value, ...item, path,
+          canonicalProject: item.canonicalProject || value.canonicalProject || item.activeProject || value.activeProject
+            || record.request.arguments?.project || this.defaultEstimateProjects.get(record.tool.pluginIdentifier || "local"),
+          provider: record.tool.pluginIdentifier || "local" }));
+      }
+    }
     const observed = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
       this.isArchiveRepage);
     const repeatRestoreOnly = Boolean(screening && screening.otherResults === 0 && screening.repeatRestores > 0
@@ -497,6 +547,15 @@ export class EvidenceManager {
   knownResultBytes = (name: string, args: Record<string, unknown>): number | undefined =>
     name === "evidence_first_read_context" ? this.store?.archiveResponseBytes?.(args)
       : this.ledger.knownResultBytes(repeatRequestKey(name, args));
+
+  estimatedResultBytes = (name: string, args: Record<string, unknown>, tool: RemoteToolLike): number | undefined => {
+    if (!["read_file", "read_file_range"].includes(name) || tool.name !== name
+      || capabilityFor(tool, { name, arguments: args })?.resultKind !== "source_body" || typeof args.path !== "string") return undefined;
+    const provider = tool.pluginIdentifier || "local";
+    const key = identity.fileSourceKey({ path: args.path,
+      canonicalProject: args.project ?? this.defaultEstimateProjects.get(provider), provider });
+    return estimateReadResponseBytes(this.ledger.sizeHint(key), args);
+  };
 
   /** Accepted packet claims tied to observed source ranges. Acceptance and
    * source coverage do not independently verify the assistant's statement. */

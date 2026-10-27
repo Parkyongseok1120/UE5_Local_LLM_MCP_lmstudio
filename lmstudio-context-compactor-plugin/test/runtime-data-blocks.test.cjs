@@ -28,8 +28,8 @@ const ledger = (bRow) => [
   "These are last-observed versions, not a fresh disk check.",
 ].join("\n");
 
-function compose(history, facts, shown, referenceData) {
-  return composeModelHistory(history, null, config, [], false, referenceData, facts, shown);
+function compose(history, facts, shown, referenceData, allowance = 11929) {
+  return composeModelHistory(history, null, config, [], false, referenceData, facts.map(text=>({key:"read_ledger",text})), shown, false, allowance);
 }
 
 test("a re-rendered ledger adds only its changed rows after the first block", () => {
@@ -92,13 +92,13 @@ test("a reference item whose only change is its availability flags is not sent a
   assert.equal(compose(history, [], shown, derived([changed])).dataBlock.parts.length, 1, "a new observation is still sent");
 });
 
-test("data slots holding twice the current data are replaced by one current block", () => {
+test("data slots beyond the superseded-data allowance are replaced by one current block", () => {
   const history = exchange(Chat.from([{ role: "user", content: "Audit" }]), "r1");
   const shown = new Map();
   // Five rounds of a ledger whose rows all change: each round adds a full delta.
   for (let round = 0; round < 5; round++) {
     const fact = ledger(`none (archived) ${"x".repeat(1500)} ${round}`);
-    const composed = compose(history, [fact], shown);
+    const composed = compose(history, [fact], shown, undefined, 4000);
     if (composed.dataBlock) {
       if (composed.dataBlock.replacesShown) shown.clear();
       shown.set(composed.dataBlock.anchor, composed.dataBlock.parts);
@@ -106,7 +106,7 @@ test("data slots holding twice the current data are replaced by one current bloc
     exchange(history, `r${round + 2}`);
   }
   const current = ledger(`none (archived) ${"x".repeat(1500)} 5`);
-  const composed = compose(history, [current], shown);
+  const composed = compose(history, [current], shown, undefined, 4000);
   assert.ok(composed.runtimeDataChars < 3 * current.length + 1, `runtime data stays bounded: ${composed.runtimeDataChars}`);
 });
 
@@ -121,7 +121,7 @@ test("a round that rewrites its input consolidates superseded data in the same r
   const current = ledger(`none (archived) ${"y".repeat(1500)}`);
   // Below the standing threshold an ordinary round only appends its delta.
   assert.notEqual(compose(history, [current], shown).dataBlock.replacesShown, true);
-  const rewritten = composeModelHistory(history, null, config, [], false, undefined, [current], shown, true);
+  const rewritten = composeModelHistory(history, null, config, [], false, undefined, [{key:"read_ledger",text:current}], shown, true);
   assert.equal(rewritten.dataBlock.replacesShown, true);
   assert.deepEqual(rewritten.dataBlock.parts, [current]);
   assert.equal(rewritten.runtimeDataChars, current.length);
@@ -142,12 +142,12 @@ test("the runtime-data rule is fixed system text, and absent in observe-only mod
   const { RUNTIME_DATA_INSTRUCTION } = require("../dist/execution-instructions");
   const history = exchange(Chat.from([{ role: "user", content: "Audit" }]), "r1");
   // The real loop always carries its tool-scope instruction, so a system message is composed.
-  const system = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts)
+  const system = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts.map(text=>({key:"read_ledger",text})))
     .history.getMessagesArray()[0].getText();
   assert.equal(system([]), `scope\n\n${RUNTIME_DATA_INSTRUCTION}`);
   assert.equal(system([ledger("in full")]), system([]), "same system text with or without data");
   const observe = readConfig({ getPluginConfig: () => ({ get: key => key === "observeOnly" ? true : undefined }) });
-  const observed = composeModelHistory(history, null, observe, ["scope"], false, undefined, [ledger("in full")]);
+  const observed = composeModelHistory(history, null, observe, ["scope"], false, undefined, [{key:"read_ledger",text:ledger("in full")}]);
   assert.doesNotMatch(observed.history.toString(), /data blocks the host inserted/);
 });
 

@@ -5,6 +5,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { BudgetBroker } from "./budget-broker";
+import { RUNTIME_FACTS, type RuntimeFactEntry } from "./execution-contracts";
 import { boundPastReasoning, resolveGenerationBudget, selectMeasuredCandidate } from "./context-budget";
 import { core, inputAvailability, modelNotes, workingContextModule, REASONING_SEPARATOR } from "./context-ports";
 import { stripInternalDataEcho } from "./internal-data-output";
@@ -75,6 +76,7 @@ export async function measureContext(
     ? "estimate" : "none";
   let templatedInputFingerprint: string | null = null;
   let exact = false;
+  let templatedPrompt: string | undefined;
   try {
     if (typeof source.getContextLength === "function") {
       if (cost) cost.contextLengthCalls++;
@@ -95,6 +97,7 @@ export async function measureContext(
       inputTokens = counted;
       promptMeasurementSource = "templated_model_count";
       exact = true;
+      templatedPrompt = String(prompt);
       if (toolSchemaChars > 0) {
         try {
           if (cost) cost.tokenCountCalls++;
@@ -115,7 +118,7 @@ export async function measureContext(
   const outputReserve = numeric(options.outputReserve, config.maxOutputReserve, 0, 131072);
   const remainingTokens = contextLength - inputTokens - outputReserve - config.safetyMarginTokens;
   if (cost) cost.measurementMs += Date.now() - started;
-  return {
+  const result: ContextMeasurement = {
     contextLength, contextLengthSource, promptMeasurementSource, templatedInputChars,
     inputTokens,
     toolSchemaChars,
@@ -129,6 +132,8 @@ export async function measureContext(
     messageCount: history.length,
     fit: remainingTokens >= 0 ? (exact ? true : null) : false,
   };
+  if (templatedPrompt !== undefined) Object.defineProperty(result, "templatedPrompt", { value: templatedPrompt });
+  return result;
 }
 
 export function buildCompactedHistory(
@@ -215,6 +220,27 @@ export async function selectSoftCompaction(
 
 }
 
+/** Optional facts use one registry budget; priority zero survives even above it.
+ * Truncate only the tail: the output filter identifies private data by header. */
+export function admitRuntimeFacts(entries: readonly RuntimeFactEntry[], allowance: number): string[] {
+  const selected = entries.filter(entry => entry.text.trim()).map(entry => {
+    const { maxChars, priority } = RUNTIME_FACTS[entry.key];
+    const text = entry.text.trim();
+    if (text.length <= maxChars) return { ...entry, text, priority };
+    let keep = maxChars;
+    for (let i = 0; i < 3; i++) keep = maxChars - `…[truncated ${text.length - keep} chars]`.length;
+    return { ...entry, priority, text: text.slice(0, keep) + `…[truncated ${text.length - keep} chars]` };
+  }).sort((a, b) => a.priority - b.priority);
+  const omitted: string[] = [];
+  const notice = () => omitted.length ? `Runtime data omitted for budget: ${omitted.join(", ")}` : "";
+  let chars = selected.reduce((sum, entry) => sum + entry.text.length, 0);
+  for (let index = selected.length - 1; index >= 0 && chars + notice().length > allowance; index--) {
+    if (selected[index].priority === 0) break;
+    const [entry] = selected.splice(index, 1); chars -= entry.text.length; omitted.push(entry.key);
+  }
+  return [...selected.map(entry => entry.text), ...(omitted.length ? [notice()] : [])];
+}
+
 export function composeModelHistory(
   history: Chat,
   note: ContinuityNote | null,
@@ -222,21 +248,23 @@ export function composeModelHistory(
   systemInstructions: Array<string> = [],
   enableNoteProtocol = Boolean(note),
   referenceData?: string,
-  runtimeFacts: Array<string> = [],
+  runtimeFacts: readonly RuntimeFactEntry[] = [],
   shownBlocks?: ShownDataBlocks,
   consolidateShown = false,
+  allowanceChars = Infinity,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
   const taskData = config.observeOnly ? "" : renderTaskProgress(messages);
-  const facts = runtimeFacts.map(value => String(value || "").trim()).filter(Boolean);
+  const facts = admitRuntimeFacts(runtimeFacts, allowanceChars);
   const systemIndexes = messages.map((message, index) => message.isSystemPrompt() ? index : -1)
     .filter((index) => index >= 0);
   const systemLayoutIsCompatible = systemIndexes.length === 0
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
-    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0 };
+    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0,
+      runtimeDataCurrentChars: 0, runtimeDataSupersededChars: 0, forcedRewrite: undefined };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -289,6 +317,7 @@ export function composeModelHistory(
   const slotAnchor = anchors.get(slot);
   const blocks = new Map<number, readonly string[]>();
   let dataBlock: { anchor: string; parts: string[]; replacesShown?: boolean } | undefined;
+  let forcedRewrite: "data_consolidation" | undefined;
   if (shownBlocks && slotAnchor) {
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
     const chars = (parts: ReadonlyArray<string>) => parts.reduce((sum, part) => sum + part.length, 0);
@@ -296,8 +325,9 @@ export function composeModelHistory(
     // A round that rewrites its input (projection, compaction) consolidates
     // superseded copies in that same rewrite: they had grown to 28K chars
     // between thresholds (conversation 1792916809646 v1).
-    if (shownChars > Math.max(RUNTIME_DATA_CONSOLIDATE_MIN_CHARS, 2 * chars(runtimeParts))
-      || consolidateShown && shownChars > chars(runtimeParts)) {
+    const supersededChars = Math.max(0, shownChars - chars(runtimeParts));
+    if (supersededChars > allowanceChars || consolidateShown && shownChars > chars(runtimeParts)) {
+      if (supersededChars > allowanceChars) forcedRewrite = "data_consolidation";
       // Earlier blocks now hold more superseded copies than current data
       // (2026-10-25 run: 33K chars of data slots for about 12K of current
       // facts). One rewrite replaces them with the current data at the newest
@@ -322,14 +352,17 @@ export function composeModelHistory(
   });
   const latestUserText = latestUser >= 0 ? messages[latestUser].getText() : "";
   const runtimeHeaders = ["Runtime read-result budget facts:", "Runtime read ledger (kept across compaction)", "Runtime evidence observation:",
-    REVIEW_REGISTER_HEADER];
+    REVIEW_REGISTER_HEADER, "Runtime data omitted for budget:"];
   const sentParts = [...blocks.values()].flat();
   const privateDataParts = sentParts.filter(part =>
     part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data") || part.startsWith("[Delivered report")
     || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
   // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
   const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
-  return { history: composed, overhead, privateDataParts, runtimeDataChars, ...(dataBlock ? { dataBlock } : {}) };
+  const runtimeDataCurrentChars = runtimeParts.reduce((sum, part) => sum + part.length, 0);
+  const runtimeDataSupersededChars = Math.max(0, runtimeDataChars - runtimeDataCurrentChars);
+  return { history: composed, overhead, privateDataParts, runtimeDataChars, runtimeDataCurrentChars,
+    runtimeDataSupersededChars, forcedRewrite, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
@@ -339,8 +372,6 @@ export type ShownDataBlocks = ReadonlyMap<string, readonly string[]>;
 const INCREMENTAL_PART_HEADERS = ["[Available tool-call refs]", "Runtime read ledger (kept across compaction)",
   "Runtime evidence observation:", REVIEW_REGISTER_HEADER];
 const DERIVED_HEADER = "[Derived reference data";
-/** Data slots are rewritten once they exceed this and twice the current data. */
-const RUNTIME_DATA_CONSOLIDATE_MIN_CHARS = 6000;
 // Availability flags of a reference item follow every projection; an item
 // whose observation is otherwise unchanged is not sent again for them alone.
 const VOLATILE_ITEM_FIELDS = ["returnedBodyInCurrentInput", "sourceBodyInCurrentInput", "hostInputVerification"];
@@ -433,7 +464,7 @@ export type InputAssemblyOptions = {
   roundScopeInstructions: Array<string>; getRoundOutputReserve: () => number;
   modelInputId: string; noteEnabled: boolean; getNote: () => ContinuityNote | null;
   historicalAvailabilityLedger: Array<Record<string, unknown>>;
-  getRuntimeFacts?: (history: Chat) => Array<string>;
+  getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Execution-scoped exact-measurement cache owned by ContextManager. */
   measurementCache?: Map<string, ContextMeasurement>;
   preProjectionHistory?: Chat; postProjectionHistory?: Chat;
@@ -442,6 +473,7 @@ export type InputAssemblyOptions = {
   /** True while this round rewrites its input anyway: earlier data blocks are
    * consolidated in the same rewrite instead of outliving it. */
   consolidateDataBlocks?: () => boolean;
+  runtimeDataAllowanceChars?: number;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
@@ -471,6 +503,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     outputReserve?: number;
     modelInputId?: string;
     referenceData?: string;
+    rewrite?: boolean;
   } = {}) => {
     const profileTools = profile.tools || roundTools;
     const profileInstructions = profile.instructions || roundScopeInstructions;
@@ -479,7 +512,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -498,6 +531,8 @@ export function createInputAssembler(options: InputAssemblyOptions) {
         postProjectionTokens: projectionMeasurement?.exact ? projectionMeasurement.inputTokens : null,
         postCompactionTokens: compactionMeasurement?.exact ? compactionMeasurement.inputTokens : null,
         postMetadataTokens: metadataMeasurement?.exact ? metadataMeasurement.inputTokens : null,
+        runtimeDataTokens: metadataMeasurement?.exact && compactionMeasurement?.exact
+          ? metadataMeasurement.inputTokens - compactionMeasurement.inputTokens : null,
         postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
         finalExactInputTokens: measured.exact ? measured.inputTokens : null,
         stageFingerprints: { history: historyMeasurement?.templatedInputFingerprint ?? null,
@@ -509,6 +544,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
 };
     };
     const basicStages = (measured: ContextMeasurement) => ({
+      runtimeDataTokens: null,
       postToolSchemaTokens: measured.exact ? measured.inputTokens : null,
       finalExactInputTokens: measured.exact ? measured.inputTokens : null,
       stageFingerprints: { final: measured.templatedInputFingerprint },
@@ -527,13 +563,13 @@ export function createInputAssembler(options: InputAssemblyOptions) {
         measurement: baseMeasurement,
         projection,
         metadataChars: 0,
-        metadataTokens: 0,
+        availabilityMetadataTokens: 0,
       };
     }
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -546,7 +582,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -561,7 +597,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       measurement,
       projection,
       metadataChars: metadata.length,
-      metadataTokens: baseMeasurement.exact && measurement.exact
+      availabilityMetadataTokens: baseMeasurement.exact && measurement.exact
         ? Math.max(0, measurement.inputTokens - baseMeasurement.inputTokens) : null,
     };
   };
@@ -677,8 +713,8 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
    * projection), so its prefix is not reusable; reaching the low-water target
    * here saves a rewrite a few rounds later. Unlike force, an unmet target does
    * not block a round whose input already fits under high water. */
-  async enforceLowWater(history: Chat, assemble: (history: Chat) => Promise<AssembledInput>,
-    options: { force?: boolean; deepen?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
+  async enforceLowWater(history: Chat, assemble: (history: Chat, profile?: { rewrite?: boolean }) => Promise<AssembledInput>,
+    options: { force?: boolean; deepen?: boolean; keepLastAssistantAnswer?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
       pinnedWorkingSetMaxChars?:number; pinMetadata?:Record<string,unknown> }) {
     const before = await assemble(history);
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
@@ -692,9 +728,14 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
 };
     }
     const requiredIndexes = this.requiredIndexes(history);
+    const messages = history.getMessagesArray();
+    const latestUser = messages.reduce((last, message, index) => message.isUserMessage() ? index : last, -1);
+    const lastAnswer = options.keepLastAssistantAnswer ? messages.reduce((last, message, index) => index < latestUser
+      && message.isAssistantMessage() && message.getText().trim() ? index : last, -1) : -1;
+    if (lastAnswer >= 0 && !requiredIndexes.includes(lastAnswer)) requiredIndexes.push(lastAnswer);
     const floorCandidate = buildCompactedHistory(history, 0, this.config,
       { ...this.checkpointOptions, requiredIndexes, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
-    const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history);
+    const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history, { rewrite: true });
     // A checkpoint that expands an already minimal input is not its mandatory floor.
     const floor = floorInput.measurement.exact && floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
     const water = this.broker.watermarks(before.measurement, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
@@ -732,8 +773,10 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         const candidate = name === "mandatory_floor" ? floorCandidate
           : buildCompactedHistory(history, recentTurns, this.config, { ...this.checkpointOptions, requiredIndexes, ...choiceOptions });
         const input = candidate.history === history ? before
-          : name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
-        const accepted = input.measurement.exact && input.measurement.inputTokens <= ceiling
+          : name === "mandatory_floor" ? floorInput : await assemble(candidate.history, { rewrite: true });
+        const accepted = (lastAnswer < 0 || candidate.history.getMessagesArray().some(message => message.isAssistantMessage()
+          && message.getText() === messages[lastAnswer].getText()))
+          && input.measurement.exact && input.measurement.inputTokens <= ceiling
           && input.measurement.inputTokens <= water.hardInputCeiling
           && this.broker.watermarks(input.measurement, floor.measurement.inputTokens,
             options.hasReadTools, options.minimumReadTokens).nextActionFit;
@@ -788,8 +831,10 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         compactionSucceeded: success, compactionRequested: Boolean(pressured),
         lowTargetMet: success, mandatoryFloorException: water.targetUnreachable, hardFit,
         nextActionFit: finalWater.nextActionFit, disposition, canRun,
-        metadataTokens: selected.assembled.metadataTokens, toolSchemaTokens: final.toolSchemaTokens,
+        availabilityMetadataTokens: selected.assembled.availabilityMetadataTokens, toolSchemaTokens: final.toolSchemaTokens,
         runtimeDataChars: selected.assembled.composition.runtimeDataChars,
+        runtimeDataCurrentChars: selected.assembled.composition.runtimeDataCurrentChars,
+        runtimeDataSupersededChars: selected.assembled.composition.runtimeDataSupersededChars,
         reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0
 }
     };
@@ -814,10 +859,13 @@ export async function prepareWorkingInput(options: {
   const compactionAppliedModes: Array<string> = [];
   let compactionCheckpoint: CheckpointResult | null = null;
   let compactionRetention: Record<string, unknown> | null = null;
+  let reasoningBounded = false;
   if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const counter = tokenSource as { countTokens?: (text: string) => Promise<number> };
     if (config.pastReasoningTokens > 0 && counter.countTokens) {
-      workingHistory = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
+      const bounded = await boundPastReasoning(workingHistory, config.pastReasoningTokens, text => counter.countTokens!(text));
+      reasoningBounded = bounded !== workingHistory;
+      workingHistory = bounded;
       modelHistory = workingHistory;
       before = await measureContext(tokenSource,
         composeModelHistory(workingHistory, noteEnabled ? activeNote : null, config, roundScopeInstructions, noteEnabled).history,
@@ -826,7 +874,7 @@ export async function prepareWorkingInput(options: {
   }
   if (config.contextManagementMode !== "legacy") return {
     before, modelHistory, workingHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-    compactionCheckpoint, compactionRetention,
+    compactionCheckpoint, compactionRetention, reasoningBounded,
   };
   if (shouldCompactContext(before, config, roundTools.some(hasReadCapability))) {
     const hard = before.remainingTokens <= config.hardRemainingTokens;
@@ -914,6 +962,6 @@ export async function prepareWorkingInput(options: {
 
   return {
 before, modelHistory, workingHistory, compacted, compactionAppliedCount, compactionAppliedModes,
-    compactionCheckpoint, compactionRetention
+    compactionCheckpoint, compactionRetention, reasoningBounded
 };
 }

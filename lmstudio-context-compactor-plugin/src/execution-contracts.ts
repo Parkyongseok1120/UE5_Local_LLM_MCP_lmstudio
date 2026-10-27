@@ -8,6 +8,32 @@ import type { DesignGuidanceMode, DesignGuidanceDelivery } from "./design-guidan
 import { CONTEXT_DEFAULTS } from "./config-defaults";
 
 export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
+export const RUNTIME_DATA_SHARE = 0.10;
+export type RuntimeFactKey = "budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
+  | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
+  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger";
+export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, { priority: 0 | 1 | 2; maxChars: number; lifetime: "until_cleared" | "round" }>> = {
+  mutation_focus: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
+  report_now: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
+  budget: { priority: 0, maxChars: 2000, lifetime: "until_cleared" },
+  report_review: { priority: 0, maxChars: 4000, lifetime: "until_cleared" },
+  delivered_report: { priority: 0, maxChars: Infinity, lifetime: "until_cleared" },
+  prior_turn: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
+  tool_retry: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
+  review_register: { priority: 1, maxChars: 6000, lifetime: "until_cleared" },
+  engine_claim_check: { priority: 1, maxChars: 3000, lifetime: "until_cleared" },
+  quote_check: { priority: 1, maxChars: 3000, lifetime: "until_cleared" },
+  write_api_check: { priority: 1, maxChars: 2000, lifetime: "until_cleared" },
+  repetition_check: { priority: 1, maxChars: 3000, lifetime: "until_cleared" },
+  read_ledger: { priority: 2, maxChars: 6000, lifetime: "round" },
+  partial_projection: { priority: 2, maxChars: 3000, lifetime: "round" },
+  stagnation: { priority: 2, maxChars: 1500, lifetime: "until_cleared" },
+  repeated_failure: { priority: 2, maxChars: 1500, lifetime: "until_cleared" },
+};
+export type RuntimeFactEntry = Readonly<{ key: RuntimeFactKey; text: string }>;
+export type RewriteCause = "turn_start" | "projection" | "low_water_compaction" | "reasoning_bound"
+  | "data_consolidation" | "guidance_rescope" | "guidance_finalization_drop"
+  | "phase_transition" | "guidance_applicability_invalidated" | "guidance_budget_drop";
 export type MutationState = "none" | "attempted" | "applied" | "blocked";
 export interface TaskObjective {
   readonly kind: ObjectiveKind;
@@ -68,6 +94,8 @@ export type InputAvailabilityProjection = {
 };
 
 export type ContextMeasurement = {
+  /** Non-enumerable, execution-local template used by prefix telemetry only. */
+  readonly templatedPrompt?: string;
   contextLength: number;
   contextLengthSource: "model" | "configured_fallback";
   inputTokens: number;

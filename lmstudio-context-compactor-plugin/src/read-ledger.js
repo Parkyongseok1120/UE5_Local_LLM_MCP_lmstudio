@@ -131,6 +131,7 @@ class ReadLedger {
     this.items = new Map();
     this.events = [];
     this.resultSizes = new Map();
+    this.sizeHints = new Map();
     this.returnedText = [];
     this.returnedSpans = [];
     this.returnedFactsIncomplete = false;
@@ -381,13 +382,34 @@ class ReadLedger {
 
   knownResultBytes(requestKey) { return this.resultSizes.get(requestKey); }
 
+  /** Last-observed sizes are estimates only, including after restoration.
+   * They never participate in coverage, receipt matching or permissions. */
+  recordSizeHint(sourceKey, fields) {
+    if (typeof sourceKey !== "string" || !sourceKey || sourceKey.length > 4096 || !fields) return;
+    const prior = this.sizeHints.get(sourceKey);
+    const sha256 = SHA256.test(String(fields.sha256 || "")) ? fields.sha256.toLowerCase() : null;
+    const changed = sha256 && prior?.sha256 && sha256 !== prior.sha256;
+    const next = { sizeBytes: changed ? null : prior?.sizeBytes ?? null,
+      totalLines: changed ? null : prior?.totalLines ?? null, sha256: prior?.sha256 ?? null,
+      modifiedAt: prior?.modifiedAt ?? null, origin: prior?.origin ?? "read" };
+    for (const field of ["sizeBytes", "totalLines"]) if (fields[field] !== undefined) next[field] = integer(fields[field]);
+    if (fields.sha256 !== undefined) next.sha256 = sha256;
+    if (fields.modifiedAt !== undefined) next.modifiedAt = typeof fields.modifiedAt === "string" ? fields.modifiedAt.slice(0, 128) : null;
+    if (typeof fields.origin === "string") next.origin = fields.origin.slice(0, 32);
+    this.sizeHints.delete(sourceKey); this.sizeHints.set(sourceKey, next);
+    while (this.sizeHints.size > MAX_RESULT_SIZES) this.sizeHints.delete(this.sizeHints.keys().next().value);
+  }
+  sizeHint(sourceKey) { const hint = this.sizeHints.get(sourceKey); return hint ? { ...hint } : null; }
+  invalidateSizeHint(sourceKey) { this.sizeHints.delete(sourceKey); }
+
   stats() { return { files: this.items.size, ...this.counters }; }
 
   toJSON() {
     return { schemaVersion: 2, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
       returnedText:this.returnedText,returnedContracts:this.returnedContracts,returnedSpans:this.returnedSpans,returnedFactsIncomplete:this.returnedFactsIncomplete,
-      resultSizes: [...this.resultSizes].slice(-MAX_RESULT_SIZES) };
+      resultSizes: [...this.resultSizes].slice(-MAX_RESULT_SIZES),
+      sizeHints: [...this.sizeHints].slice(-MAX_RESULT_SIZES) };
   }
 
   /** Restore a persisted ledger in place (owners keep their reference). The
@@ -395,6 +417,8 @@ class ReadLedger {
   load(value) {
     this.reset();
     if (!value || ![1, 2].includes(value.schemaVersion) || !Array.isArray(value.entries)) return false;
+    if (Array.isArray(value.sizeHints)) for (const row of value.sizeHints.slice(-MAX_RESULT_SIZES))
+      if (Array.isArray(row) && row.length === 2) this.recordSizeHint(row[0], row[1]);
     for(const row of (Array.isArray(value.returnedText)?value.returnedText:[]).slice(-64)) {
       if(!row || typeof row.sourceKey!=="string" || typeof row.path!=="string" || !Array.isArray(row.lines)
         || !["body","search_hit","archive_page"].includes(row.via))continue;
