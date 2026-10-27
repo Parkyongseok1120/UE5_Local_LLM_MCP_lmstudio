@@ -8,6 +8,10 @@ import type { DesignGuidanceMode, DesignGuidanceDelivery } from "./design-guidan
 import { CONTEXT_DEFAULTS } from "./config-defaults";
 
 export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
+export const RUNTIME_DATA_SHARE = 0.10;
+export type RewriteCause = "turn_start" | "projection" | "low_water_compaction" | "reasoning_bound"
+  | "data_consolidation" | "guidance_rescope" | "guidance_finalization_drop"
+  | "phase_transition" | "guidance_applicability_invalidated" | "guidance_budget_drop";
 export type MutationState = "none" | "attempted" | "applied" | "blocked";
 export interface TaskObjective {
   readonly kind: ObjectiveKind;

@@ -3,7 +3,7 @@ import {
 } from "@lmstudio/sdk";
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
-import { type ContinuityNote, type DirectConfig } from "./execution-contracts";
+import { type ContinuityNote, type DirectConfig, type InputAvailabilityProjection } from "./execution-contracts";
 import type { RecoveryProgress, ReadScreening } from "./evidence-manager";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
@@ -30,6 +30,15 @@ export function readLedgerTelemetry(screening: ReadScreening) {
     firstFocusReads: screening.firstFocusReads, restoreRequiredReads: screening.restoreRequiredReads,
     restoredReads: screening.restoreRequiredReads, repeatRestores: screening.measuredRepeatRestores || 0,
     failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds };
+}
+export function inputAvailabilityTelemetry(input: { projection: InputAvailabilityProjection | null;
+  metadataChars: number; metadataTokens: number | null }, mode: DirectConfig["inputAvailabilityMode"]) {
+  const projection = input.projection;
+  return projection ? { mode, verificationBoundary: projection.verificationBoundary,
+    hostInputVerification: projection.hostInputVerification, entries: projection.entries,
+    omittedEntryCount: projection.omittedEntryCount, entryListComplete: projection.entryListComplete,
+    metrics: projection.metrics, metadataChars: input.metadataChars, metadataTokens: input.metadataTokens,
+    metadataTokenMeasurement: input.metadataTokens === null ? "unknown" : "prompt_delta" } : { mode: "off" };
 }
 
 /** Measurement only. Owned by one execution; no prompt text or cache policy. */

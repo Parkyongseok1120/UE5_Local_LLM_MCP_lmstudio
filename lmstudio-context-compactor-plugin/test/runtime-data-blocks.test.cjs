@@ -28,8 +28,8 @@ const ledger = (bRow) => [
   "These are last-observed versions, not a fresh disk check.",
 ].join("\n");
 
-function compose(history, facts, shown, referenceData) {
-  return composeModelHistory(history, null, config, [], false, referenceData, facts, shown);
+function compose(history, facts, shown, referenceData, allowance = 11929) {
+  return composeModelHistory(history, null, config, [], false, referenceData, facts, shown, false, allowance);
 }
 
 test("a re-rendered ledger adds only its changed rows after the first block", () => {
@@ -92,13 +92,13 @@ test("a reference item whose only change is its availability flags is not sent a
   assert.equal(compose(history, [], shown, derived([changed])).dataBlock.parts.length, 1, "a new observation is still sent");
 });
 
-test("data slots holding twice the current data are replaced by one current block", () => {
+test("data slots beyond the superseded-data allowance are replaced by one current block", () => {
   const history = exchange(Chat.from([{ role: "user", content: "Audit" }]), "r1");
   const shown = new Map();
   // Five rounds of a ledger whose rows all change: each round adds a full delta.
   for (let round = 0; round < 5; round++) {
     const fact = ledger(`none (archived) ${"x".repeat(1500)} ${round}`);
-    const composed = compose(history, [fact], shown);
+    const composed = compose(history, [fact], shown, undefined, 4000);
     if (composed.dataBlock) {
       if (composed.dataBlock.replacesShown) shown.clear();
       shown.set(composed.dataBlock.anchor, composed.dataBlock.parts);
@@ -106,7 +106,7 @@ test("data slots holding twice the current data are replaced by one current bloc
     exchange(history, `r${round + 2}`);
   }
   const current = ledger(`none (archived) ${"x".repeat(1500)} 5`);
-  const composed = compose(history, [current], shown);
+  const composed = compose(history, [current], shown, undefined, 4000);
   assert.ok(composed.runtimeDataChars < 3 * current.length + 1, `runtime data stays bounded: ${composed.runtimeDataChars}`);
 });
 

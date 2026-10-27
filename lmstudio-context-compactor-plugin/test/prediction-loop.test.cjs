@@ -5893,23 +5893,23 @@ function stickyGuidanceRun({ bases, guidanceTokens = 300, abortAtCall = 0 }) {
 }
 const stickyWater = () => stickyGuidanceRun({ bases: [0] }).water;
 
-test('admitted guidance keeps one system text across rounds, and a dropped one returns unchanged under low water', async () => {
+test('admitted guidance keeps one system text and low water alone cannot readmit dropped guidance', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   assert.ok(high - low > 1000);
   const run = stickyGuidanceRun({ bases: [low - 2000, Math.floor((low + high) / 2), high - 100, low - 2000, low - 2000] });
   await handlePredictionLoop(run.ctl);
   const events = run.events();
-  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_readmitted', 'sticky_kept']);
-  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'low_water', undefined]);
-  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'included', 'included']);
+  assert.deepEqual(events.map(e => e.reason), ['included', 'sticky_kept', 'sticky_dropped', 'sticky_dropped', 'sticky_dropped']);
+  assert.deepEqual(events.map(e => e.stickyCause), [undefined, undefined, 'budget_omitted', 'dropped_earlier', 'dropped_earlier']);
+  assert.deepEqual(events.map(e => e.outcome), ['included', 'included', 'omitted', 'omitted', 'omitted']);
   assert.deepEqual(events[1].selectedIds, events[0].selectedIds);
-  assert.deepEqual(events[3].selectedIds, events[0].selectedIds);
+  assert.deepEqual(events[3].selectedIds, []);
   assert.equal(run.systems.length, 5);
   assert.match(run.systems[0], /\[Optional design reference\]/);
   assert.equal(run.systems[1], run.systems[0]);
   assert.doesNotMatch(run.systems[2], /\[Optional design reference\]/);
-  assert.equal(run.systems[3], run.systems[0]);
-  assert.equal(run.systems[4], run.systems[0]);
+  assert.equal(run.systems[3], run.systems[2]);
+  assert.equal(run.systems[4], run.systems[2]);
 });
 
 // 2026-10-20 run: dropping the instruction alone rebuilt a 55.7k prompt (71.7s)
@@ -6183,7 +6183,7 @@ test('a dropped instruction is not readmitted for a changed scope; the current c
   assert.equal(run.systems[3], run.systems[2]);
 });
 
-test('a rescope that does not fit leaves no stale instruction and selects the new scope when the input allows', async () => {
+test('a rescope that does not fit leaves no stale instruction and waits for a rewrite to retry', async () => {
   const { effectiveLowWaterTokens: low, effectiveHighWaterTokens: high } = stickyWater();
   const mid = Math.floor((low + high) / 2);
   const run = scopedGuidanceRun({ bases: [low - 2000, high - 100, mid, low - 2000, low - 2000], engines: ['4.27', null, null, null] });
@@ -6191,10 +6191,10 @@ test('a rescope that does not fit leaves no stale instruction and selects the ne
   const events = run.events();
   assert.deepEqual(events.map(e => [e.reason, e.stickyCause]), [['included', undefined],
     ['sticky_dropped', 'scope_changed:budget_omitted'], ['sticky_dropped', 'dropped_earlier'],
-    ['sticky_readmitted', 'low_water'], ['sticky_kept', undefined]]);
-  for (const index of [1, 2]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
+    ['sticky_dropped', 'dropped_earlier'], ['sticky_dropped', 'dropped_earlier']]);
+  for (const index of [1, 2, 3, 4]) assert.doesNotMatch(run.systems[index], /\[Optional design reference\]/);
   assert.ok(events[0].selectedIds.includes(ENGINE_DEFAULTS));
-  assert.ok(events[3].selectedIds.length > 0);
+  assert.deepEqual(events[3].selectedIds, []);
   assert.ok(!events[3].selectedIds.includes(ENGINE_DEFAULTS));
   assert.doesNotMatch(run.systems[3], /reference id=unreal-networking\/engine-defaults/);
   assert.deepEqual(events[4].selectedIds, events[3].selectedIds);
@@ -6206,7 +6206,7 @@ test('the next user turn selects again, and a canceled execution leaves no retai
   const handler = createPredictionLoopHandler();
   const dropped = stickyGuidanceRun({ bases: [low - 2000, high - 100, low - 2000] });
   await handler(dropped.ctl);
-  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_readmitted']);
+  assert.deepEqual(dropped.events().map(e => e.reason), ['included', 'sticky_dropped', 'sticky_dropped']);
   const next = stickyGuidanceRun({ bases: [low - 2000, low - 1000] });
   await handler(next.ctl);
   assert.deepEqual(next.events().map(e => e.reason), ['included', 'sticky_kept']);

@@ -4,6 +4,7 @@ import {
   UNKNOWN_SIZE_MARGIN_TOKENS, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
+import { RUNTIME_DATA_SHARE } from "./execution-contracts";
 import { localObservationTools, capabilityFor, needsReadReservation } from "./tool-capability-registry";
 import { operationCapabilities } from "./tool-capability-core.js";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
@@ -94,6 +95,9 @@ export class BudgetBroker {
   beginBatch(measured: ContextMeasurement, hasReadTools = true, reserveFloor = 0) {
     const budget = this.watermarks(measured, 0, hasReadTools);
     return new BatchReservation(Math.max(0, budget.hardInputCeiling - measured.inputTokens - budget.requiredPostToolOverhead), reserveFloor);
+  }
+  runtimeDataAllowanceChars(water: Pick<Watermarks, "effectiveLowWaterTokens">): number {
+    return Math.floor(tokens(water.effectiveLowWaterTokens) * RUNTIME_DATA_SHARE * UTF8_BYTES_PER_TOKEN_ESTIMATE);
   }
 }
 

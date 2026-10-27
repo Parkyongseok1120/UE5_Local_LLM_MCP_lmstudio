@@ -16,7 +16,7 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
@@ -447,6 +447,7 @@ export function createPredictionLoopHandler(
           objectiveFingerprint, finalizing, boundedAudit, researchRecoveryEpisodeStarted: recoveryCoordinator.episodeStarted,
           allowReadRecovery: execution.canStartReadRecovery,
           reasoningRecovery: reasoningRecoveryRound,
+          turnStart: roundIndex === 0 && restoredWindow?.windowStatus === "restored",
           // The same headroom clamp bounds a final report's enlarged cap.
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
@@ -637,18 +638,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
             : boundedAudit ? "research" : "off",
           auditFinalizationTrigger: finalizing ? execution.finalizationTrigger : undefined,
           attachmentCount: attachmentContext.attachmentCount,
-          inputAvailability: assembledInput.projection ? {
-            mode: config.inputAvailabilityMode,
-            verificationBoundary: assembledInput.projection.verificationBoundary,
-            hostInputVerification: assembledInput.projection.hostInputVerification,
-            entries: assembledInput.projection.entries,
-            omittedEntryCount: assembledInput.projection.omittedEntryCount,
-            entryListComplete: assembledInput.projection.entryListComplete,
-            metrics: assembledInput.projection.metrics,
-            metadataChars: assembledInput.metadataChars,
-            metadataTokens: assembledInput.metadataTokens,
-            metadataTokenMeasurement: assembledInput.metadataTokens === null ? "unknown" : "prompt_delta",
-          } : { mode: "off" },
+          inputAvailability: inputAvailabilityTelemetry(assembledInput, config.inputAvailabilityMode),
           compactionDetails: compacted && compactionCheckpoint ? {
             omittedMessageCount: compactionCheckpoint.omittedMessageCount,
             retainedMessageCount: retainedIndexes.length,
@@ -1447,6 +1437,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           }
           // Repeated again, or no retry is left: report from what was returned.
           runtimeFacts.delete("repetition_check");
+          const unresolvedContract = engineClaimFact(gaps);
+          if (unresolvedContract) runtimeFacts.set("engine_claim_check", unresolvedContract);
           workingHistory = historyBeforeRound;
           execution.finishResearch("research_repetition");
           ctl.createStatus({ status: "done", text: "추론이 다시 반복되어 조사를 마치고, 확인된 근거로 최종 보고를 작성합니다." });

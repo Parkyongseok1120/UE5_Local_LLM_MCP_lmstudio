@@ -225,6 +225,7 @@ export function composeModelHistory(
   runtimeFacts: Array<string> = [],
   shownBlocks?: ShownDataBlocks,
   consolidateShown = false,
+  allowanceChars = Infinity,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -236,7 +237,7 @@ export function composeModelHistory(
     || (systemIndexes.length === 1 && systemIndexes[0] === 0);
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
-    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0 };
+    return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0, forcedRewrite: undefined };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -289,6 +290,7 @@ export function composeModelHistory(
   const slotAnchor = anchors.get(slot);
   const blocks = new Map<number, readonly string[]>();
   let dataBlock: { anchor: string; parts: string[]; replacesShown?: boolean } | undefined;
+  let forcedRewrite: "data_consolidation" | undefined;
   if (shownBlocks && slotAnchor) {
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
     const chars = (parts: ReadonlyArray<string>) => parts.reduce((sum, part) => sum + part.length, 0);
@@ -296,8 +298,9 @@ export function composeModelHistory(
     // A round that rewrites its input (projection, compaction) consolidates
     // superseded copies in that same rewrite: they had grown to 28K chars
     // between thresholds (conversation 1792916809646 v1).
-    if (shownChars > Math.max(RUNTIME_DATA_CONSOLIDATE_MIN_CHARS, 2 * chars(runtimeParts))
-      || consolidateShown && shownChars > chars(runtimeParts)) {
+    const supersededChars = Math.max(0, shownChars - chars(runtimeParts));
+    if (supersededChars > allowanceChars || consolidateShown && shownChars > chars(runtimeParts)) {
+      if (supersededChars > allowanceChars) forcedRewrite = "data_consolidation";
       // Earlier blocks now hold more superseded copies than current data
       // (2026-10-25 run: 33K chars of data slots for about 12K of current
       // facts). One rewrite replaces them with the current data at the newest
@@ -329,7 +332,7 @@ export function composeModelHistory(
     || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
   // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
   const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
-  return { history: composed, overhead, privateDataParts, runtimeDataChars, ...(dataBlock ? { dataBlock } : {}) };
+  return { history: composed, overhead, privateDataParts, runtimeDataChars, forcedRewrite, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
@@ -339,8 +342,6 @@ export type ShownDataBlocks = ReadonlyMap<string, readonly string[]>;
 const INCREMENTAL_PART_HEADERS = ["[Available tool-call refs]", "Runtime read ledger (kept across compaction)",
   "Runtime evidence observation:", REVIEW_REGISTER_HEADER];
 const DERIVED_HEADER = "[Derived reference data";
-/** Data slots are rewritten once they exceed this and twice the current data. */
-const RUNTIME_DATA_CONSOLIDATE_MIN_CHARS = 6000;
 // Availability flags of a reference item follow every projection; an item
 // whose observation is otherwise unchanged is not sent again for them alone.
 const VOLATILE_ITEM_FIELDS = ["returnedBodyInCurrentInput", "sourceBodyInCurrentInput", "hostInputVerification"];
@@ -442,6 +443,7 @@ export type InputAssemblyOptions = {
   /** True while this round rewrites its input anyway: earlier data blocks are
    * consolidated in the same rewrite instead of outliving it. */
   consolidateDataBlocks?: () => boolean;
+  runtimeDataAllowanceChars?: number;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
@@ -471,6 +473,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     outputReserve?: number;
     modelInputId?: string;
     referenceData?: string;
+    rewrite?: boolean;
   } = {}) => {
     const profileTools = profile.tools || roundTools;
     const profileInstructions = profile.instructions || roundScopeInstructions;
@@ -479,7 +482,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -533,7 +536,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -546,7 +549,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, options.consolidateDataBlocks?.() === true,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -677,8 +680,8 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
    * projection), so its prefix is not reusable; reaching the low-water target
    * here saves a rewrite a few rounds later. Unlike force, an unmet target does
    * not block a round whose input already fits under high water. */
-  async enforceLowWater(history: Chat, assemble: (history: Chat) => Promise<AssembledInput>,
-    options: { force?: boolean; deepen?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
+  async enforceLowWater(history: Chat, assemble: (history: Chat, profile?: { rewrite?: boolean }) => Promise<AssembledInput>,
+    options: { force?: boolean; deepen?: boolean; keepLastAssistantAnswer?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
       pinnedWorkingSetMaxChars?:number; pinMetadata?:Record<string,unknown> }) {
     const before = await assemble(history);
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
@@ -692,9 +695,14 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
 };
     }
     const requiredIndexes = this.requiredIndexes(history);
+    const messages = history.getMessagesArray();
+    const latestUser = messages.reduce((last, message, index) => message.isUserMessage() ? index : last, -1);
+    const lastAnswer = options.keepLastAssistantAnswer ? messages.reduce((last, message, index) => index < latestUser
+      && message.isAssistantMessage() && message.getText().trim() ? index : last, -1) : -1;
+    if (lastAnswer >= 0 && !requiredIndexes.includes(lastAnswer)) requiredIndexes.push(lastAnswer);
     const floorCandidate = buildCompactedHistory(history, 0, this.config,
       { ...this.checkpointOptions, requiredIndexes, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
-    const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history);
+    const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history, { rewrite: true });
     // A checkpoint that expands an already minimal input is not its mandatory floor.
     const floor = floorInput.measurement.exact && floorInput.measurement.inputTokens < before.measurement.inputTokens ? floorInput : before;
     const water = this.broker.watermarks(before.measurement, floor.measurement.inputTokens, options.hasReadTools, options.minimumReadTokens);
@@ -732,8 +740,10 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         const candidate = name === "mandatory_floor" ? floorCandidate
           : buildCompactedHistory(history, recentTurns, this.config, { ...this.checkpointOptions, requiredIndexes, ...choiceOptions });
         const input = candidate.history === history ? before
-          : name === "mandatory_floor" ? floorInput : await assemble(candidate.history);
-        const accepted = input.measurement.exact && input.measurement.inputTokens <= ceiling
+          : name === "mandatory_floor" ? floorInput : await assemble(candidate.history, { rewrite: true });
+        const accepted = (lastAnswer < 0 || candidate.history.getMessagesArray().some(message => message.isAssistantMessage()
+          && message.getText() === messages[lastAnswer].getText()))
+          && input.measurement.exact && input.measurement.inputTokens <= ceiling
           && input.measurement.inputTokens <= water.hardInputCeiling
           && this.broker.watermarks(input.measurement, floor.measurement.inputTokens,
             options.hasReadTools, options.minimumReadTokens).nextActionFit;
