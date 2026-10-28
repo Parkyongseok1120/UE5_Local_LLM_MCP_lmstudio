@@ -209,13 +209,23 @@ class ReadLedger {
       // already returned file version disappeared or changed.
       if(!file || known && file.knownVersion!==row.sourceVersion)file={sourceKey:row.sourceKey,path:row.path,
         knownVersion:known?row.sourceVersion:null,lines:new Map(),origins:new Map(),bodyReturned:false};
-      for(const [line,text] of row.lines){file.lines.set(line,text);file.origins.set(line,{via:row.via,executionId:row.executionId,sourceVersion:row.sourceVersion});}
+      if (!known && file.knownVersion) {
+        // Delivery of an unhashed snippet neither replaces nor extends a
+        // known-version body. Keep its provenance separately; a consumer must
+        // not use it to pronounce the known source's text missing or current.
+        file.unversionedSnippets ||= [];
+        file.unversionedSnippets.push({ lines: row.lines, via: row.via, executionId: row.executionId });
+        file.uncertainLines ||= [];
+        for (const [line, text] of row.lines) if (file.lines.has(line) && file.lines.get(line) !== text)
+          file.uncertainLines.push(line);
+        file.versionUncertain = file.uncertainLines.length > 0;
+      } else for(const [line,text] of row.lines){file.lines.set(line,text);file.origins.set(line,{via:row.via,executionId:row.executionId,sourceVersion:row.sourceVersion});}
       file.bodyReturned ||= row.via!=="search_hit";
       files.set(row.sourceKey,file);
     }
     for(const row of this.returnedSpans)if(!files.has(row.sourceKey))files.set(row.sourceKey,{sourceKey:row.sourceKey,path:row.path,lines:new Map(),origins:new Map(),bodyReturned:row.via!=="search_hit"});
     const projected=[...files.values()].map(f=>{
-      const spans=this.returnedSpans.filter(r=>r.sourceKey===f.sourceKey);
+      const spans=this.returnedSpans.filter(r=>r.sourceKey===f.sourceKey && (!f.knownVersion || r.sourceVersion===f.knownVersion));
       const completeText=spans.every(r=>r.ranges.every(([start,end])=>{
         if(end-start>=f.lines.size)return false;
         for(let line=start;line<=end;line++)if(!f.lines.has(line))return false;return true;

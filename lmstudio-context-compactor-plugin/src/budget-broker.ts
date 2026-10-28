@@ -36,11 +36,39 @@ export class BudgetBroker {
   // Execution-local, request-scope-specific retry floors. Never carried to the
   // next user turn or borrowed across tools, projects, queries or operations.
   private readonly retryFloors = new Map<string, RetryMinimum>();
-  observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
+  private readonly retryAliases = new Map<string, Set<string>>();
+  observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>, tools: readonly RemoteToolLike[] = []) {
     const key = retryScope(tool, args);
-    if (envelope.ok) this.retryFloors.delete(key);
-    else if ("minimum" in envelope.retry && envelope.retry.minimum) this.retryFloors.set(key, { ...envelope.retry.minimum });
-    while (this.retryFloors.size > 256) this.retryFloors.delete(this.retryFloors.keys().next().value!);
+    const clear = (scope: string) => {
+      for (const alias of this.retryAliases.get(scope) || [scope]) { this.retryFloors.delete(alias); this.retryAliases.delete(alias); }
+    };
+    if (envelope.ok) clear(key);
+    else if ("minimum" in envelope.retry && envelope.retry.minimum) {
+      const minimum = envelope.retry.minimum;
+      clear(key); this.retryFloors.set(key, { ...minimum });
+      // Only the provider's registered source-read continuation may inherit
+      // this floor. A suggestion cannot lend authority to another provider,
+      // project, path, query or operation. It is still subject to the guard.
+      const advice = envelope.value?.suggestion;
+      const target = tools.filter(t => t.name === advice?.tool && t.pluginIdentifier === tool.pluginIdentifier);
+      const next = advice?.args;
+      if (["read_file", "read_file_range"].includes(tool.name) && target.length === 1
+        && ["read_file", "read_file_range"].includes(target[0].name)
+        && next && typeof next === "object" && !Array.isArray(next) && typeof args.path === "string"
+        && next.path === args.path && (next.project ?? args.project) === args.project
+        && Object.keys(args).every(k => ["byteBudget", "repeatReceipt", "lineNumbers"].includes(k)
+          || next[k] === args[k])
+        && Object.keys(next).every(k => ["path", "project", "byteBudget", "startLine", "endLine", "lineNumbers"].includes(k))
+        && capabilityFor(target[0], { name: target[0].name, arguments: next })?.effect === "read") {
+        const contract = readResultContract(target[0], next);
+        if (contract.field === minimum.field && minimum.value >= contract.minimum && minimum.value <= contract.maximum) {
+          const alias = retryScope(target[0], next), group = new Set([key, alias]);
+          this.retryFloors.set(alias, { ...minimum });
+          for (const member of group) this.retryAliases.set(member, group);
+        }
+      }
+    }
+    while (this.retryFloors.size > 256) clear(this.retryFloors.keys().next().value!);
   }
   retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>) => this.retryFloors.get(retryScope(tool, args));
   constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">

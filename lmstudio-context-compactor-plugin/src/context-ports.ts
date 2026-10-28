@@ -132,7 +132,8 @@ export type ReadLedgerLike = {
   load(value: unknown): boolean;
 };
 export type SizeHint = { sizeBytes: number | null; totalLines: number | null; sha256: string | null };
-export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean}>;
+export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean;
+  knownVersion?:string|null;versionUncertain?:boolean;uncertainLines?:number[];unversionedSnippets?:Array<{lines:Array<[number,string]>;via:string;executionId:string}>}>;
   contractIds:Set<string>;scope:"execution"|"conversation";complete?:boolean};
 export const readLedgerModule = require("./read-ledger.js") as {
   ReadLedger: new () => ReadLedgerLike;

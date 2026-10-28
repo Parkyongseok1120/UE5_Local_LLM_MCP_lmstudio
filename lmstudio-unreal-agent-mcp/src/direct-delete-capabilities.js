@@ -190,6 +190,7 @@ function createDeleteCapabilities(context) {
       const token = crypto.randomBytes(24).toString("hex");
       proposals.set(token, {
         identity: proposalIdentity(args.completedEditsSummary, item, resolution.absolutePath),
+        approvedHash: read.hash.toLowerCase(),
         expiresAt,
         absolutePath: resolution.absolutePath,
         relativePath: resolution.relativePath,
@@ -252,6 +253,11 @@ function createDeleteCapabilities(context) {
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
     if (read.hash.toLowerCase() !== version.expectedHash) return versionConflict(version, read.hash);
+    if (version.expectedHash !== proposal.approvedHash) {
+      return failure("APPROVAL_VERSION_MISMATCH", "The proposed content version changed. Show a new deletion proposal for approval.", {
+        retryAllowed: true, retryMode: "after_state_change",
+      });
+    }
     const trashStamp = nowStamp();
     let trashPath = "";
     let locked;
@@ -268,7 +274,7 @@ function createDeleteCapabilities(context) {
         );
         if (!refreshedAllowed.ok) throw new Error(refreshedAllowed.message);
         const currentHash = sha256Buffer(await fsp.readFile(refreshed.absolutePath));
-        if (currentHash !== version.expectedHash) return { ok: false, currentHash };
+        if (currentHash !== version.expectedHash || currentHash !== proposal.approvedHash) return { ok: false, currentHash };
         trashPath = path.join(
           refreshed.projectDir,
           ".agent-trash",
@@ -309,6 +315,7 @@ function createDeleteCapabilities(context) {
     }
     proposals.delete(token);
     context.fileSnapshots.invalidatePath(resolution.activeProject, resolution.absolutePath);
+    context.buildChanges?.record(resolution.activeProject, [resolution.relativePath]);
     return success({
       operation: "moved_to_trash",
       canonicalProject: resolution.activeProject,

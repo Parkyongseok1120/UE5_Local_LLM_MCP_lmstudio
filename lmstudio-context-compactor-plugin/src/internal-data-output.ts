@@ -119,8 +119,7 @@ export class InternalDataOutputFilter {
         // Match the observation envelope, not arbitrary JSON after a heading.
         // Its items may be rearranged in an echo (2026-10-25 run moved them
         // under referenceContext), so the envelope's own fields decide.
-        if (data && typeof data === "object" && typeof data.interpretation === "string"
-          && data.coverage?.scope === "bounded_current_execution") {
+        if (derivedEnvelopePrefix(body)) {
           this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
         }
         const literal = this.candidate;
@@ -132,7 +131,7 @@ export class InternalDataOutputFilter {
         // fields, it is still the protocol, not report text.
         if (trimmed === "[End derived reference data]") {
           const json = body.slice(0, body.lastIndexOf("[End derived reference data]")).trim();
-          if (json.startsWith('{"interpretation":') && json.includes('"scope":"bounded_current_execution"')) {
+          if (derivedEnvelopePrefix(json)) {
             this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
           }
         }

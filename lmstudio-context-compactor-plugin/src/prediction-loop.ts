@@ -22,9 +22,10 @@ import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
-import { classifyObjective, hasMutationCapability } from "./tool-capability-registry";
+import { classifyObjective, executionObjective, hasMutationCapability } from "./tool-capability-registry";
 import { continuationStatusText } from "./prediction-ui";
 import { NotePersistence } from "./note-persistence";
+import { reportScopeGaps, reportScopeReviewFact } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted, reportNowFact } from "./resume-facts";
 import { acceptedValidatePackets, packetQuoteMismatches, quoteCheckFact, returnedSourceLines, validatePackets,
@@ -161,8 +162,8 @@ export function createPredictionLoopHandler(
     // ruled out; they would be resent every round (2026-10-20 audit: 27.7k
     // schema chars per call).
     const latestUserText = originalHistory.getMessagesArray().filter(message => message.getRole() === "user").at(-1)?.getText() || "";
-    objective = classifyObjective(latestUserText);
-    const readOnlyReview = !config.observeOnly && readOnlyReviewRequest(latestUserText);
+    objective = executionObjective(originalHistory.getMessagesArray());
+    const readOnlyReview = !config.observeOnly && objective.kind === "review";
     const modelTools = config.auditCompletionMode === "bounded" && !objective.requiredEffects.has("mutation") ? capabilityRegistry.readProfile()
       : readOnlyReview ? capabilityRegistry.reviewProfile() : allModelTools;
     if (config.showDebugInfo) ctl.debug({
@@ -962,7 +963,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const recoveryProgress = evidenceManager.observe(screening.messages, modelInputId, screening, budgetDenied);
         const retryGuidance: Array<Record<string, unknown>> = [];
         for (const { tool, request, envelope } of recoveryProgress.envelopes) {
-          budgetBroker.observeResult(tool, request.arguments as Record<string, unknown>, envelope);
+          budgetBroker.observeResult(tool, request.arguments as Record<string, unknown>, envelope, modelTools);
           if (envelope.errorCode) retryGuidance.push({ tool: tool.name, errorCode: envelope.errorCode, retry: envelope.retry });
         }
         if (retryGuidance.length) runtimeFacts.set("tool_retry", "Returned tool retry contracts: " + JSON.stringify(retryGuidance.slice(0, 4)));
@@ -1077,6 +1078,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             predictionStats: captured.predictionStats,
             toolRequestFailure: captured.toolRequestFailure,
             predictionUsage: captured.predictionUsage,
+            renderedOutput: visibleCaptured.presentation,
             callPurpose: finalizing
               ? reviewingReport ? "report_review" : execution.finalizationTrigger === "output_recovery" ? "output_recovery" : "final"
               : recoveryCoordinator.mutationFocus ? "mutation_focus"
@@ -1517,16 +1519,16 @@ event: decision.trigger === "research_recovery_exhausted"
           continue;
         }
         if (!config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted
-          && (objective.kind === "review" || objective.kind === "explain")
           && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
           && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
           const answer = visibleTranscript.lastAnswerText;
           const gaps = unresolvedReportEngineClaimGaps(answer,
             returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine);
           reviewMissing = reviewRegister.missing(answer);
-          if (answer.trim() && (reviewMissing.length || gaps.length)) {
+          const scopeGaps = reportScopeGaps(visibleTranscript.snapshot(), answer, evidenceManager.returnedSources());
+          if (answer.trim() && (scopeGaps.length || ["review", "explain"].includes(objective.kind) && (reviewMissing.length || gaps.length))) {
             reportReviewAttempted = true;
-            runtimeFacts.set("report_review", reportReviewFact(reviewMissing, gaps));
+            runtimeFacts.set("report_review", reportReviewFact(reviewMissing, gaps) + "\n" + reportScopeReviewFact(scopeGaps));
             // The delivered answer is data, not the last message: a trailing
             // complete assistant answer is one the model only continues, and a
             // finished answer continues with EOS (conversation 1792929236226:

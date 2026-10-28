@@ -146,7 +146,14 @@ export class PredictionStreamRenderer {
   }
   normalizeCaptured<T extends { messages: ChatMessage[]; predictionUsage: { rawToolIntentCandidate?: boolean } }>(captured: T) {
     const unexecutedToolIntent = hasRawToolIntent(visibleTextFromMessages(captured.messages, this.internalDataParts), captured.messages);
-    return { ...captured, messages: captured.messages.map(message => this.visibleMessage(message)), unexecutedToolIntent,
+    const messages = captured.messages.map(message => this.visibleMessage(message));
+    const observations = captured.messages.filter(m => m.isAssistantMessage() && m.getText()).map(m => this.consumeMessage(m));
+    return { ...captured, messages, unexecutedToolIntent, presentation: {
+      deliveredChars: messages.filter(m => m.isAssistantMessage()).reduce((n, m) => n + m.getText().length, 0),
+      suppressedInternalProtocol: observations.some(o => o.suppressedProtocol),
+      incompleteInternalProtocol: observations.some(o => o.incompleteProtocol),
+      duplicateSuppressedChars: this.suppressedChars,
+    },
       predictionUsage: { ...captured.predictionUsage, rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate || unexecutedToolIntent } };
   }
 

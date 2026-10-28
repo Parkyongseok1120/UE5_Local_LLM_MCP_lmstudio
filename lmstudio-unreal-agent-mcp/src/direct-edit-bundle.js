@@ -1,4 +1,5 @@
 "use strict";
+const crypto = require("node:crypto");
 
 const {
   canonicalizeBundleTargets,
@@ -13,6 +14,7 @@ const {
   createRuntimeTransaction,
   normalizeRuntimeOwner,
   saveRuntimeTransaction,
+  transactionFilePath,
 } = require("./direct-transaction-store");
 const { releasePathLock, tryAcquirePathLock } = require("./write-locks");
 const { assertMutationActive } = require("./safe-write");
@@ -59,13 +61,16 @@ async function applyDirectEditBundle(bundle, resolvePath, options = {}) {
     resolvePath,
     mutationLimits,
   );
-  const journal = createRuntimeTransaction({
-    runtimeOwner,
-    stateRoot,
-    projectRoot: options.projectRoot,
-    projectPath: options.projectPath,
-  });
-  const acquired = [];
+  // Own publication before the journal exists. Recovery uses this same lock,
+  // whose PID/start identity is already maintained by write-locks.
+  const transactionId = crypto.randomUUID();
+  const ownerLock = tryAcquirePathLock(transactionFilePath(stateRoot, runtimeOwner, transactionId), `${runtimeOwner}_live_transaction`, { stateRoot });
+  if (!ownerLock.ok) throw new Error("Transaction ownership lock unavailable");
+  let journal;
+  try { journal = createRuntimeTransaction({ runtimeOwner, stateRoot, transactionId,
+    projectRoot: options.projectRoot, projectPath: options.projectPath }); }
+  catch (error) { releasePathLock(ownerLock); throw error; }
+  const acquired = [ownerLock];
 
   try {
     const lockOrder = [...relativePaths].sort((left, right) => (

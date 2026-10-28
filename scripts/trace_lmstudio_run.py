@@ -27,7 +27,7 @@ RESULT_FLAGS = ("connection", "reasonCode", "compilationOutcome", "testStatus", 
                 "matchCount", "bodyComplete", "notice", "suggestion", "validationScope", "factualEvidenceVerified",
                 "summary", "omissionReason", "effectiveByteBudget", "duplicate", "absenceVerified",
                 "apiAbsenceVerified", "evidenceEnvelopeTruncated", "matchesReturned", "matchesOmitted",
-                "moreMatchesPossible", "nextCursor", "cursorOffset")
+                "moreMatchesPossible", "nextCursor", "cursorOffset", "retry")
 SOURCE_READS = {"read_file", "read_file_range", "read_symbol", "git_read_file"}
 MUTATIONS = {"replace_in_file", "write_file", "apply_edit_bundle", "patch_file"}
 KEPT_EVENTS = {"working_context_projection", "model_input_evidence_summary", "execution_outcome", "batch_budget",
@@ -118,6 +118,8 @@ def failure_kind(flags: dict[str, Any], tool: str = "") -> str | None:
         return "outside_allowed_roots"
     if code in {"NOT_FOUND", "FILE_NOT_FOUND", "not_found"} or message.startswith("File not found"):
         return "not_found"
+    if code == "OUTPUT_LIMIT_EXCEEDED":
+        return "response_metadata_budget"
     if flags.get("matchCount") == 0 and ("coverage_limited" in str(flags.get("status"))
                                          or "partial" in json.dumps(flags.get("coverage"), ensure_ascii=False)):
         return "coverage_limited_zero"
@@ -248,7 +250,8 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
         turn = turns[-1]
         pending: dict[str, dict[str, Any]] = {}
         text_after_last_call: list[str] = []
-        for step in version.get("steps", []):
+        steps = version.get("steps", [])
+        for step_index, step in enumerate(steps):
             if step.get("type") == "debugInfoBlock":
                 try:
                     event = json.loads(step.get("debugInfo") or "{}")
@@ -271,6 +274,18 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                 continue
             style = step.get("style")
             thinking = isinstance(style, dict) and style.get("type") == "thinking"
+            # The host appends a presentation notice immediately before its
+            # debug event. Preserve that origin instead of counting its quoted
+            # correction wording as another model claim. Without the event we
+            # make no authorship inference from the wording alone.
+            host_notice = None
+            if step_index + 1 < len(steps) and steps[step_index + 1].get("type") == "debugInfoBlock":
+                try:
+                    candidate = json.loads(steps[step_index + 1].get("debugInfo") or "{}")
+                    if str(candidate.get("event", "")).endswith("_notice"):
+                        host_notice = candidate["event"]
+                except ValueError:
+                    pass
             for block in step.get("content", []):
                 kind = block.get("type")
                 if kind == "toolCallRequest":
@@ -291,7 +306,11 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                         call["failureKind"] = failure_kind(call["result"], str(call["name"] or ""))
                         _mark_complete_line_range(call)
                 elif kind == "text" and not thinking:
-                    text_after_last_call.append(str(block.get("text", "")))
+                    if host_notice:
+                        turn.setdefault("hostNotices", []).append({"step": step_index, "event": host_notice,
+                                                                   "text": _short(str(block.get("text", "")), 400)})
+                    else:
+                        text_after_last_call.append(str(block.get("text", "")))
         if text_after_last_call:
             turn["finalText"] = "".join(text_after_last_call)
     for turn in turns:
@@ -316,7 +335,8 @@ def extract_claims(text: str, calls: list[dict[str, Any]]) -> list[dict[str, Any
         if not sentence:
             continue
         kinds = []
-        if OVERCLAIM.search(sentence):
+        wording = re.sub(r"\bnot\s+(?:yet\s+)?verified\b|검증\s*완료(?:가|는)?\s*아니\S*", "", sentence, flags=re.I)
+        if OVERCLAIM.search(wording):
             kinds.append("overclaim_wording")
         if ABSENCE.search(sentence):
             kinds.append("absence_claim")

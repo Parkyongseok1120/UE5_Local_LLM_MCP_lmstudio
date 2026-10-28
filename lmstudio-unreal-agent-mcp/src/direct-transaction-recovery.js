@@ -6,7 +6,7 @@ const path = require("node:path");
 const { atomicWriteText } = require("./atomic-io");
 const { absolutePathIsWithin, canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { sha256Text } = require("./safe-write");
-const { withPathLock } = require("./write-locks");
+const { withPathLock, tryAcquirePathLock, releasePathLock } = require("./write-locks");
 const {
   archiveRuntimeTransaction,
   listRuntimeTransactionFiles,
@@ -185,10 +185,15 @@ async function recoverRuntimeTransactions(stateRoot, owner) {
     recovered: [],
     archived: [],
     recoveryRequired: [],
+    deferred: [],
   };
   const files = await listRuntimeTransactionFiles(stateRoot, runtimeOwner);
   for (const filePath of files) {
     report.scanned += 1;
+    const ownerLock = tryAcquirePathLock(filePath, `${runtimeOwner}_transaction_recovery`, { stateRoot });
+    if (!ownerLock.ok) { report.deferred.push({ filePath, reason: "live_transaction" }); continue; }
+    const acquired = [ownerLock];
+    try {
     let journal;
     try {
       journal = await readRuntimeTransaction(filePath, runtimeOwner);
@@ -220,7 +225,18 @@ async function recoverRuntimeTransactions(stateRoot, owner) {
         });
         continue;
       }
-      const rollback = await rollbackRuntimeTransaction(journal, stateRoot);
+      // Legacy journals have no owner lock. Acquire every target before any
+      // rollback or journal write: a live writer's busy path is transient,
+      // not evidence of an external image or lost ownership.
+      let busy = false;
+      const targets = [...new Set(journal.entries.map(entry => entry.canonicalAbsolutePath))].sort();
+      for (const target of targets) {
+        const lock = tryAcquirePathLock(target, `${runtimeOwner}_transaction_recovery`, { stateRoot });
+        if (!lock.ok) { busy = true; break; }
+        acquired.push(lock);
+      }
+      if (busy) { report.deferred.push({ transactionId: journal.transactionId, reason: "target_busy" }); continue; }
+      const rollback = await rollbackRuntimeTransaction(journal, stateRoot, { locksHeld: true });
       if (rollback.rolledBack) {
         report.recovered.push({ transactionId: journal.transactionId, ...rollback });
       } else {
@@ -233,6 +249,7 @@ async function recoverRuntimeTransactions(stateRoot, owner) {
         error: String(error.message || error),
       });
     }
+    } finally { for (const lock of acquired.reverse()) releasePathLock(lock); }
   }
   return report;
 }

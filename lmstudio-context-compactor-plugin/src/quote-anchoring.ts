@@ -160,11 +160,16 @@ export function packetQuoteMismatches(packet: unknown, files: SourceFile[]): Quo
       const tokens = observedCodeTokens(item.observation);
       const target = tokens.length ? locate(item.location, files) : null;
       if (!target) return;
-      if (target.file.completeText === false) return; // evicted text is not evidence that a name was absent
+      const citedVersion = item.sourceVersion || item.sha256;
+      if (citedVersion && target.file.knownVersion && citedVersion !== target.file.knownVersion) return;
+      if (target.file.completeText === false) return; // evicted text cannot prove absence
+      if (!item.sourceVersion && !item.sha256 && target.file.uncertainLines?.some(line => line >= target.start - ENCLOSING_LOOKBACK
+        && line <= target.end + LINE_SLACK)) return; // only the conflicting citation is uncertain
       const cited = [...target.file.lines].filter(([line, text]) => line >= target.start && line <= target.end && text.trim())
         .sort(([a], [b]) => a - b).map(([line, text]) => `${line}: ${text.trim().slice(0, MAX_LINE_CHARS)}`);
       if (!cited.length) return;
-      const absentEverywhere = (token: string) => !files.some(file => hasToken([...file.lines.values()].join("\n"), token));
+      const absentEverywhere = (token: string) => !files.some(file => hasToken([...file.lines.values(),
+        ...(file.unversionedSnippets || []).flatMap(row => row.lines.map(([, text]) => text))].join("\n"), token));
       // Each short-cite assertion is checked against its own explicit sources.
       // Repeating the main location adds no exemption. Another clause's inline
       // reference cannot lend its source to a misquoted call in this one.
@@ -236,6 +241,8 @@ const COVERAGE_CLAIM = /(?:전체|모든)[^.\n]{0,20}?(\d+)\s*개\s*(?:의\s*)?(
 
 /** Footer when the answer claims more checked files than returned bodies. */
 export function fileCoverageNotice(source: ReturnedSources, answer: string): string | null {
+  if (/(?:모든|전체)\s*(?:소스\s*)?파일(?:을|를)?\s*(?:모두\s*)?(?:확인|검토|읽)|\ball\s+(?:source\s+)?files\s+(?:were\s+)?(?:read|reviewed|checked)/iu.test(answer || ""))
+    return "[파일 검토 범위] 파일 목록과 반환된 본문은 서로 다릅니다. 이 실행의 반환 자료만으로 저장소 전체의 의미 검토 완료를 증명하지 않았습니다. 읽은 구현과 미확인 범위를 구분해야 합니다.";
   const match = COVERAGE_CLAIM.exec(answer || "");
   const claimed = match ? Number(match.slice(1).find(Boolean)) : NaN;
   if (!Number.isFinite(claimed)) return null;

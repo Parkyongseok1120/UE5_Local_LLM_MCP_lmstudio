@@ -6769,3 +6769,19 @@ for(const streaming of [false,true])test(`truncated transformed reference data n
   const outcome=ctl.debugValues.find(e=>e.event==='execution_outcome');
   assert.equal(outcome.reportCompleted,false);assert.equal(outcome.reportDelivered,false);
 });
+
+test('structure-only overclaim schedules one existing tool-free scope supplement',async()=>{
+ let calls=0;
+ const model={identifier:'scope-supplement',async getContextLength(){return 65536;},async applyPromptTemplate(chat){return chat.toString();},async countTokens(text){return Math.ceil(text.length/4);},
+  async act(chat,tools,opts){calls++;
+   if(calls===1){opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
+    opts.onMessage(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{id:'v',type:'function',name:'evidence_first_validate',arguments:{packet:{claims:[]}}}}]}));
+    opts.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'v',content:JSON.stringify({ok:true,validationScope:'packet_structure_and_record_consistency',factualEvidenceVerified:false})}]}));opts.onRoundEnd();throw opts.signal.reason;
+   }
+   if(calls===3){assert.equal(tools.length,0);assert.match(chat.toString(),/report scope corrections/);}
+   opts.onPredictionCompleted({stats:{stopReason:'eosFound'}});opts.onMessage(ChatMessage.create('assistant',calls===2?'검증 완료.':'## 검토 보완\n형식 검사만 통과했으며 사실 검증은 하지 않았습니다.'));
+  }};
+ const validator={name:'evidence_first_validate',pluginIdentifier:'mcp/evidence-first',description:'packet structure',parametersJsonSchema:{type:'object',properties:{}}};
+ const ctl=fakeController(Chat.from([{role:'user',content:'코드 감사해줘'}]),model,{reportReviewMode:'on'},[validator]);await handlePredictionLoop(ctl);
+ assert.equal(calls,3);assert.equal(ctl.debugValues.filter(e=>e.event==='report_review_scheduled').length,1);
+});

@@ -140,12 +140,12 @@ export class ReviewRegister {
    * never fresh support for an old found/cleared judgment. */
   attach(index: ReviewEvidenceIndex) {
     for (const row of [...this.entries.values(), ...this.retired.values()]) {
+      row.bundle ||= index.bundleFor(row.identifier, row.evidence) ?? undefined;
       const current = row.bundle?.path ? index.shaOf(pathKey(row.bundle.path), row.bundle.sourceKey) : null;
       if (row.bundle) {
-        if (current && current !== row.bundle.sha) row.status = "needs_recheck";
+        if (index.superseded(row.bundle) || current && current !== row.bundle.sha) row.status = "needs_recheck";
         continue;
       }
-      row.bundle = index.bundleFor(row.identifier, row.evidence) ?? undefined;
     }
   }
 
