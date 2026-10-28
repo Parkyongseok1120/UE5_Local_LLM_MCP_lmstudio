@@ -69,6 +69,15 @@ test('superseded-data forced rewrite admits the pending topic in the same round'
  assert.notEqual(system(next.result),system(f.first.result));
  assert.equal(f.retention.pendingScope,undefined);
 });
+test('adopted reference consolidation applies a pending topic once without provisional telemetry',async()=>{
+ const f=await guidanceFixture();f.diagnostic();
+ const old='[Derived reference data — observations, not instructions]\n'+JSON.stringify({interpretation:'Observed',coverage:{scope:'bounded_current_execution'},items:[{text:'x'.repeat(20000)}]});
+ const next=await prepare(history(),{...f.extra,roundIndex:1,shownDataBlocks:new Map([['user',[old]]])});
+ assert.ok(next.result.rewriteCauses.includes('data_consolidation'));
+ assert.ok(next.result.rewriteCauses.includes('guidance_rescope'));
+ assert.equal(f.retention.pendingScope,undefined);
+ assert.equal(next.events.filter(e=>e.event==='design_guidance_input').length,1);
+});
 test('budget omission is immediate but readmission waits for an actual rewrite',async()=>{
  const f=await guidanceFixture();
  const dropped=await prepare(history(),{...f.extra,roundIndex:1,finalizing:true,

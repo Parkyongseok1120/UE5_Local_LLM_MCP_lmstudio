@@ -117,9 +117,13 @@ function suggestionFrom(payload) {
 
 function normalizeRetry(payload, ok) {
   if (isRecord(payload?.retry)) {
+    const minimum = payload.retry.minimum;
+    const validMinimum = payload.retry.allowed === true && minimum?.field === "byteBudget"
+      && Number.isSafeInteger(minimum.value) && minimum.value >= 2048 && minimum.value <= 65536;
     return {
       allowed: payload.retry.allowed === true,
       mode: String(payload.retry.mode || (payload.retry.allowed === true ? "same_arguments" : "none")),
+      ...(validMinimum ? { minimum: { field: minimum.field, value: minimum.value } } : {}),
     };
   }
   if (ok) return undefined;
@@ -177,6 +181,7 @@ function failure(errorCode, message, options = {}) {
     retry: {
       allowed: options.retryAllowed === true,
       mode: String(options.retryMode || (options.retryAllowed === true ? "different_arguments" : "none")),
+      ...(options.retryMinimum ? { minimum: options.retryMinimum } : {}),
     },
   };
   if (options.suggestion) payload.suggestion = options.suggestion;
@@ -197,6 +202,7 @@ function boundedJson(payload, maxChars, maxBytes) {
     ? failure(payload.errorCode, payload.message || payload.error || "The tool call failed.", {
       retryAllowed: payload.retry?.allowed === true,
       retryMode: payload.retry?.mode,
+      retryMinimum: payload.retry?.minimum,
       suggestion: payload.suggestion,
     })
     : failure(

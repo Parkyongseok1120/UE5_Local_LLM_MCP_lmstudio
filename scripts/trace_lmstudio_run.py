@@ -269,6 +269,8 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                 continue
             if step.get("type") != "contentBlock":
                 continue
+            style = step.get("style")
+            thinking = isinstance(style, dict) and style.get("type") == "thinking"
             for block in step.get("content", []):
                 kind = block.get("type")
                 if kind == "toolCallRequest":
@@ -288,7 +290,7 @@ def parse_conversation(data: dict[str, Any]) -> dict[str, Any]:
                             call["linesRead"] = lines_read(decoded)
                         call["failureKind"] = failure_kind(call["result"], str(call["name"] or ""))
                         _mark_complete_line_range(call)
-                elif kind == "text":
+                elif kind == "text" and not thinking:
                     text_after_last_call.append(str(block.get("text", "")))
         if text_after_last_call:
             turn["finalText"] = "".join(text_after_last_call)

@@ -252,6 +252,7 @@ export function composeModelHistory(
   shownBlocks?: ShownDataBlocks,
   consolidateShown = false,
   allowanceChars = Infinity,
+  deferReferenceData = false,
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -325,7 +326,9 @@ export function composeModelHistory(
     // A round that rewrites its input (projection, compaction) consolidates
     // superseded copies in that same rewrite: they had grown to 28K chars
     // between thresholds (conversation 1792916809646 v1).
-    const supersededChars = Math.max(0, shownChars - chars(runtimeParts));
+    const budgetParts = (parts: readonly string[]) => deferReferenceData
+      ? parts.filter(part => !part.startsWith("[Derived reference data")) : parts;
+    const supersededChars = Math.max(0, chars(budgetParts([...blocks.values()].flat())) - chars(budgetParts(runtimeParts)));
     if (supersededChars > allowanceChars || consolidateShown && shownChars > chars(runtimeParts)) {
       if (supersededChars > allowanceChars) forcedRewrite = "data_consolidation";
       // Earlier blocks now hold more superseded copies than current data
@@ -474,6 +477,7 @@ export type InputAssemblyOptions = {
    * consolidated in the same rewrite instead of outliving it. */
   consolidateDataBlocks?: () => boolean;
   runtimeDataAllowanceChars?: number;
+  deferReferenceData?: () => boolean;
 };
 export function createInputAssembler(options: InputAssemblyOptions) {
   const { tokenSource, config, roundTools, roundScopeInstructions, getRoundOutputReserve,
@@ -512,7 +516,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -569,7 +573,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -582,7 +586,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
       );
       measurement = await measureProfileInput(composition.history);
     }
@@ -644,8 +648,8 @@ export class ContextManager {
     let reason = "no_candidates";
     let attempts = 0;
     const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = [],
-      selectedInstruction?: string) => ({
-      assembled, selectedInstruction,
+      selectedInstruction?: string, selectedReferenceData?: string) => ({
+      assembled, selectedInstruction, selectedReferenceData,
       telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
         requestedDataIds, selectedDataIds, omittedDataIds: requestedDataIds.filter(id => !selectedDataIds.includes(id)),
         reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
@@ -690,7 +694,7 @@ export class ContextManager {
         continue;
       }
       reason = "included";
-      return result(input, candidate.ids, addedTokens, candidate.dataIds, candidate.instruction);
+      return result(input, candidate.ids, addedTokens, candidate.dataIds, candidate.instruction, candidate.referenceData);
     }
     return result(base);
   }

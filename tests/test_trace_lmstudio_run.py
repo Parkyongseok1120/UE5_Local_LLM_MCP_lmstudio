@@ -33,6 +33,19 @@ def _conversation(blocks: list[dict]) -> dict:
     return {"messages": [user, _assistant(blocks, [identity])]}
 
 
+def test_thinking_is_not_delivered_but_context_exclusion_does_not_hide_prose():
+    doc = _conversation([])
+    steps = doc["messages"][1]["versions"][0]["steps"]
+    steps.extend([
+        {"type": "contentBlock", "style": {"type": "thinking"}, "content": [{"type": "text", "text": "This method is never called."}]},
+        {"type": "contentBlock", "shouldIncludeInContext": False, "content": [{"type": "text", "text": "Verified always wrong."}]},
+        {"type": "contentBlock", "content": [{"type": "text", "text": "No conclusion yet."}]},
+    ])
+    claims = trace.parse_conversation(doc)["turns"][0]["claims"]
+    assert all("never called" not in claim["sentence"] for claim in claims)
+    assert any("Verified always wrong" in claim["sentence"] for claim in claims)
+
+
 def test_not_found_then_identical_retry_and_absence_claim_are_linked():
     missing = {"ok": False, "errorCode": "NOT_FOUND", "message": "File not found: engine://Engine/x/A.cpp"}
     blocks = _call("1", "read_file", {"path": "engine://Engine/x/A.cpp"}, missing) \

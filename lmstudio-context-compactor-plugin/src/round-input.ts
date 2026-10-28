@@ -101,11 +101,14 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     beforeInput, measureRoundInput, ctl, executionId, roundIndex });
   workingHistory = modelHistory;
   if (initialReasoningBounded) { rewriteCauses.add("reasoning_bound"); rewritingInput = true; }
+  let referenceSelectionPending = true;
+  let selectedReference: { instruction?: string; referenceData?: string } = {};
   const assembleModelInput = createInputAssembler({ tokenSource, config, roundTools,
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
     getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
     shownDataBlocks: options.shownDataBlocks, consolidateDataBlocks: () => rewritingInput || compacted,
+    deferReferenceData: () => referenceSelectionPending,
     runtimeDataAllowanceChars: contextManager.broker.runtimeDataAllowanceChars(contextManager.broker.watermarks(before,
       0, roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) });
   const assembleRecoveryCandidate = async (sourceHistory: Chat, tools: RemoteToolLike[], instruction: string,
@@ -361,6 +364,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   const focused = config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto";
   if (workingInputProjected) rewriteCauses.add("projection");
   if (compacted) rewriteCauses.add("low_water_compaction");
+  // Reference parts are excluded while selection is pending. A forced rewrite
+  // here is therefore backed by superseded non-reference data, not a missing
+  // provisional reference candidate, and may admit a deferred topic now.
   if (assembledInput.composition.forcedRewrite) rewriteCauses.add(assembledInput.composition.forcedRewrite);
   rewritingInput ||= rewriteCauses.size > 0;
   // A recovery round adds no new focused material, but the instruction this
@@ -369,6 +375,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   const recoveryReuse = focused && options.referenceRecovery ? options.guidanceRetention?.kept : undefined;
   const explainWithoutTopic = options.objective?.kind === "explain"
     && !options.guidanceIntent?.reason.startsWith("explicit_task_topic");
+  let guidanceEvent: Record<string, unknown> | undefined;
+  const selectReferences = async () => {
+  selectedReference = {};
   if (!explainWithoutTopic && lowWater.canRun && !config.observeOnly && (!finalizing || options.guidanceRetention?.kept) && config.designGuidanceMode !== "off"
     && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery || recoveryReuse)) {
     let candidates: GuidanceCandidate[] = [];
@@ -435,6 +444,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
         admissionWater: reuse || topicBacked ? "high" : "low" });
     assembledInput = guidance.assembled;
+    selectedReference = { instruction: guidance.selectedInstruction, referenceData: guidance.selectedReferenceData };
     const telemetry: typeof guidance.telemetry & { stickyCause?: string } = { ...guidance.telemetry };
     const included = telemetry.reason === "included";
     // The omission reasons describe the instruction actually offered.
@@ -475,7 +485,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         assembledInput = await assembleModelInput(workingHistory);
       }
     }
-    if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
+    if (config.showDebugInfo) guidanceEvent = { event: "design_guidance_input", executionId, modelInputId, roundIndex,
       mode: config.designGuidanceMode, delivery: config.designGuidanceDelivery,
       configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
       effectiveDelivery: focused ? "focused" : "documents", objectiveFingerprint,
@@ -483,8 +493,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
         selectionReasonCodes: [...selection.reasons, ...omissionReasons],
-        selectionObservationIds: selection.observationIds } : {}), ...telemetry });
-  } else if (config.showDebugInfo) ctl.debug({ event: "design_guidance_input", executionId, modelInputId, roundIndex,
+        selectionObservationIds: selection.observationIds } : {}), ...telemetry };
+  } else if (config.showDebugInfo) guidanceEvent = { event: "design_guidance_input", executionId, modelInputId, roundIndex,
     configuredMode: config.designGuidanceMode, configuredDelivery: config.designGuidanceDelivery,
     effectiveDelivery: focused ? "focused" : "documents", outcome: explainWithoutTopic ? "omitted" : "not_attempted",
     ...(explainWithoutTopic ? { omissionReasons: ["objective_explain_without_topic"] } : {}),
@@ -492,7 +502,25 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       : config.designGuidanceMaxTokens <= 0 ? "zero_allowance" : finalizing ? "finalization"
         : options.referenceRecovery ? "recovery_policy" : "input_unavailable",
     addedTokens: 0, attempts: 0, selectedIds: [], selectedDataIds: [],
-    finalInputTokens: assembledInput.measurement.inputTokens });
+    finalInputTokens: assembledInput.measurement.inputTokens };
+  };
+  await selectReferences();
+  // The adopted complete input owns consolidation, not a provisional baseline.
+  referenceSelectionPending = false;
+  assembledInput = await assembleModelInput(workingHistory, {
+    instructions: selectedReference.instruction ? [...roundScopeInstructions, selectedReference.instruction] : roundScopeInstructions,
+    referenceData: selectedReference.referenceData });
+  if (assembledInput.composition.forcedRewrite && !rewritingInput && !finalizing
+    && (options.guidanceRetention?.pendingScope || options.guidanceRetention?.dropped)) {
+    rewriteCauses.add(assembledInput.composition.forcedRewrite); rewritingInput = true;
+    assembledInput = await assembleModelInput(workingHistory);
+    await selectReferences();
+    assembledInput = await assembleModelInput(workingHistory, {
+      instructions: selectedReference.instruction ? [...roundScopeInstructions, selectedReference.instruction] : roundScopeInstructions,
+      referenceData: selectedReference.referenceData });
+  }
+  if (assembledInput.composition.forcedRewrite) rewriteCauses.add(assembledInput.composition.forcedRewrite);
+  if (guidanceEvent) ctl.debug({ ...guidanceEvent, finalInputTokens: assembledInput.measurement.inputTokens });
   const finalMeasurement = assembledInput.measurement;
   projectionExhausted = releasedAllPins && contextManager.shouldProjectEvidence(finalMeasurement, hasReadTools,
     minimumReadBudget(roundTools));

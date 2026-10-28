@@ -53,9 +53,10 @@ export class DeliveryController {
       reportDelivered: true, reportCompleted: true, deliveryState: "complete", reportState: "report",
       taskCompleted: outcome.objectiveSatisfied === true, supplement };
   }
-  observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown }, timedOut = false) {
+  observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown; unexecutedToolIntent?: boolean }, timedOut = false) {
     this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
-      messages: captured.messages, finishReason: captured.finishReason, failure: captured.failure, timedOut };
+      messages: captured.messages, finishReason: captured.finishReason, failure: captured.failure, timedOut,
+      unexecutedToolIntent: captured.unexecutedToolIntent };
   }
   recordPartialDelivery(reason: string) {
     this.observation = { ...this.observation, partialReportDelivered: true, reason };
@@ -242,6 +243,7 @@ export function partialSearchScopeNotice(history: Chat, finalText: string): stri
 }
 
 export type ExecutionObservation = {
+  unexecutedToolIntent?: boolean;
   reportText: string;
   messages?: Array<ChatMessage>;
   finishReason?: string;
@@ -261,7 +263,8 @@ export function classifyExecutionOutcome(observation: ExecutionObservation): Exe
   const canceled = observation.canceled === true || finishReason === "userStopped";
   const failed = observation.failure !== undefined && observation.failure !== null;
   const classified = classifyFinalDelivery(observation.reportText,
-    { finishReason, ...(failed ? { failure: observation.failure } : {}) }, timedOut, observation.messages || []);
+    { finishReason, unexecutedToolIntent: observation.unexecutedToolIntent,
+      ...(failed ? { failure: observation.failure } : {}) }, timedOut, observation.messages || []);
   // Policy may reject an otherwise complete report, but cannot make an unknown
   // stop or an empty answer complete (including legacy evaluation records).
   const delivery = observation.delivery?.deliveryState === "complete"
@@ -319,8 +322,7 @@ export function classifyOutputLimitStage(
     || captured.messages.some(message => message.getToolCallRequests().length > 0)) {
     return "tool_arguments";
   }
-  const visibleTokens = Number(captured.predictionUsage?.visibleTokensCount || 0);
-  if (visibleTokens > 0 || visibleTextFromMessages(captured.messages)) return "visible_report";
+  if (visibleTextFromMessages(captured.messages).trim()) return "visible_report";
   if (Number(captured.predictionUsage?.reasoningTokensCount || 0) > 0) return "reasoning";
   return "unknown";
 }
@@ -346,23 +348,25 @@ export function canRecoverOutputLimit(
     || message.getToolCallResults().length > 0)) return false;
   const reportText = visibleTextFromMessages(captured.messages);
   return classifyOutputLimitStage(captured, false, toolGeneration) === "visible_report"
-    && (Boolean(reportText) || Number(captured.predictionUsage?.visibleChars || 0) > 0)
+    && Boolean(reportText.trim())
     && captured.predictionUsage?.rawToolIntentCandidate !== true
     && !hasRawToolIntent(reportText, captured.messages);
 }
 
 export function classifyFinalDelivery(
   reportText: string,
-  captured: { failure?: unknown; finishReason?: string },
+  captured: { failure?: unknown; finishReason?: string; unexecutedToolIntent?: boolean },
   phaseTimedOut: boolean,
   messages: Array<ChatMessage>,
 ): { deliveryState: FinalDeliveryState; reportState: FinalReportState; rejectionReason?: string } {
   const text = reportText.trim();
+  if (captured.unexecutedToolIntent && !text) return { deliveryState: "partial", reportState: "unresolved_tool_intent",
+    rejectionReason: "unresolved_tool_intent" };
   if (!text) return { deliveryState: "no_answer", reportState: "no_answer",
     rejectionReason: phaseTimedOut ? "final_timeout"
       : captured.failure !== undefined ? "generation_failure"
         : captured.finishReason === "maxPredictedTokensReached" ? "max_predicted_tokens" : "empty_visible_output" };
-  const unresolvedToolIntent = hasRawToolIntent(text, messages);
+  const unresolvedToolIntent = captured.unexecutedToolIntent || hasRawToolIntent(text, messages);
   let deliveryState: FinalDeliveryState;
   let rejectionReason: string | undefined;
   if (captured.finishReason === "maxPredictedTokensReached") {

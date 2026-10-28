@@ -524,7 +524,7 @@ export class EvidenceManager {
   }
 
   /** After the returned results were archived: bind each delivered version to
-   * its archive record, remember receipts and result sizes. */
+   * its archive record and remember receipts. */
   recordReturnedReads(screening: ReadScreening) {
     for (const item of screening.pending) {
       const result = { toolCallId: item.toolCallId, content: item.content ?? undefined };
@@ -536,17 +536,14 @@ export class EvidenceManager {
         this.ledger.attachArchiveRef(item.facts, locator);
         this.handleCache.set(locator.evidenceId, locator.readHandle);
       }
-      const content = original?.content;
-      const bytes = Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content ?? ""));
-      if (item.facts.complete || item.request.name !== "read_file") this.ledger.rememberResultSize(
-        repeatRequestKey(item.request.name, item.request.arguments || {}), bytes);
     }
   }
 
-  /** Bytes the same request returned before, while its version is unchanged. */
+  /** Only immutable archive responses have an exact repeat size. Mutable source
+   * reads use the provider/project scoped sizeHint estimate, never old bytes. */
   knownResultBytes = (name: string, args: Record<string, unknown>): number | undefined =>
     name === "evidence_first_read_context" ? this.store?.archiveResponseBytes?.(args)
-      : this.ledger.knownResultBytes(repeatRequestKey(name, args));
+      : undefined;
 
   estimatedResultBytes = (name: string, args: Record<string, unknown>, tool: RemoteToolLike): number | undefined => {
     if (!["read_file", "read_file_range"].includes(name) || tool.name !== name

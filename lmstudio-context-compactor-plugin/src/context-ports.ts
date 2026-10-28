@@ -126,8 +126,6 @@ export type ReadLedgerLike = {
   noteRedundant(entry: LedgerEntry | null, round: number | null, duplicatedChars?: number, extra?: Record<string, unknown>): void;
   notePage(facts: ReadFacts | null, round: number | null): boolean;
   recordCheck(location: string, check: string, round?: number | null, claim?: string, sourceVersion?: string): boolean;
-  rememberResultSize(requestKey: string, bytes: number): void;
-  knownResultBytes(requestKey: string): number | undefined;
   stats(): Record<string, number>;
   events: Array<Record<string, unknown>>;
   toJSON(): Record<string, unknown>;

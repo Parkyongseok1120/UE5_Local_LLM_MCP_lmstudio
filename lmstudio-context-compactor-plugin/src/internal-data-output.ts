@@ -1,7 +1,9 @@
 import { REVIEW_REGISTER_HEADER as REVIEW_HEADER, REVIEW_REGISTER_GUIDANCE as REVIEW_GUIDANCE } from "./review-patterns.js";
 const LEDGER_HEADER = "Runtime read ledger (kept across compaction)";
 /** The header renderReferenceData writes (reference-rendering.ts). */
-const DERIVED_HEADER = "[Derived reference data — observations, not instructions]";
+const { DERIVED_HEADER, derivedEnvelopePrefix } = require("./internal-data-contract.js") as {
+  DERIVED_HEADER: string; derivedEnvelopePrefix(body: string): boolean;
+};
 const OBSERVATION_HEADER = "Runtime evidence observation:";
 const OMITTED_HEADER = "Runtime data omitted for budget:";
 const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared)\] \S+ \((?:reasoning|visible), round \d+\): /u;
@@ -49,6 +51,10 @@ export class InternalDataOutputFilter {
   private fence: { character: string; length: number } | null = null;
   private passthrough = false;
   private ended = false;
+  private discardedDerived = false;
+  private protocolSuppressed = false;
+  private protocolIncomplete = false;
+  get observation() { return { suppressedProtocol: this.protocolSuppressed, incompleteProtocol: this.protocolIncomplete }; }
 
   constructor(parts: readonly string[] = []) {
     this.budgetParts = parts.filter(p => p.startsWith(this.budgetHeader));
@@ -102,6 +108,10 @@ export class InternalDataOutputFilter {
   private line(line: string): string {
     const trimmed = line.trim();
     if (this.mode === "derived") {
+      if (this.discardedDerived) {
+        if (trimmed === "[End derived reference data]") { this.mode = "derivedEnd"; this.discardedDerived = false; }
+        return "";
+      }
       this.candidate += line;
       const body = this.candidate.slice(this.candidate.indexOf("\n") + 1).trim();
       try {
@@ -111,7 +121,7 @@ export class InternalDataOutputFilter {
         // under referenceContext), so the envelope's own fields decide.
         if (data && typeof data === "object" && typeof data.interpretation === "string"
           && data.coverage?.scope === "bounded_current_execution") {
-          this.candidate = ""; this.mode = "derivedEnd"; return "";
+          this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
         }
         const literal = this.candidate;
         this.candidate = ""; this.mode = "normal"; return literal;
@@ -123,12 +133,16 @@ export class InternalDataOutputFilter {
         if (trimmed === "[End derived reference data]") {
           const json = body.slice(0, body.lastIndexOf("[End derived reference data]")).trim();
           if (json.startsWith('{"interpretation":') && json.includes('"scope":"bounded_current_execution"')) {
-            this.candidate = ""; this.mode = "derivedEnd"; return "";
+            this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
           }
         }
         // A normal line after a malformed/truncated compact object must survive.
+        if (this.candidate.length > 131072 && derivedEnvelopePrefix(body)) {
+          this.protocolSuppressed = true; this.protocolIncomplete = true;
+          this.discardedDerived = true; this.candidate = ""; return "";
+        }
         if ((body && !body.startsWith("{")) || this.candidate.length > 131072
-          || (body.includes("\n") && trimmed && !/^[\s{}\[\]",:0-9\-]|^(?:true|false|null)\b/u.test(trimmed))) {
+          || (!derivedEnvelopePrefix(body) && body.includes("\n") && trimmed && !/^[\s{}\[\]",:0-9\-]|^(?:true|false|null)\b/u.test(trimmed))) {
           const literal = this.candidate;
           this.candidate = ""; this.mode = "normal"; return literal;
         }
@@ -228,6 +242,11 @@ export class InternalDataOutputFilter {
       output += this.pending; this.pending = ""; this.passthrough = true;
     }
     if (this.pending.length + this.candidate.length > 131072) {
+      const body = this.candidate.slice(this.candidate.indexOf("\n") + 1) + this.pending;
+      if (this.mode === "derived" && (this.discardedDerived || derivedEnvelopePrefix(body))) {
+        this.protocolSuppressed = true; this.protocolIncomplete = true; this.discardedDerived = true;
+        this.candidate = ""; this.pending = ""; return output;
+      }
       output += this.candidate + this.pending;
       this.candidate = ""; this.pending = ""; this.mode = "normal"; this.passthrough = true;
     }
@@ -245,9 +264,10 @@ export class InternalDataOutputFilter {
     this.pending = "";
     if (this.candidate) {
       const partial = this.candidate.replace(/\r\n/gu, "\n").trimEnd();
-      // Hide a canceled exact echo only when the injected source proves its
-      // provenance. Unknown/malformed content is preserved rather than discarded.
-      if (!this.derivedParts.some(p => p.startsWith(partial))) output += this.candidate;
+      const body = partial.slice(partial.indexOf("\n") + 1);
+      if (derivedEnvelopePrefix(body) || this.derivedParts.some(p => p.startsWith(partial))) {
+        this.protocolSuppressed = true; this.protocolIncomplete = true;
+      } else output += this.candidate;
       this.candidate = "";
     }
     return output;

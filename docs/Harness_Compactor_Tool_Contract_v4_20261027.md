@@ -1,5 +1,7 @@
 # 하네스·컴팩터·도구 계약 v4 — 실측 결함 수정
 
+설치 후 대화 `1793102946974`에서 발견한 출력·복구·저장과 추가 예산 결함 F1–F7은 [후속 수정 계약](Harness_Output_Contract_Followup_20261027.md)에 기록했다. 아래 수치는 당시 v4 구현 검증 기록이다.
+
 ## 1. 범위와 확인 수준
 
 v3 구현 기준 `5663998`에서 시작해 C1–C8을 유지하며 D1–D9와 C9–C16을 구현했다. 소유자는 기존 `ReadLedger`, `EvidenceManager`, `BudgetBroker`, `ContextManager`, `prepareRoundInput`, 출력 renderer다. 새 전역 관리자나 실행 권한 계층은 추가하지 않았다.

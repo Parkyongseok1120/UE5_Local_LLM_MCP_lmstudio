@@ -130,7 +130,6 @@ class ReadLedger {
   reset() {
     this.items = new Map();
     this.events = [];
-    this.resultSizes = new Map();
     this.sizeHints = new Map();
     this.returnedText = [];
     this.returnedSpans = [];
@@ -373,15 +372,6 @@ class ReadLedger {
       .flatMap(other => other.checks.map(item => item.check)).filter(check => !entry.checks.some(item => item.check === check));
   }
 
-  /** The envelope size the same request returned before, for budgeting. */
-  rememberResultSize(requestKey, bytes) {
-    if (!requestKey || !Number.isSafeInteger(bytes) || bytes <= 0) return;
-    this.resultSizes.delete(requestKey); this.resultSizes.set(requestKey, bytes);
-    while (this.resultSizes.size > MAX_RESULT_SIZES) this.resultSizes.delete(this.resultSizes.keys().next().value);
-  }
-
-  knownResultBytes(requestKey) { return this.resultSizes.get(requestKey); }
-
   /** Last-observed sizes are estimates only, including after restoration.
    * They never participate in coverage, receipt matching or permissions. */
   recordSizeHint(sourceKey, fields) {
@@ -408,7 +398,6 @@ class ReadLedger {
     return { schemaVersion: 2, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
       returnedText:this.returnedText,returnedContracts:this.returnedContracts,returnedSpans:this.returnedSpans,returnedFactsIncomplete:this.returnedFactsIncomplete,
-      resultSizes: [...this.resultSizes].slice(-MAX_RESULT_SIZES),
       sizeHints: [...this.sizeHints].slice(-MAX_RESULT_SIZES) };
   }
 
@@ -445,8 +434,6 @@ class ReadLedger {
     }
     if (Array.isArray(value.events)) this.events = value.events.filter(item => item && typeof item.type === "string").slice(-MAX_EVENTS);
     for (const key of Object.keys(this.counters)) if (Number.isSafeInteger(value.counters?.[key])) this.counters[key] = value.counters[key];
-    if (Array.isArray(value.resultSizes)) for (const [key, bytes] of value.resultSizes.slice(-MAX_RESULT_SIZES))
-      if (typeof key === "string" && Number.isSafeInteger(bytes) && bytes > 0) this.resultSizes.set(key, bytes);
     return true;
   }
 }

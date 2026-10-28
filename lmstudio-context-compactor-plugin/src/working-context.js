@@ -555,7 +555,7 @@ class WorkingContext {
   }
 
   persistable(history) {
-    const replacement = serialize(history); // Preserve typed-file rejection.
+    const replacement = require("./internal-data-contract.js").sanitizeAssistantProtocols(serialize(history)); // Preserve typed-file rejection.
     const clean = value => {
       if (Array.isArray(value)) return value.map(clean);
       if (!value || typeof value !== "object") return redact(value);

@@ -1,6 +1,7 @@
 "use strict";
 
 const { clip, clipHeadTail, normalizedTextKey, visibleAssistantText } = require("./continuity-text.js");
+const { sanitizeAssistantProtocols } = require("./internal-data-contract.js");
 const {
   sanitizeDerivedOperationalText,
   sanitizeStructuredDurableValue,
@@ -16,6 +17,8 @@ const isDeliveredPartialResponse = text => String(text || "").startsWith(DELIVER
  * Only the final text-only assistant tail is eligible; never copy tool exchanges.
  * This is lossless apart from the existing durable-material sanitization policy. */
 function retainVisibleResponse(source, replacement) {
+  source = sanitizeAssistantProtocols(source);
+  replacement = sanitizeAssistantProtocols(replacement);
   const tail = messages => {
     let start = messages.length;
     while (start > 0 && messages[start - 1].role === "assistant"

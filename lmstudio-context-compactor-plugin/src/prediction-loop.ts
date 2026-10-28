@@ -827,8 +827,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         continuationStatus?.remove();
         // Completion/recovery must assess the same prose the user receives.
         // Preserve captured originals for diagnostics and tool evidence.
-        const visibleCaptured = { ...captured, messages: captured.messages.map(message => reviewingReport
-          ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts)) };
+        const visibleCaptured = stream.normalizeCaptured(captured);
         if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
           executionId, roundIndex, deliveredChars: reportContinuation.length, suppressedChars: stream.suppressedChars });
         deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
@@ -884,7 +883,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           let textAlreadyStreamed = live?.textStreamed || false;
           if (message.isAssistantMessage() && message.getText()) {
             const extracted = modelNotes.splitVisibleAnswer(message.getText());
-            historyMessage = reviewingReport ? stream.visibleMessage(message) : modelHistoryMessage(message, internalDataParts);
+            historyMessage = reviewingReport ? stream.visibleMessage(message) : stream.historyMessage(message);
             if (hasUnexecutedRawToolSyntax(visibleAssistantOutput(historyMessage.getText()).visibleText)) {
               const sanitized = ChatMessage.from(historyMessage);
               sanitized.replaceText("[Unexecuted raw tool-call text omitted from subsequent model input; no tool was dispatched.]");

@@ -3,8 +3,8 @@ import type {
   PredictionProcessContentBlockController,
   PredictionLoopHandlerController,
 } from "@lmstudio/sdk";
-import { InternalDataOutputFilter, stripInternalDataEcho } from "./internal-data-output";
-import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol } from "./raw-tool-intent";
+import { InternalDataOutputFilter } from "./internal-data-output";
+import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol, hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { ChatMessage } from "@lmstudio/sdk";
 const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 
@@ -34,6 +34,8 @@ export type StreamedAssistant = {
   visibleText: string;
   duplicateSuppressed?: boolean;
   suppressedChars?: number;
+  suppressedProtocol?: boolean;
+  incompleteProtocol?: boolean;
 };
 
 const FOOTER_MARKER = "\n<!-- direct-continuity-note-v1 -->";
@@ -133,6 +135,19 @@ export class PredictionStreamRenderer {
   visibleMessage(message: ChatMessage): ChatMessage {
     if (!message.isAssistantMessage() || !message.getText()) return message;
     const copy = ChatMessage.from(message); copy.replaceText(this.consumeMessage(message).visibleText); return copy;
+  }
+  /** Use the same filtered prose for the model while retaining SDK reasoning.
+   * Tool intent remains a separate captured observation, never displayed prose. */
+  historyMessage(message: ChatMessage): ChatMessage {
+    if (!message.isAssistantMessage() || !message.getText()) return message;
+    const raw = this.splitVisibleAnswer(message.getText()).visibleText;
+    const prose = visibleAssistantText(raw), reasoning = raw.slice(0, raw.length - prose.length);
+    const copy = ChatMessage.from(message); copy.replaceText(reasoning + this.consumeMessage(message).visibleText); return copy;
+  }
+  normalizeCaptured<T extends { messages: ChatMessage[]; predictionUsage: { rawToolIntentCandidate?: boolean } }>(captured: T) {
+    const unexecutedToolIntent = hasRawToolIntent(visibleTextFromMessages(captured.messages, this.internalDataParts), captured.messages);
+    return { ...captured, messages: captured.messages.map(message => this.visibleMessage(message)), unexecutedToolIntent,
+      predictionUsage: { ...captured.predictionUsage, rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate || unexecutedToolIntent } };
   }
 
   constructor(
@@ -248,10 +263,13 @@ export class PredictionStreamRenderer {
       .find(([, state]) => state.sawFragment && !state.consumed);
     if (!entry) {
       const echo = new DeliveredPrefixEchoFilter(this.deliveredPrefix);
-      const text = stripInternalDataEcho(stripUnexecutedToolProtocol(this.splitVisibleAnswer(visibleAssistantText(rawText)).visibleText), this.internalDataParts);
+      const dataFilter = new InternalDataOutputFilter(this.internalDataParts);
+      const raw = stripUnexecutedToolProtocol(this.splitVisibleAnswer(visibleAssistantText(rawText)).visibleText);
+      const text = dataFilter.push(raw) + dataFilter.finish();
       const visibleText = echo.push(text) + echo.finish();
       this.fallbackSuppressed += echo.suppressedChars;
       return { streamed: false, visibleText,
+        ...dataFilter.observation,
         duplicateSuppressed: echo.duplicateSuppressed, suppressedChars: echo.suppressedChars };
     }
     const [roundIndex, state] = entry;
@@ -260,6 +278,7 @@ export class PredictionStreamRenderer {
     return {
       streamed: true,
       visibleText: state.visibleText, duplicateSuppressed: state.echoFilter.duplicateSuppressed,
+      ...state.dataFilter.observation,
       suppressedChars: state.echoFilter.suppressedChars,
     };
   }

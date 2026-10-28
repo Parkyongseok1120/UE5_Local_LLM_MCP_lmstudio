@@ -6740,3 +6740,32 @@ test('prefix_reuse event records causes',async()=>{
   await handlePredictionLoop(ctl);
   assert.ok(ctl.debugValues.some(e=>e.event==='prefix_reuse'&&e.rewriteCauses.includes('projection')));
 });
+
+for(const streaming of [false,true])test(`truncated transformed reference data never schedules report continuation (stream=${streaming})`,async()=>{
+  const {pair,tool}=require('./helpers/v4.cjs');let calls=0;
+  const model=reasoningModel(async(chat,_tools,options)=>{
+    calls++;
+    if(calls===1){
+      const messages=pair('read_file',{path:'Source/Fixture.h',project:'C:/Fixture/Game.uproject'},
+        {ok:true,path:'project://Source/Fixture.h',canonicalProject:'C:/Fixture/Game.uproject',sha256:'a'.repeat(64),content:'int Observed;',startLine:1,endLine:1,totalLines:1});
+      options.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
+      for(const m of messages)options.onMessage(m);options.onRoundEnd();throw options.signal.reason;
+    }
+    assert.equal(calls,2,'an internal-only output must not become report continuation');
+    const ref=chat.getMessagesArray().find(m=>m.isAssistantMessage()&&m.getText().startsWith('[Derived reference data'));
+    assert.ok(ref,'fixture must actually inject reference data');
+    const text=ref.getText().replace(/"id":"[^"]+"/u,'"id":"changed"').slice(0,-90);
+    if(streaming)for(const c of text)options.onPredictionFragment({roundIndex:0,reasoningType:'none',content:c,tokensCount:1});
+    options.onPredictionCompleted({stats:{stopReason:'maxPredictedTokensReached',predictedTokensCount:8192}});
+    options.onMessage(ChatMessage.create('assistant',text));options.onRoundEnd();throw options.signal.reason;
+  });
+  model.getContextLength=async()=>84224;model.countTokens=async text=>Math.ceil(text.length/4);
+  const ctl=fakeController(Chat.from([{role:'user',content:'Review the SSOT design.'}]),model,
+    {contextManagementMode:'hybrid',designGuidanceMode:'design',designGuidanceDelivery:'focused',designGuidanceMaxTokens:8192,
+      semanticHandoff:false,reasoningRecoveryMode:'off',reportReviewMode:'off',outputRecoveryMode:'on'},[tool('read_file')]);
+  await handlePredictionLoop(ctl);
+  assert.equal(calls,2);assert.equal(ctl.debugValues.some(e=>e.event==='output_recovery_scheduled'),false);
+  assert.ok(ctl.blocks.every(b=>!b.text.includes('[Derived reference data')));
+  const outcome=ctl.debugValues.find(e=>e.event==='execution_outcome');
+  assert.equal(outcome.reportCompleted,false);assert.equal(outcome.reportDelivered,false);
+});
