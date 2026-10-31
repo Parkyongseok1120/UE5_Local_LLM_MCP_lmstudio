@@ -182,3 +182,33 @@ def test_pattern_identity_survives_the_real_direct_search_and_mcp_serializer(tmp
         "use_active_project": False, "detailLevel": "standard", "maxChars": 16000,
     })
     assert to_mcp_tool_result(missing, tool_name="unreal_rag_search")["structuredContent"]["architecturePatternCorpus"]["status"] == "no_match"
+
+
+def test_mixed_doc_type_status_counts_pattern_hits_not_any_match(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import direct_rag_search
+    from direct_rag_evidence import pattern_search_metadata
+    from direct_rag_result import to_mcp_tool_result
+    args = collect_args(tmp_path)
+    (Path(args.root) / "unique.md").write_text("# Unique\nQuarkfluxion guideline only.\n", encoding="utf-8")
+    collect(args)
+    output = tmp_path / "index"
+    build(build_args(Path(args.out), output))
+    index = output / "rag.sqlite"
+    monkeypatch.setattr(direct_rag_search, "resolve_active_project_path", lambda *a: None)
+    result = direct_rag_search.rag_search(SimpleNamespace(index=index, workspace=tmp_path), {
+        "query": "Quarkfluxion", "mode": "design", "doc_type": ["architecture_pattern", "guideline"],
+        "use_active_project": False, "detailLevel": "standard", "maxChars": 16000,
+    })
+    payload = to_mcp_tool_result(result, tool_name="unreal_rag_search")["structuredContent"]
+    assert payload["ok"], payload
+    assert payload["matchCount"] >= 1 and not any(row.get("patternId") for row in payload["matches"])
+    corpus = payload["architecturePatternCorpus"]
+    assert corpus["status"] == "no_match"
+    assert corpus["patternHitCount"] == 0 and corpus["patternIdentityCount"] == 0
+    # Pattern hits whose refs were clipped by the transport budget still count as matched.
+    pattern_row = {"metadata": json.dumps({"guidanceKind": "architecture_pattern", "patternId": "ue.x"}), "source": "guideline"}
+    generation = None
+    clipped = pattern_search_metadata(index, generation, requested=True, matches=[], rows=[pattern_row])
+    assert clipped["architecturePatternCorpus"]["status"] == "matched"
+    assert clipped["architecturePatternCorpus"]["patternIdentityCount"] == 0

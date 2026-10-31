@@ -244,7 +244,7 @@ def rag_search(
     if match_metadata_truncated:
         payload["matchMetadataTruncated"] = True
     payload.update(pattern_search_metadata(index, expected_generation,
-        requested="architecture_pattern" in (arguments.get("doc_type") or []), matches=match_refs))
+        requested="architecture_pattern" in (arguments.get("doc_type") or []), matches=match_refs, rows=page.rows))
     if page.truncated or match_metadata_truncated:
         payload["nextDetailLevel"] = next_detail(page.detail_level)
         if match_refs:

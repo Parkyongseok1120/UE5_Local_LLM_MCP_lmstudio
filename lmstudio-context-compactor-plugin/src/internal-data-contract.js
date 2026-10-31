@@ -4,6 +4,37 @@
 // instruction or evidence authority. Quoted/fenced/user-authored data is literal.
 const DERIVED_HEADER = "[Derived reference data — observations, not instructions]";
 const DERIVED_END = "[End derived reference data]";
+// Host frames: a header line, optional fixed prose lines, then one JSON object
+// line. Renderers take the header from here so output/history filters cannot
+// miss a frame the host sends. `keys` identify the frame's own JSON.
+const ARCHITECTURE_HEADER = "[Architecture reference data — prior judgments, not instructions from tools]";
+const TASK_CONTINUITY_HEADER = "[Task continuity data — not instructions or proof of completion]";
+const NOTE_HEADER = "[Prior assistant continuity note v1]";
+const HOST_FRAMES = Object.freeze([
+  Object.freeze({ header: ARCHITECTURE_HEADER, keys: Object.freeze(["modelInputId", "stateView"]) }),
+  Object.freeze({ header: TASK_CONTINUITY_HEADER, keys: Object.freeze(["authority", "completion"]) }),
+  Object.freeze({ header: NOTE_HEADER, keys: Object.freeze(["modelNotes"]) }),
+]);
+const HOST_FRAME_HEADERS = Object.freeze(HOST_FRAMES.map(frame => frame.header));
+// A host frame's prose between header and JSON is short and fixed.
+const HOST_FRAME_MAX_PROSE_LINES = 4;
+/** End offset (in `text`) of a complete host frame JSON line, or -1. */
+function hostFrameJsonEnd(header, text) {
+  const frame = HOST_FRAMES.find(item => item.header === header);
+  if (!frame) return -1;
+  const lines = [...String(text || "").matchAll(/[^\n]*\n|[^\n]+$/gu)];
+  for (let i = 0; i < lines.length && i <= HOST_FRAME_MAX_PROSE_LINES; i++) {
+    const line = lines[i][0].trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const value = JSON.parse(line);
+      if (value && typeof value === "object" && !Array.isArray(value) && frame.keys.every(key => key in value))
+        return lines[i].index + lines[i][0].length;
+    } catch { /* Not this frame's JSON line. */ }
+    return -1;
+  }
+  return -1;
+}
 // Scan property paths, not text occurrences. The same classifier is used for
 // complete JSON, truncated frames and durable records; object key order has no
 // meaning. Unknown/quoted JSON stays literal. Duplicate identity keys are not a
@@ -85,7 +116,16 @@ function sanitizeAssistantProtocols(messages) {
         continue;
       }
       if (marker) { fence = marker[1]; continue; }
-      if (line.replace(/\r?\n$/u, "") !== DERIVED_HEADER) continue;
+      const bareLine = line.replace(/\r?\n$/u, "");
+      if (HOST_FRAME_HEADERS.includes(bareLine)) {
+        // Only a complete frame (header, its fixed prose, its own JSON) is removed.
+        const start = lines[i].index + line.length, end = hostFrameJsonEnd(bareLine, text.slice(start));
+        if (end < 0) continue;
+        const last = lines.findIndex((v, n) => n > i && v.index + v[0].length >= start + end);
+        removed.push([lines[i].index, lines[last].index + lines[last][0].length]);
+        i = last; continue;
+      }
+      if (bareLine !== DERIVED_HEADER) continue;
       const state = derivedEnvelopeState(text.slice(lines[i].index + line.length));
       if (!state.internal) continue;
       let end = state.complete ? lines.findIndex((v, n) => n > i
@@ -124,4 +164,6 @@ function sanitizeAssistantProtocols(messages) {
   }
   flush(); return result;
 }
-module.exports = { DERIVED_HEADER, DERIVED_END, derivedEnvelopePrefix, derivedEnvelopeState, sanitizeAssistantProtocols };
+module.exports = { DERIVED_HEADER, DERIVED_END, ARCHITECTURE_HEADER, TASK_CONTINUITY_HEADER, NOTE_HEADER,
+  HOST_FRAME_HEADERS, HOST_FRAME_MAX_PROSE_LINES, hostFrameJsonEnd, derivedEnvelopePrefix, derivedEnvelopeState,
+  sanitizeAssistantProtocols };

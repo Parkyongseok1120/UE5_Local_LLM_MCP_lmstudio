@@ -21,7 +21,10 @@ export class ArchitectureState {
   close() {this.closed=true;}
   invalidateUnknown() {
     if(this.closed)return;
-    for(const d of this.value.architecture){d.applicability="unknown";d.revision=++this.nextRevision;
+    // Idempotent: a repeated host invalidation is not a new revision.
+    for(const d of this.value.architecture){
+      if(d.applicability==="unknown" && d.evidenceRefs.every(ref=>ref.applicability==="unknown"))continue;
+      d.applicability="unknown";d.revision=++this.nextRevision;
       for(const ref of d.evidenceRefs)ref.applicability="unknown";}
   }
   revalidateIssued(issued:ArchitectureInputRefs,observations:readonly ArchitectureEvidenceRef[]) {

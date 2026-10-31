@@ -98,7 +98,7 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
   return ctl;
 }
 
-for(const scenario of ["ordinary","same_round_change","cancel","off","note_disabled","malformed","v1_clear"])
+for(const scenario of ["ordinary","same_round_change","cancel","off","note_disabled","malformed","v1_clear","truncated_objective"])
 test(`architecture production replay: ${scenario}`,async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),"architecture-replay-"));
   t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
@@ -141,7 +141,9 @@ test(`architecture production replay: ${scenario}`,async t=>{
       }
       completeRecoveryReply(opts,"Done."+footer);
     }};
-  const ctl=fakeController(Chat.from([{role:"user",content:"피격 처리 수정해줘"}]),model,{projectEngine:"unreal",projectIdentity:project,
+  // A truncated objective has no complete text: no pattern is selected from it.
+  const request="피격 처리 수정해줘"+(scenario==="truncated_objective"?" "+"세부 조건 ".repeat(700):"");
+  const ctl=fakeController(Chat.from([{role:"user",content:request}]),model,{projectEngine:"unreal",projectIdentity:project,
     designGuidanceMode:scenario==="off"?"off":"auto",designGuidanceMaxTokens:8192,reportReviewMode:"off",semanticHandoff:false},toolList);
   if(scenario!=="note_disabled")ctl.getWorkingDirectory=()=>directory;
   ctl.abortSignal=abort.signal;ctl.guardAbort=()=>{if(abort.signal.aborted)throw abort.signal.reason;};
@@ -149,7 +151,7 @@ test(`architecture production replay: ${scenario}`,async t=>{
   if(scenario==="cancel")await assert.rejects(run,/test user cancel/);else await run;
   assert.equal(ctl.session.disposed,true);
   const note=writes.at(-1)?.note;
-  if(["ordinary","v1_clear"].includes(scenario)){assert.equal(note.architecture.length,1);assert.equal(note.architecture[0].applicability,"same_observed_version");}
+  if(["ordinary","v1_clear","truncated_objective"].includes(scenario)){assert.equal(note.architecture.length,1);assert.equal(note.architecture[0].applicability,"same_observed_version");}
   else assert.ok(!note?.architecture?.length);
   if(scenario==="same_round_change")assert.ok(ctl.debugValues.some(e=>e.event==="architecture_decision" && e.reason==="superseded_reference"));
   if(scenario==="malformed")assert.equal(note.decisions[0].statement,"Preserve cleanup");
@@ -157,6 +159,8 @@ test(`architecture production replay: ${scenario}`,async t=>{
     assert.ok(ctl.debugValues.some(e=>e.event==="architecture_context" && e.admittedPatternIds.includes("ue.component-composition")));
     assert.ok(ctl.debugValues.some(e=>e.event==="architecture_persistence" && e.status==="stored" && e.stateItemCount===1));
   }
+  if(scenario==="truncated_objective")assert.ok(ctl.debugValues.some(e=>e.event==="architecture_context"
+    && e.requestedPatternIds.length===0 && e.reasonCodes.includes("objective_truncated")));
   assert.equal(sawInput,scenario!=="off");
   assert.ok(ctl.blocks.every(block=>!block.text.includes("direct-continuity-note-v2")));
 });

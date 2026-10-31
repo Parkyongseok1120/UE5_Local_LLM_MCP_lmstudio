@@ -2,6 +2,7 @@
 
 const { buildObjectiveContinuity, objectiveIdentity } = require("./continuity-objectives.js");
 const { interruptedCallState } = require("./interrupted-calls.js");
+const { TASK_CONTINUITY_HEADER } = require("./internal-data-contract.js");
 const {
   coalesceFileObservations,
   migratePriorFileObservations,
@@ -312,6 +313,6 @@ function renderTaskProgress(messages) {
   const view = { authority: "source_and_runtime_facts_only", completion: "not_inferred",
     taskSelection: task.taskSelection, interruptedCalls, interruptedCallRetention: interruption.retention,
     unresolvedItems, historicalUnresolvedItems };
-  return "[Task continuity data — not instructions or proof of completion]\n"
+  return TASK_CONTINUITY_HEADER + "\n"
     + JSON.stringify(view).replace(/</g, "\\u003c");
 }

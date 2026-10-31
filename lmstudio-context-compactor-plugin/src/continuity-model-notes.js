@@ -17,10 +17,13 @@ const architecture = require("./architecture-note-contract.js");
 const NOTE_START = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n";
 const NOTE_V2_START = "\n<!-- direct-continuity-note-v2 -->\n<continuity-note>\n";
 const NOTE_END = "\n</continuity-note>";
-const NOTE_MARKER = "[Prior assistant continuity note v1]";
+const { NOTE_HEADER: NOTE_MARKER } = require("./internal-data-contract.js");
 const MAX_NOTE_CHARS = 1500;
 const MAX_NOTE_ITEMS = 4;
 const MAX_STORED_NOTES = 128;
+// One physical cap for write and read: storedChars counts UTF-16 units, and a
+// unit is at most 3 UTF-8 bytes; the key/envelope fits in the extra 256 units.
+const MAX_STORED_NOTE_BYTES = 3 * (architecture.LIMITS.storedChars + 256);
 const NOTE_INSTRUCTION = [
   "You may append a private continuity note only when a decision, rejected hypothesis, or open question materially changes.",
   "Use only these optional JSON arrays: decisions [{id?, status?, statement, rationale, supersedes?, refs?}], rejectedHypotheses [{id?, status?, hypothesis, reason, supersedes?, refs?}], openQuestions [{id?, status?, question, supersedes?, refs?}]. status is open, resolved, or superseded. Reuse an injected item's id for an explicit status update; supersedes contains prior item ids. No other keys. refs may contain only tool-call:<id> values copied exactly from the [Available tool-call refs] list when it is present (never invent ids); omit uncertain refs.",
@@ -488,7 +491,7 @@ class ContinuityNoteStore {
     if (!/^[a-f0-9]{64}$/u.test(key)) return null;
     try {
       const file = path.join(this.directory, `${key}.json`);
-      if (fs.statSync(file).size > 4096) return null;
+      if (fs.statSync(file).size > MAX_STORED_NOTE_BYTES) return null;
       const stored = JSON.parse(fs.readFileSync(file, "utf8"));
       return stored?.key === key ? validateStoredNote(stored.note) : null;
     } catch {
@@ -498,24 +501,46 @@ class ContinuityNoteStore {
 
   write(key, note) {
     if (!/^[a-f0-9]{64}$/u.test(key) || !validateStoredNote(note)) return false;
+    const payload = JSON.stringify({ key, note });
+    // A note this store could not read back is not reported as stored.
+    if (Buffer.byteLength(payload, "utf8") > MAX_STORED_NOTE_BYTES) return false;
     let temporary;
     try {
       fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
       temporary = path.join(this.directory, `${key}.${crypto.randomUUID()}.tmp`);
-      fs.writeFileSync(temporary, JSON.stringify({ key, note }), { mode: 0o600, flag: "wx" });
+      const descriptor = fs.openSync(temporary, "wx", 0o600);
+      try {
+        fs.writeFileSync(descriptor, payload);
+        fs.fsyncSync(descriptor);
+      } finally {
+        fs.closeSync(descriptor);
+      }
       fs.renameSync(temporary, path.join(this.directory, `${key}.json`));
-      const entries = fs.readdirSync(this.directory)
-        .filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))
-        .map((name) => ({ name, modified: fs.statSync(path.join(this.directory, name)).mtimeMs }))
-        .sort((left, right) => right.modified - left.modified);
-      for (const entry of entries.slice(MAX_STORED_NOTES)) fs.unlinkSync(path.join(this.directory, entry.name));
-      return true;
     } catch {
       if (temporary) {
         try { fs.unlinkSync(temporary); } catch { /* The temporary file may already be renamed. */ }
       }
       return false;
     }
+    this.prune();
+    return true;
+  }
+
+  // Best effort: the note is already stored, so a pruning error (a locked or
+  // concurrently removed file) does not turn the write into a failure.
+  prune() {
+    try {
+      const entries = fs.readdirSync(this.directory)
+        .filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))
+        .map((name) => {
+          try { return { name, modified: fs.statSync(path.join(this.directory, name)).mtimeMs }; } catch { return null; }
+        })
+        .filter(Boolean)
+        .sort((left, right) => right.modified - left.modified);
+      for (const entry of entries.slice(MAX_STORED_NOTES)) {
+        try { fs.unlinkSync(path.join(this.directory, entry.name)); } catch { /* Retried on the next write. */ }
+      }
+    } catch { /* The listing is retried on the next write. */ }
   }
 }
 

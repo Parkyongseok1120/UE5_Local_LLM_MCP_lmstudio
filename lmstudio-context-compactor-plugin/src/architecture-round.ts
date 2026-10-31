@@ -10,13 +10,20 @@ import {capabilityFor} from "./tool-capability-registry";
 import type {EvidenceManager} from "./evidence-manager";
 import type {DirectConfig,ContinuityNote} from "./execution-contracts";
 import type {ToolScope} from "./tool-scope";
-import type {ArchitectureBinding,ArchitectureInputRefs} from "./architecture-contracts";
+import type {ArchitectureBinding,ArchitectureInputRefs,ArchitectureSnapshot} from "./architecture-contracts";
 
 export function reconcileArchitectureRound(state:ArchitectureState|null,note:ContinuityNote,messages:ChatMessage[],refs:Set<string>|undefined,
   scope:{objectiveFingerprint:string;projectDescriptor:string}) {
   const reconciled=modelNotes.reconcileStoredNote(note,messages,refs,scope);
   if(!reconciled){state?.close();return {state:null,note:null};}
   return {state,note:reconciled};
+}
+
+/** The active note after a general update or a structural change. A null merge is a
+ * storage-budget rejection, not an explicit clear: the general note is kept and the
+ * structural judgments stay execution-local until they fit again. */
+export function mergeActiveNote(note:ContinuityNote|null,part:ArchitectureSnapshot|null,scope:ContinuityNote["scope"]|undefined,previous:ContinuityNote|null) {
+  return modelNotes.mergeArchitecture(note,part,scope,previous) ?? (note ? modelNotes.generalNote(note) : null);
 }
 
 /** Thin connection adapter. It neither dispatches tools nor owns storage. */
@@ -66,5 +73,8 @@ export function finishArchitectureRound(state:ArchitectureState,evidence:Evidenc
         patternHashes:d.patternRefs.map(p=>p.contentHash)}))});
     }
   }
-  return {note:modelNotes.mergeArchitecture(note,state.snapshot(),scope),results,events};
+  const merged=modelNotes.mergeArchitecture(note,state.snapshot(),scope);
+  // A storage-budget rejection is not a clear: hand back the general note unchanged.
+  if(!merged && note)events.push({event:"architecture_note_rejected",reason:"storage_budget"});
+  return {note:merged ?? note,results,events};
 }

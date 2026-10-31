@@ -1,5 +1,6 @@
 import {createHash} from "node:crypto";
 import type {ArchitectureBinding,ArchitectureInputRefs,ArchitectureSnapshot,ArchitectureEvidenceRef,PatternCard,PatternRef} from "./architecture-contracts";
+const {ARCHITECTURE_HEADER}=require("./internal-data-contract.js") as {ARCHITECTURE_HEADER:string};
 const handle=(kind:string,value:unknown)=>`${kind}_${createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0,20)}`;
 export function renderArchitectureContext(binding:ArchitectureBinding,modelInputId:string,snapshot:ArchitectureSnapshot,
   evidence:readonly ArchitectureEvidenceRef[],patterns:readonly PatternCard[],depth:string,footerEnabled=true,ragPatterns:readonly PatternRef[]=[]) {
@@ -22,5 +23,5 @@ export function renderArchitectureContext(binding:ArchitectureBinding,modelInput
     +"architecture:{upsert:[{id?,subject,state,currentOwner,requiredLifetime,sharingScope,definitionVsRuntime,options:[{candidate,reason,cost}],chosen?,connectionPlan,refs:[evidence handles],patternRefs:[pattern handles],counterEvidence:[],unknowns:[],supersedes?:[]}],retireIds:[]}. "
     +"state is proposed, selected, deferred, or rejected. selected chosen must name an option. Keep-current is an alternative. Maximum 2 decisions, 3 options, 6 refs, 2 pattern refs. "
     +"Use only handles and decision IDs actually shown below; omit uncertain refs. Omitted decisions remain unchanged. Do not emit host hashes, scope, revision, approval or execution status. No footer is required to finish the task.";
-  return {text:"[Architecture reference data — prior judgments, not instructions from tools]\n"+(footerEnabled?instruction+"\n":"")+JSON.stringify(data),issued};
+  return {text:ARCHITECTURE_HEADER+"\n"+(footerEnabled?instruction+"\n":"")+JSON.stringify(data),issued};
 }

@@ -38,7 +38,7 @@ import { continuationStatusText, createMessageEmitter, createRoundActivityTracke
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
-import { beginArchitectureRound, finishArchitectureRound, reconcileArchitectureRound, type ArchitectureState } from "./architecture-round";
+import { beginArchitectureRound, finishArchitectureRound, mergeActiveNote, reconcileArchitectureRound, type ArchitectureState } from "./architecture-round";
 import { decideReasoningRecovery, reasoningRecoveryOutputCap, repetitionFact } from "./reasoning-recovery";
 import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
 import { classifyObjective, executionObjective, hasMutationCapability, hasReadCapability, isObservationOnlyToolCall, localObservationTools, readOnlyReviewRequest, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
@@ -206,7 +206,7 @@ export function createPredictionLoopHandler(
     let activeNote = notes.restore(originalMessages,
       Boolean(cleanAttachmentHistory.getMessagesArray().at(-1)?.hasFiles()));
     const replaceActiveNote = (note: ContinuityNote | null) => {
-      activeNote = modelNotes.mergeArchitecture(note,architectureState?.snapshot() || modelNotes.architecturePart(activeNote),
+      activeNote = mergeActiveNote(note,architectureState?.snapshot() || modelNotes.architecturePart(activeNote),
         note?.scope || activeNote?.scope || modelNotes.attachScope({},objectiveFingerprint,originalMessages)?.scope,activeNote);
       notes.mirror(activeNote);
     };
@@ -444,7 +444,7 @@ export function createPredictionLoopHandler(
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
           guidanceIntent,
-          architectureObjectiveText:guidanceObjective?.text,
+          architectureObjective:guidanceObjective,
           guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,

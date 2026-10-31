@@ -33,7 +33,8 @@ type RetainedGuidance = { ids: readonly string[]; instruction?: string; selectio
 export type GuidanceRetention = { kept?: RetainedGuidance; dropped?: RetainedGuidance; pendingScope?: string; roundInstructions?: string };
 type RoundInputOptions = {
   architecture?:{binding:ArchitectureBinding;snapshot:ArchitectureSnapshot};
-  architectureObjectiveText?:string;
+  // The objective owner's result: text only when the objective is complete.
+  architectureObjective?:{text?:string;reason?:string};
   objective?: import("./execution-contracts").TaskObjective;
   mutationTargets?: Array<{path:string;sourceKey?:string}>;
   ctl: PredictionLoopHandlerController; config: DirectConfig;
@@ -427,8 +428,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       const sources=evidenceManager.architectureSources(workingHistory);
       const catalog=bundledArchitectureCatalog as unknown as {catalogHash:string;patterns:PatternCard[]};
       const observations=projectArchitectureEvidence(sources);
-      const choice=selectArchitectureContext({enabled:true,objectiveKind:options.objective?.kind||"mutate",observations,patterns:catalog.patterns,objectiveText:options.architectureObjectiveText});
-      architectureSelection={depth:choice.depth,reasonCodes:choice.reasons,observedFacetCount:observations.reduce((n,o)=>n+o.facets.length,0),requestedPatternIds:choice.selectedPatternIds};
+      const objectiveIncomplete=Boolean(options.architectureObjective && !options.architectureObjective.text);
+      const choice=selectArchitectureContext({enabled:true,objectiveKind:options.objective?.kind||"mutate",observations,patterns:catalog.patterns,
+        objectiveText:options.architectureObjective?.text,...(objectiveIncomplete?{complete:false}:{})});
+      architectureSelection={depth:choice.depth,reasonCodes:[...choice.reasons,
+        ...(objectiveIncomplete?[options.architectureObjective!.reason || "objective_completeness_unknown"]:[])],observedFacetCount:observations.reduce((n,o)=>n+o.facets.length,0),requestedPatternIds:choice.selectedPatternIds};
       const binding=options.architecture?.binding || {executionId,lineage:executionId,objectiveFingerprint,scopeRevision:0,catalogHash:catalog.catalogHash};
       const state=options.architecture?.snapshot || {architecture:[],architectureTombstones:[],architectureOmittedCount:0};
       candidates=candidates.flatMap(candidate=>{

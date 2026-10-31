@@ -11,15 +11,35 @@ from pathlib import Path
 from direct_rag_corpus import corpus_capabilities
 
 
-def pattern_search_metadata(index: Path, expected_generation: str | None, *, requested: bool, matches: list[dict[str, Any]]) -> dict[str, Any]:
+def _row_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except ValueError:
+            metadata = {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def pattern_search_metadata(index: Path, expected_generation: str | None, *, requested: bool, matches: list[dict[str, Any]],
+                            rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Pattern corpus status from pattern hits, not from any match of a mixed doc_type query.
+
+    Hits are counted on the matched rows before transport clipping, so a clipped
+    match list is not reported as no_match; identities is what the matches carry."""
     result: dict[str, Any] = {}
+    identities = sum(1 for item in matches if item.get("patternId"))
     if requested:
+        hits = (sum(1 for row in factual_rows(rows) if _row_metadata(row).get("guidanceKind") == "architecture_pattern")
+                if rows is not None else identities)
         coverage = corpus_capabilities(index, expected_generation=expected_generation).get("architecturePatterns")
         result["architecturePatternCorpus"] = {
-            "status": "unknown" if coverage is None else "no_pattern_corpus" if coverage["count"] == 0 else "matched" if matches else "no_match",
+            "status": "unknown" if coverage is None else "no_pattern_corpus" if coverage["count"] == 0 else "matched" if hits else "no_match",
             **(coverage or {}),
+            "patternHitCount": hits,
+            "patternIdentityCount": identities,
         }
-    if any(item.get("patternId") for item in matches):
+    if identities:
         result["indexGenerationId"] = expected_generation
     return result
 
