@@ -38,7 +38,7 @@ export type StreamedAssistant = {
   incompleteProtocol?: boolean;
 };
 
-const FOOTER_MARKER = "\n<!-- direct-continuity-note-v1 -->";
+const FOOTER_MARKER = "\n<!-- direct-continuity-note-v";
 
 /** A supplement may echo a delivered answer before producing its actual delta.
  * Hold only a possible prefix; unrelated replies and short partial matches pass. */

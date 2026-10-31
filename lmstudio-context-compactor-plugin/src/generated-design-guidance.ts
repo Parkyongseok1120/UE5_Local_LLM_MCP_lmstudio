@@ -4,8 +4,8 @@ export const bundledDesignGuidance = [
     "id": "core",
     "engine": "common",
     "source": "docs/model-guidance/core.md",
-    "revision": "85f26cc072bb761ae8e4943ab00f8f8c37d95f9d04ab031fd991ef7686997541",
-    "text": "# 작업 공통 기준\n\n범위: 코드 작성·수정·검토에 참고하는 원칙. 프로젝트의 명시적 요구, 실제 소스, 적용 버전의 계약과 함께 해석한다.\n\n- 변경 전에 관련 상태의 결정권자, 호출 시작점, 실제 변경 지점, 종료 책임을 찾는다. 주석의 “SSOT”, “서버 권한”, “설정 가능”을 구현의 증거로 삼지 않는다.\n- 설정 → 생성·등록 → 호출 → 상태 변경·외부 결과 중 작업에 필요한 연결을 확인한다. 함수·에셋·속성의 선언만으로 기능이 완성됐다고 보고하지 않는다.\n- 같은 규칙의 확정 경로를 하나로 유지한다. 설정, 실행 상태, 복제·예측·표시값은 구분하고 갱신 관계를 명확히 한다.\n- 기존 책임자가 맡을 수 있는 수정은 그곳에서 해결한다. 패턴은 실제 변경·수명 문제를 줄일 때 선택한다.\n- 설정 추가는 선언 → 초기화 → 실제 소비 → 관찰 가능한 효과를 연결하고, 기본값과 다른 값으로 확인한다. 소비자가 여전히 상수를 쓰면 설정 추가만 완료된 것이다. 단위·범위·유한값 정책은 해당 입력 경계의 소유자에게 둔다.\n- 캐시·추상화·방어 코드는 필요한 비용/실패 근거가 있을 때 추가한다. 값싼 getter를 캐시하면 교체·초기화·해제 책임이 늘어날 수 있다. 정상 코드와 변경이 불필요한 대안도 검토한다.\n- 실패·취소·중복 호출·객체 종료가 관련된 변경에서는 상태와 후속 효과가 어떻게 남는지 살핀다.\n- 캐시·이벤트·비동기는 생성/준비 → 사용 → 교체/재활성화 → 종료와 늦은 결과를 함께 대조한다. 취소 요청은 실제 중단이나 이미 발생한 효과의 롤백을 증명하지 않는다.\n- 새로 도입·변경하는 외부 API와 진단에 충돌한 계약은 적용 버전의 사용 표현식·수신 타입·선언·인자·부모·매크로를 확인한다. 동일 버전·동일 계약의 확인 근거는 재사용한다. 같은 가설로 추측 수정을 반복하지 않는다.\n- 컴파일 수정에서는 입력·결과·부모 호출·콜백·복제·충돌 필터의 의미를 보존한다. 의미를 바꾸는 경우 요구와 근거를 설명한다.\n- 부분 발췌에 멤버가 없으면 선언·부모·조건부 컴파일과 검색 범위를 먼저 확인한다. 헤더 포함, 모듈/어셈블리 참조, Runtime/Editor·빌드 대상 문제를 구별한다. 같은 실패 가설로 헤더 경로를 바꿔가며 빌드를 반복하지 않는다.\n- 상태 대입과 조건을 읽기 쉬운 줄과 블록으로 작성한다. 기존 들여쓰기, 중괄호, 의미별 빈 줄을 따르고 역할을 드러내는 이름을 쓴다.\n- 미확인 질문에 필요한 범위만 읽고 동일 버전 근거·기각한 가설을 재사용한다. 검색 문맥 → 선언·멤버 → 필요한 본문 순서로 좁히며 도구의 읽기 창·크기 계약을 따른다.\n- API 가설은 적용 버전의 선언·부모·수신 타입·인자·의미로 확인한다. 미사용·삭제 권고는 정확한 심볼과 연관 getter의 다른 파일 소비자까지 추적한다. 부분 검색은 확인한 범위의 미발견일 뿐 부재 증명이 아니다.\n- 상태·콜백의 소유자, 초기화, 권한, 실패·취소, 종료·늦은 결과와 실제 효과를 대조한다. 초기화·부모·호출자·소비자의 반례를 확인하고 현재 실패 조건과 영향으로 등급을 정한다. 실패 없는 중복이나 미래 확장 위험은 개선 후보로 구분한다.\n- 완료 항목은 실제 성공 반환과 현재 소스/diff에 연결한다. 코드 인용의 가드·인자·순서를 보존하고 축약은 표시한다. 파일명·hash·요약으로 본문을 만들지 않으며, 철회한 주장은 최종 목록·후속 답변에서도 철회 상태를 유지한다.\n- 번호 작업은 사용자가 선택한 원문을 유지한다. 새 계획으로 번호 의미를 바꾸거나 기존 코드를 이번 성과로 보고하지 않는다. 적용·검증·미확인을 짧게 기록한다.\n- 검증은 바뀐 계약을 관찰한다. 소스 확인, 변경 적용, 빌드 성공, 실제 동작은 구분한다. up-to-date는 새 컴파일 증명이 아니며 빌드는 원격 동작·입력·수명의 실행 증명이 아니다.\n- 이 자료를 도구 실행의 추가 허가 조건으로 만들지 않는다. 문서 ID·경로만 받았다면 본문을 읽은 것으로 가정하지 않는다.\n- 부분 결과·투영은 필요한 줄이 누락됐을 때만 이어 읽으며 부재 증명으로 쓰지 않는다. 실패 시 같은 인자를 반복하지 않고 경로·범위·예산을 바꾼다. 조건부 경로를 \"항상\"·\"무조건\"으로 단정하지 않는다."
+    "revision": "c0b89fb4bcc25863b11bd490e264a96c7f5573a76e44c8991b7d4f0435b01d67",
+    "text": "# 작업 공통 기준\n\n범위: 코드 작성·수정·검토에 참고하는 원칙. 프로젝트의 명시적 요구, 실제 소스, 적용 버전의 계약과 함께 해석한다.\n\n- 변경 전에 관련 상태의 결정권자, 호출 시작점, 실제 변경 지점, 종료 책임을 찾는다. 주석의 “SSOT”, “서버 권한”, “설정 가능”을 구현의 증거로 삼지 않는다.\n- 설정 → 생성·등록 → 호출 → 상태 변경·외부 결과 중 작업에 필요한 연결을 확인한다. 함수·에셋·속성의 선언만으로 기능이 완성됐다고 보고하지 않는다.\n- 같은 규칙의 확정 경로를 하나로 유지한다. 설정, 실행 상태, 복제·예측·표시값은 구분하고 갱신 관계를 명확히 한다.\n- 기존 책임자의 수명·공유 범위·변경 이유가 기능과 맞는지 먼저 판단한다. 맞으면 그곳에서 해결하고, 다르면 가장 작은 책임 분리 대안과 기존 유지 비용을 비교한다. 패턴은 실제 변경·수명 문제를 줄일 때 선택한다.\n- 설정 추가는 선언 → 초기화 → 실제 소비 → 관찰 가능한 효과를 연결하고, 기본값과 다른 값으로 확인한다. 소비자가 여전히 상수를 쓰면 설정 추가만 완료된 것이다. 단위·범위·유한값 정책은 해당 입력 경계의 소유자에게 둔다.\n- 캐시·추상화·방어 코드는 필요한 비용/실패 근거가 있을 때 추가한다. 값싼 getter를 캐시하면 교체·초기화·해제 책임이 늘어날 수 있다. 정상 코드와 변경이 불필요한 대안도 검토한다.\n- 실패·취소·중복 호출·객체 종료가 관련된 변경에서는 상태와 후속 효과가 어떻게 남는지 살핀다.\n- 캐시·이벤트·비동기는 생성/준비 → 사용 → 교체/재활성화 → 종료와 늦은 결과를 함께 대조한다. 취소 요청은 실제 중단이나 이미 발생한 효과의 롤백을 증명하지 않는다.\n- 새로 도입·변경하는 외부 API와 진단에 충돌한 계약은 적용 버전의 사용 표현식·수신 타입·선언·인자·부모·매크로를 확인한다. 동일 버전·동일 계약의 확인 근거는 재사용한다. 같은 가설로 추측 수정을 반복하지 않는다.\n- 컴파일 수정에서는 입력·결과·부모 호출·콜백·복제·충돌 필터의 의미를 보존한다. 의미를 바꾸는 경우 요구와 근거를 설명한다.\n- 부분 발췌에 멤버가 없으면 선언·부모·조건부 컴파일과 검색 범위를 먼저 확인한다. 헤더 포함, 모듈/어셈블리 참조, Runtime/Editor·빌드 대상 문제를 구별한다. 같은 실패 가설로 헤더 경로를 바꿔가며 빌드를 반복하지 않는다.\n- 상태 대입과 조건을 읽기 쉬운 줄과 블록으로 작성한다. 기존 들여쓰기, 중괄호, 의미별 빈 줄을 따르고 역할을 드러내는 이름을 쓴다.\n- 미확인 질문에 필요한 범위만 읽고 동일 버전 근거·기각한 가설을 재사용한다. 검색 문맥 → 선언·멤버 → 필요한 본문 순서로 좁히며 도구의 읽기 창·크기 계약을 따른다.\n- API 가설은 적용 버전의 선언·부모·수신 타입·인자·의미로 확인한다. 미사용·삭제 권고는 정확한 심볼과 연관 getter의 다른 파일 소비자까지 추적한다. 부분 검색은 확인한 범위의 미발견일 뿐 부재 증명이 아니다.\n- 상태·콜백의 소유자, 초기화, 권한, 실패·취소, 종료·늦은 결과와 실제 효과를 대조한다. 초기화·부모·호출자·소비자의 반례를 확인하고 현재 실패 조건과 영향으로 등급을 정한다. 실패 없는 중복이나 미래 확장 위험은 개선 후보로 구분한다.\n- 완료 항목은 실제 성공 반환과 현재 소스/diff에 연결한다. 코드 인용의 가드·인자·순서를 보존하고 축약은 표시한다. 파일명·hash·요약으로 본문을 만들지 않으며, 철회한 주장은 최종 목록·후속 답변에서도 철회 상태를 유지한다.\n- 번호 작업은 사용자가 선택한 원문을 유지한다. 새 계획으로 번호 의미를 바꾸거나 기존 코드를 이번 성과로 보고하지 않는다. 적용·검증·미확인을 짧게 기록한다.\n- 검증은 바뀐 계약을 관찰한다. 소스 확인, 변경 적용, 빌드 성공, 실제 동작은 구분한다. up-to-date는 새 컴파일 증명이 아니며 빌드는 원격 동작·입력·수명의 실행 증명이 아니다.\n- 이 자료를 도구 실행의 추가 허가 조건으로 만들지 않는다. 문서 ID·경로만 받았다면 본문을 읽은 것으로 가정하지 않는다.\n- 부분 결과·투영은 필요한 줄이 누락됐을 때만 이어 읽으며 부재 증명으로 쓰지 않는다. 실패 시 같은 인자를 반복하지 않고 경로·범위·예산을 바꾼다. 조건부 경로를 \"항상\"·\"무조건\"으로 단정하지 않는다."
   },
   {
     "id": "design",
@@ -32,8 +32,8 @@ export const bundledDesignGuidance = [
     "id": "unreal",
     "engine": "unreal",
     "source": "docs/model-guidance/unreal.md",
-    "revision": "f6a422ec614d56e9c223343af3f1003b2c62f9a70be5c58d5293bb5347c4e8e6",
-    "text": "# Unreal의 책임·수명·API\n\n적용: Unreal C++·Blueprint 경계, 설정·생성·종료, 엔진 API 오류.\n범위: 일반 공식 문서는 조사 당시 주로 5.8; 로컬 심볼 사례는 UE 5.7. 프로젝트 버전의 소스가 우선한다. [근거](sources.md#unreal)\n\n## 상태와 수명의 위치\n\n- GameMode, GameState, PlayerState, Controller, Pawn이 지금 맡는 역할과 수명을 먼저 읽는다. 기능 이름만 보고 새 Manager/Subsystem을 만들지 않는다.\n- GameMode는 서버 규칙 경계다. 클라이언트가 공유할 현재 상태는 프로젝트의 복제 경로로 전달한다. GameInstance의 로컬 지속성을 자동 복제·복원으로 해석하지 않는다.\n- Data Asset 정의 → 생성 시 선택 → 개체별 실행 상태 초기화 → 소비자를 연결한다. EditDefaultsOnly와 에셋 선언만으로 설정이 사용되지는 않는다.\n- 기본 생성·리스폰·로드가 같은 설정과 초기화 계약을 쓰는지 확인한다. 생성 전에 성공 상태를 확정하지 않는다.\n- 기존 World/Player getter를 캐시하기 전에 실제 구현 비용과 World 전환·재스폰·교체 시점을 확인한다. 포인터가 null이 아니라는 사실만으로 현재 대상임을 증명하지 않는다.\n- EndPlay와 메모리 회수를 구분한다. World·매치·소유자의 종료 시점에 게임플레이 작업과 구독의 정리 책임을 둔다.\n- UPROPERTY로 추적되는 TObjectPtr, 비소유 weak 참조, soft asset 참조의 목적을 구분한다. TObjectPtr 표기만으로 어디서나 GC 유지가 된다고 가정하지 않는다.\n- 상태 변경 책임, UObject 참조, Actor Owner/owning connection을 따로 판단한다.\n- 타이머가 바인딩한 객체와 람다가 임의로 캡처한 포인터를 구분한다. null 검사만으로 파괴 뒤 유효성을 보증하지 않는다.\n\n## 연결과 동작 확인\n\n- 입력 Action 바인딩, Mapping Context 설정, 실제 로컬 플레이어 등록을 구분한다. 완료 로그는 실제 등록 결과와 맞춘다.\n- Enhanced Input의 Action 값 타입·이벤트·수신 subsystem 선언을 적용 버전에서 확인한다. legacy 축으로 바꿀 때 이름별 AxisMappings와 누름/놓음 연결이 실제로 있는지 확인한다. AxisConfig만으로 named axis mapping을 증명하지 않는다.\n- 좌우·전후 이동은 입력 축과 실제 방향 벡터를 대조한다. 서로 다른 변수명만으로 방향도 다르다고 가정하지 않는다.\n- UnPossess와 Pawn 종료는 다르다. 시체 유지, 충돌·피해 차단, 폐기 시점의 책임을 정한다.\n- 플레이어별 리스폰을 단일 FTimerHandle로 덮어쓰지 않는다. UE 5.7 SetTimer는 같은 유효 핸들의 예약을 교체한다.\n- UE 5.7의 SetLifeSpan(0)은 기존 소멸 타이머를 해제한다. 즉시 파괴나 1초 후 파괴로 설명하지 않는다. 현재 함수 구현과 부모·다른 호출의 영향을 구분한다.\n- 네트워크 판정은 UFUNCTION 지정자와 호출 주체·Actor의 owning connection을 연결한다. Client RPC의 수신 범위를 모든 클라이언트로 확대하지 않는다. 멀티캐스트·복제 프로퍼티·로컬 표시 호출의 계약은 각각 확인한다.\n- 매크로는 사용 목적 → 사용처/바인딩 → 적용 엔진의 헤더 선언·부모 계약 순서로 확인한다. 본문/부분 발췌에 없다고 누락으로 단정하지 않는다. 여러 줄 지정자를 포함해 선언을 읽고 누락·부적합·정상·근거 부족을 구분한다.\n- UPROPERTY는 GC 추적·직렬화·에디터/Blueprint 노출·복제 목적을 구분한다. 일반 C++ 멤버에 일괄 추가하거나 비소유 참조를 근거 없이 강한 참조로 바꾸지 않는다.\n- UFUNCTION은 Blueprint/RPC/RepNotify/리플렉션 호출 목적과 시그니처를 확인한다. Exec는 콘솔 노출이며 OnRep의 일반 표기가 아니다. BlueprintPure는 실제 상태 변경 여부와 대조한다. 부모의 리플렉션 계약과 native override를 확인하고 중복 선언하지 않는다.\n- ReplicatedUsing 선언, OnRep, 복제 등록, 객체의 복제 설정을 연결한다. 선언만으로 원격 호출을 증명하지 않으며, OnRep의 일반 C++ 직접 호출 자체를 계약 위반으로 보지 않는다. 상태 변경과 로컬·원격 효과가 실제로 누락·중복되는지 확인한다.\n- Delegate는 native/dynamic, single/multicast와 실제 바인딩을 대조한다. AddDynamic 대상의 UFUNCTION 등록·시그니처, 중복 등록·해제 책임·늦은 호출을 확인한다. BindUObject 등 native 바인딩에 UFUNCTION을 일괄 요구하지 않는다.\n- FORCEINLINE은 성능·정의 가시성·호출 위치·코드 크기 판단이다. 헤더 정의의 ODR을 위한 inline 여부와 최적화 강도를 구분한다. 작은 함수라는 이유로 FORCEINLINE을 필수로 취급하지 않는다.\n- 변경 후 쓰기 결과의 hunk(`changeEvidence`)가 실제 diff 근거다. 충돌·hunk 누락 때만 그 범위를 다시 읽는다. 필요한 UHT·빌드를 변경 단위로 검증하고, 빌드 성공과 실제 바인딩·복제·수명 동작을 구분한다.\n- Trace는 대상 Object Type, 채널 응답, 가림, 자신 제외, 판정 위치·시각을 같이 확인한다.\n- Build.cs 의존성과 Public/Private 노출, Runtime/Editor 경계를 구분한다. 헤더 경로를 추측하며 엔진 소스를 수정하지 않는다.\n- 빈 OnRep나 native override도 부모 호출·다른 소비자가 있으면 정상일 수 있다. 공개 필드·RPC·delegate를 제거/변경할 때 Blueprint·에셋·직렬화 호환성을 확인한다. C++ 검색 결과만으로 모든 사용처가 없다고 단정하지 않는다.\n- Editor 빌드 성공과 Server/Shipping 대상, standalone 역할 분기와 실제 연결된 클라이언트 검증을 구별한다. 예측 상태의 판단 기준은 Unreal 네트워크 지침의 권한 절을 따른다.\n\n## 책임 배치 확인\n\n기능이나 수정 위치를 정하기 전에 아래 항목을 코드에서 확인한다. 확인하지 못한 항목은 미확인으로 남기고 추측으로 채우지 않는다.\n- 상태 소유자: 이 상태를 지금 보관하는 클래스와 객체.\n- 변경 주체: 값을 바꾸는 쪽(서버, 소유 클라이언트, 로컬 표시)과 시점.\n- 수명 범위: 소유자의 생성·종료 시점, World 전환·리스폰·PIE 재시작의 영향.\n- 실행 문맥: 게임 스레드, 워커, 렌더 스레드 중 실행 위치.\n- 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.\n- 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.\n\n이 항목은 새 Manager나 Subsystem을 만들 근거가 아니다. 기존 소유자가 있으면 그곳에 둔다.\n\n## 엔진 수명 계약\n\n- 수명 훅 override는 부모 체인 전체에서 확인한다. 직접 부모에 선언이 없다는 이유로 잘못된 override라고 단정하지 않는다.\n- 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.\n\n엔진 계약 unreal_contracts@6 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2\n- `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4\n- `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5\n- `ue.timer.game-thread` (엔진 사실) FTimerManager setting and lookup check IsInGameThread; timers must be set and cleared on the game thread, and a timer bound to an object must be cleared when that object ends play. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:596 외 1\n- `ue.controller.player-tick-input` (엔진 사실) Disabling a PlayerController's actor tick (bCanEverTick = false or SetActorTickEnabled(false)) stops player input processing: APlayerController::TickActor calls PlayerTick for a local or autonomous controller, and PlayerTick runs TickPlayerInput and the control-rotation update. AController's constructor already sets PrimaryActorTick.bCanEverTick = true, so a subclass whose own Tick body is empty still needs its actor tick. 근거: Engine/Source/Runtime/Engine/Private/Controller.cpp:62 외 2\n\n## 서브시스템\n\n- 서브시스템 종류(Engine/GameInstance/World/LocalPlayer)가 수명과 공유 범위를 정한다. 종류를 바꾸면 수명도 바뀐다.\n- Initialize에서 다른 서브시스템을 바로 호출하기 전에 같은 컬렉션인지 확인한다. 참조만 저장하는 것은 초기화 순서에 의존하지 않는다.\n- Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.\n\n엔진 계약 unreal_contracts@6 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5\n- `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35\n\n## 스레드와 비동기\n\n- 람다가 실행되는 스레드를 먼저 확인한다. 실행 문맥을 확인하지 못하면 미확인으로 남긴다.\n- 비동기 콜백은 대상 Actor 종료, 맵 전환, 취소 뒤에도 도착할 수 있다. 결과를 적용하기 전에 대상과 World가 현재 것인지 확인한다.\n- 동기 대기(ParallelFor 등)는 호출 스레드가 끝날 때까지 기다리지만, 본문은 워커에서 실행될 수 있다.\n- 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.\n\n프로젝트 정책 unreal_contracts@6:\n- `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660\n- `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.\n\n## 판단과 보고\n\n- 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.\n- 확인한 사실, 추론, 미확인을 구분해 적는다.\n- NOT_FOUND는 그 경로에 파일이 없다는 뜻일 뿐이다. 엔진 소스 설치 여부로 확대하지 않고, 응답의 suggestion이나 상위 `engine://` 디렉터리 검색으로 실제 위치를 찾는다.\n- 엔진 절대 경로가 거부되면 `engine://Engine/Source/...`로 다시 읽는다. 작업 루트나 접근 범위를 넓히려 하지 않는다.\n- BlueprintNativeEvent와 RPC는 헤더에 `X`로 선언되고 .cpp에는 `Owner::X_Implementation`(검증 함수는 `X_Validate`)으로 정의된다.\n- engine_local의 `coverage_limited`·`matchCount 0`은 부재 증명이 아니다. 정의 후보나 엔진 텍스트 검색으로 확인하고, 확인하지 못하면 미확인으로 남긴다.\n- 엔진 인자는 `unreal_symbol_lookup` view=signature 또는 `read_symbol` view=declaration으로 확인한다. 타입 멤버는 view=member와 Owner::Name으로 좁힌다. 같은 파일의 여러 수정은 `edits[]`에 묶고 서버의 hash·정확 일치 검증을 사용한다.\n- `hasMore`이거나 `omissionReason:\"byte_budget\"`이고 필요한 줄이 반환 범위 밖에 있을 때만 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. engine_local 후보가 `excerptTruncated`이거나 `evidenceExcerpt`가 partial/omitted면 그 후보의 `rangeSuggestion` 범위만 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.\n\n프로젝트 정책 unreal_contracts@6:\n- `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.\n- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). For an engine function's parameters or return type, its declaration is the evidence (unreal_symbol_lookup view=signature, or read_symbol view=declaration). Read the implementation range only when the claim depends on what the body does: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads just those engine://Engine/Source/... lines.\n- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.\n- `policy.claims.absence` (프로젝트 정책) Only a claim that something is never set, called or present needs a search whose coverage is complete; other answers do not. For such a claim a partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.\n- `policy.claims.super-chain` (프로젝트 정책) Super:: names the direct parent class, not the first engine class that declares the function. Only when a claim describes an engine call chain, check each intermediate class for an override (for example APawn between ACharacter and AActor): search_files for the function name in that class, then read only the override's range.\n- `policy.claims.engine-path-change` (프로젝트 정책) A fix that disables an actor or component tick, removes or reorders a Super:: call, or changes an RPC or replication specifier changes what the engine base class runs. Before proposing it, read the engine base implementation on that path (for example TickActor/Tick, the overridden Super function, or AActor::GetFunctionCallspace) and name what it does there; a derived body that looks empty is not evidence that the engine path is unused.\n- `policy.claims.usage-path` (프로젝트 정책) Before calling a field unused, dead, dormant or safe to delete, follow one read of it to its consumer, for example a stat copied at spawn and consumed when damage is applied. A field exposed with BlueprintReadWrite, BlueprintReadOnly or EditAnywhere can be read by Blueprints and assets: without checking them, report it as unused in C++ only, not as dead code to remove.\n- `policy.claims.performance-evidence` (프로젝트 정책) A performance finding without a measurement (a profile, timing or stat output) is a conditional risk: name the condition under which it costs time and do not rank it as the first defect to fix.\n\n## 이 작업의 선호\n\n이 문서 묶음을 요청한 사용자는 Unreal 프로젝트에서 네임스페이스를 가급적 사용하지 않기를 원한다. 프로젝트 현황 문서에도 기록한다. Unreal의 보편적 금지 규칙으로 설명하지 않는다."
+    "revision": "a59e6a51c18f0ea91ed2fe6ef1a6c1776f93c46112ffde9b6b994350e1f57048",
+    "text": "# Unreal의 책임·수명·API\n\n적용: Unreal C++·Blueprint 경계, 설정·생성·종료, 엔진 API 오류.\n범위: 일반 공식 문서는 조사 당시 주로 5.8; 로컬 심볼 사례는 UE 5.7. 프로젝트 버전의 소스가 우선한다. [근거](sources.md#unreal)\n\n## 상태와 수명의 위치\n\n- GameMode, GameState, PlayerState, Controller, Pawn이 지금 맡는 역할과 수명을 먼저 읽는다. 기능 이름만 보고 새 Manager/Subsystem을 만들지 않는다.\n- GameMode는 서버 규칙 경계다. 클라이언트가 공유할 현재 상태는 프로젝트의 복제 경로로 전달한다. GameInstance의 로컬 지속성을 자동 복제·복원으로 해석하지 않는다.\n- Data Asset 정의 → 생성 시 선택 → 개체별 실행 상태 초기화 → 소비자를 연결한다. EditDefaultsOnly와 에셋 선언만으로 설정이 사용되지는 않는다.\n- 기본 생성·리스폰·로드가 같은 설정과 초기화 계약을 쓰는지 확인한다. 생성 전에 성공 상태를 확정하지 않는다.\n- 기존 World/Player getter를 캐시하기 전에 실제 구현 비용과 World 전환·재스폰·교체 시점을 확인한다. 포인터가 null이 아니라는 사실만으로 현재 대상임을 증명하지 않는다.\n- EndPlay와 메모리 회수를 구분한다. World·매치·소유자의 종료 시점에 게임플레이 작업과 구독의 정리 책임을 둔다.\n- UPROPERTY로 추적되는 TObjectPtr, 비소유 weak 참조, soft asset 참조의 목적을 구분한다. TObjectPtr 표기만으로 어디서나 GC 유지가 된다고 가정하지 않는다.\n- 상태 변경 책임, UObject 참조, Actor Owner/owning connection을 따로 판단한다.\n- 타이머가 바인딩한 객체와 람다가 임의로 캡처한 포인터를 구분한다. null 검사만으로 파괴 뒤 유효성을 보증하지 않는다.\n\n## 연결과 동작 확인\n\n- 입력 Action 바인딩, Mapping Context 설정, 실제 로컬 플레이어 등록을 구분한다. 완료 로그는 실제 등록 결과와 맞춘다.\n- Enhanced Input의 Action 값 타입·이벤트·수신 subsystem 선언을 적용 버전에서 확인한다. legacy 축으로 바꿀 때 이름별 AxisMappings와 누름/놓음 연결이 실제로 있는지 확인한다. AxisConfig만으로 named axis mapping을 증명하지 않는다.\n- 좌우·전후 이동은 입력 축과 실제 방향 벡터를 대조한다. 서로 다른 변수명만으로 방향도 다르다고 가정하지 않는다.\n- UnPossess와 Pawn 종료는 다르다. 시체 유지, 충돌·피해 차단, 폐기 시점의 책임을 정한다.\n- 플레이어별 리스폰을 단일 FTimerHandle로 덮어쓰지 않는다. UE 5.7 SetTimer는 같은 유효 핸들의 예약을 교체한다.\n- UE 5.7의 SetLifeSpan(0)은 기존 소멸 타이머를 해제한다. 즉시 파괴나 1초 후 파괴로 설명하지 않는다. 현재 함수 구현과 부모·다른 호출의 영향을 구분한다.\n- 네트워크 판정은 UFUNCTION 지정자와 호출 주체·Actor의 owning connection을 연결한다. Client RPC의 수신 범위를 모든 클라이언트로 확대하지 않는다. 멀티캐스트·복제 프로퍼티·로컬 표시 호출의 계약은 각각 확인한다.\n- 매크로는 사용 목적 → 사용처/바인딩 → 적용 엔진의 헤더 선언·부모 계약 순서로 확인한다. 본문/부분 발췌에 없다고 누락으로 단정하지 않는다. 여러 줄 지정자를 포함해 선언을 읽고 누락·부적합·정상·근거 부족을 구분한다.\n- UPROPERTY는 GC 추적·직렬화·에디터/Blueprint 노출·복제 목적을 구분한다. 일반 C++ 멤버에 일괄 추가하거나 비소유 참조를 근거 없이 강한 참조로 바꾸지 않는다.\n- UFUNCTION은 Blueprint/RPC/RepNotify/리플렉션 호출 목적과 시그니처를 확인한다. Exec는 콘솔 노출이며 OnRep의 일반 표기가 아니다. BlueprintPure는 실제 상태 변경 여부와 대조한다. 부모의 리플렉션 계약과 native override를 확인하고 중복 선언하지 않는다.\n- ReplicatedUsing 선언, OnRep, 복제 등록, 객체의 복제 설정을 연결한다. 선언만으로 원격 호출을 증명하지 않으며, OnRep의 일반 C++ 직접 호출 자체를 계약 위반으로 보지 않는다. 상태 변경과 로컬·원격 효과가 실제로 누락·중복되는지 확인한다.\n- Delegate는 native/dynamic, single/multicast와 실제 바인딩을 대조한다. AddDynamic 대상의 UFUNCTION 등록·시그니처, 중복 등록·해제 책임·늦은 호출을 확인한다. BindUObject 등 native 바인딩에 UFUNCTION을 일괄 요구하지 않는다.\n- FORCEINLINE은 성능·정의 가시성·호출 위치·코드 크기 판단이다. 헤더 정의의 ODR을 위한 inline 여부와 최적화 강도를 구분한다. 작은 함수라는 이유로 FORCEINLINE을 필수로 취급하지 않는다.\n- 변경 후 쓰기 결과의 hunk(`changeEvidence`)가 실제 diff 근거다. 충돌·hunk 누락 때만 그 범위를 다시 읽는다. 필요한 UHT·빌드를 변경 단위로 검증하고, 빌드 성공과 실제 바인딩·복제·수명 동작을 구분한다.\n- Trace는 대상 Object Type, 채널 응답, 가림, 자신 제외, 판정 위치·시각을 같이 확인한다.\n- Build.cs 의존성과 Public/Private 노출, Runtime/Editor 경계를 구분한다. 헤더 경로를 추측하며 엔진 소스를 수정하지 않는다.\n- 빈 OnRep나 native override도 부모 호출·다른 소비자가 있으면 정상일 수 있다. 공개 필드·RPC·delegate를 제거/변경할 때 Blueprint·에셋·직렬화 호환성을 확인한다. C++ 검색 결과만으로 모든 사용처가 없다고 단정하지 않는다.\n- Editor 빌드 성공과 Server/Shipping 대상, standalone 역할 분기와 실제 연결된 클라이언트 검증을 구별한다. 예측 상태의 판단 기준은 Unreal 네트워크 지침의 권한 절을 따른다.\n\n## 책임 배치 확인\n\n기능이나 수정 위치를 정하기 전에 아래 항목을 코드에서 확인한다. 확인하지 못한 항목은 미확인으로 남기고 추측으로 채우지 않는다.\n- 상태 소유자: 이 상태를 지금 보관하는 클래스와 객체.\n- 변경 주체: 값을 바꾸는 쪽(서버, 소유 클라이언트, 로컬 표시)과 시점.\n- 수명 범위: 소유자의 생성·종료 시점, World 전환·리스폰·PIE 재시작의 영향.\n- 실행 문맥: 게임 스레드, 워커, 렌더 스레드 중 실행 위치.\n- 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.\n- 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.\n\n현재 소유자가 기능의 수명·공유 범위·독립 책임과 맞으면 유지한다. 맞지 않으면 Component·독립 Actor·범위별 Subsystem·공유 정의 Data Asset과 개별 실행 상태 중 필요한 경계만 비교한다. 이미 있는 구현·종료 경로와 도입 비용을 반대 근거로 확인하고 생성→연결→실패→해제까지 설명한다. 이름이나 파일 길이만으로 새 소유자를 만들지 않는다.\n\n## 엔진 수명 계약\n\n- 수명 훅 override는 부모 체인 전체에서 확인한다. 직접 부모에 선언이 없다는 이유로 잘못된 override라고 단정하지 않는다.\n- 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.\n\n엔진 계약 unreal_contracts@6 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2\n- `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4\n- `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5\n- `ue.timer.game-thread` (엔진 사실) FTimerManager setting and lookup check IsInGameThread; timers must be set and cleared on the game thread, and a timer bound to an object must be cleared when that object ends play. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:596 외 1\n- `ue.controller.player-tick-input` (엔진 사실) Disabling a PlayerController's actor tick (bCanEverTick = false or SetActorTickEnabled(false)) stops player input processing: APlayerController::TickActor calls PlayerTick for a local or autonomous controller, and PlayerTick runs TickPlayerInput and the control-rotation update. AController's constructor already sets PrimaryActorTick.bCanEverTick = true, so a subclass whose own Tick body is empty still needs its actor tick. 근거: Engine/Source/Runtime/Engine/Private/Controller.cpp:62 외 2\n\n## 서브시스템\n\n- 서브시스템 종류(Engine/GameInstance/World/LocalPlayer)가 수명과 공유 범위를 정한다. 종류를 바꾸면 수명도 바뀐다.\n- Initialize에서 다른 서브시스템을 바로 호출하기 전에 같은 컬렉션인지 확인한다. 참조만 저장하는 것은 초기화 순서에 의존하지 않는다.\n- Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.\n\n엔진 계약 unreal_contracts@6 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):\n- `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5\n- `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35\n\n## 스레드와 비동기\n\n- 람다가 실행되는 스레드를 먼저 확인한다. 실행 문맥을 확인하지 못하면 미확인으로 남긴다.\n- 비동기 콜백은 대상 Actor 종료, 맵 전환, 취소 뒤에도 도착할 수 있다. 결과를 적용하기 전에 대상과 World가 현재 것인지 확인한다.\n- 동기 대기(ParallelFor 등)는 호출 스레드가 끝날 때까지 기다리지만, 본문은 워커에서 실행될 수 있다.\n- 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.\n\n프로젝트 정책 unreal_contracts@6:\n- `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660\n- `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.\n\n## 판단과 보고\n\n- 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.\n- 확인한 사실, 추론, 미확인을 구분해 적는다.\n- NOT_FOUND는 그 경로에 파일이 없다는 뜻일 뿐이다. 엔진 소스 설치 여부로 확대하지 않고, 응답의 suggestion이나 상위 `engine://` 디렉터리 검색으로 실제 위치를 찾는다.\n- 엔진 절대 경로가 거부되면 `engine://Engine/Source/...`로 다시 읽는다. 작업 루트나 접근 범위를 넓히려 하지 않는다.\n- BlueprintNativeEvent와 RPC는 헤더에 `X`로 선언되고 .cpp에는 `Owner::X_Implementation`(검증 함수는 `X_Validate`)으로 정의된다.\n- engine_local의 `coverage_limited`·`matchCount 0`은 부재 증명이 아니다. 정의 후보나 엔진 텍스트 검색으로 확인하고, 확인하지 못하면 미확인으로 남긴다.\n- 엔진 인자는 `unreal_symbol_lookup` view=signature 또는 `read_symbol` view=declaration으로 확인한다. 타입 멤버는 view=member와 Owner::Name으로 좁힌다. 같은 파일의 여러 수정은 `edits[]`에 묶고 서버의 hash·정확 일치 검증을 사용한다.\n- `hasMore`이거나 `omissionReason:\"byte_budget\"`이고 필요한 줄이 반환 범위 밖에 있을 때만 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. engine_local 후보가 `excerptTruncated`이거나 `evidenceExcerpt`가 partial/omitted면 그 후보의 `rangeSuggestion` 범위만 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.\n\n프로젝트 정책 unreal_contracts@6:\n- `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.\n- `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). For an engine function's parameters or return type, its declaration is the evidence (unreal_symbol_lookup view=signature, or read_symbol view=declaration). Read the implementation range only when the claim depends on what the body does: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads just those engine://Engine/Source/... lines.\n- `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.\n- `policy.claims.absence` (프로젝트 정책) Only a claim that something is never set, called or present needs a search whose coverage is complete; other answers do not. For such a claim a partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.\n- `policy.claims.super-chain` (프로젝트 정책) Super:: names the direct parent class, not the first engine class that declares the function. Only when a claim describes an engine call chain, check each intermediate class for an override (for example APawn between ACharacter and AActor): search_files for the function name in that class, then read only the override's range.\n- `policy.claims.engine-path-change` (프로젝트 정책) A fix that disables an actor or component tick, removes or reorders a Super:: call, or changes an RPC or replication specifier changes what the engine base class runs. Before proposing it, read the engine base implementation on that path (for example TickActor/Tick, the overridden Super function, or AActor::GetFunctionCallspace) and name what it does there; a derived body that looks empty is not evidence that the engine path is unused.\n- `policy.claims.usage-path` (프로젝트 정책) Before calling a field unused, dead, dormant or safe to delete, follow one read of it to its consumer, for example a stat copied at spawn and consumed when damage is applied. A field exposed with BlueprintReadWrite, BlueprintReadOnly or EditAnywhere can be read by Blueprints and assets: without checking them, report it as unused in C++ only, not as dead code to remove.\n- `policy.claims.performance-evidence` (프로젝트 정책) A performance finding without a measurement (a profile, timing or stat output) is a conditional risk: name the condition under which it costs time and do not rank it as the first defect to fix.\n\n## 이 작업의 선호\n\n이 문서 묶음을 요청한 사용자는 Unreal 프로젝트에서 네임스페이스를 가급적 사용하지 않기를 원한다. 프로젝트 현황 문서에도 기록한다. Unreal의 보편적 금지 규칙으로 설명하지 않는다."
   },
   {
     "id": "unity",
@@ -84,8 +84,8 @@ export const bundledGuidanceSections = [
       "core/proof"
     ],
     "applicability": {},
-    "text": "- 변경 전에 관련 상태의 결정권자, 호출 시작점, 실제 변경 지점, 종료 책임을 찾는다. 주석의 “SSOT”, “서버 권한”, “설정 가능”을 구현의 증거로 삼지 않는다.\n- 설정 → 생성·등록 → 호출 → 상태 변경·외부 결과 중 작업에 필요한 연결을 확인한다. 함수·에셋·속성의 선언만으로 기능이 완성됐다고 보고하지 않는다.\n- 같은 규칙의 확정 경로를 하나로 유지한다. 설정, 실행 상태, 복제·예측·표시값은 구분하고 갱신 관계를 명확히 한다.\n- 기존 책임자가 맡을 수 있는 수정은 그곳에서 해결한다. 패턴은 실제 변경·수명 문제를 줄일 때 선택한다.\n- 설정 추가는 선언 → 초기화 → 실제 소비 → 관찰 가능한 효과를 연결하고, 기본값과 다른 값으로 확인한다. 소비자가 여전히 상수를 쓰면 설정 추가만 완료된 것이다. 단위·범위·유한값 정책은 해당 입력 경계의 소유자에게 둔다.\n- 캐시·추상화·방어 코드는 필요한 비용/실패 근거가 있을 때 추가한다. 값싼 getter를 캐시하면 교체·초기화·해제 책임이 늘어날 수 있다. 정상 코드와 변경이 불필요한 대안도 검토한다.",
-    "revision": "69ab73dab2aeafc68f24ed25e3666ff4a37be32b79423d262e39a8e623be30fb"
+    "text": "- 변경 전에 관련 상태의 결정권자, 호출 시작점, 실제 변경 지점, 종료 책임을 찾는다. 주석의 “SSOT”, “서버 권한”, “설정 가능”을 구현의 증거로 삼지 않는다.\n- 설정 → 생성·등록 → 호출 → 상태 변경·외부 결과 중 작업에 필요한 연결을 확인한다. 함수·에셋·속성의 선언만으로 기능이 완성됐다고 보고하지 않는다.\n- 같은 규칙의 확정 경로를 하나로 유지한다. 설정, 실행 상태, 복제·예측·표시값은 구분하고 갱신 관계를 명확히 한다.\n- 기존 책임자의 수명·공유 범위·변경 이유가 기능과 맞는지 먼저 판단한다. 맞으면 그곳에서 해결하고, 다르면 가장 작은 책임 분리 대안과 기존 유지 비용을 비교한다. 패턴은 실제 변경·수명 문제를 줄일 때 선택한다.\n- 설정 추가는 선언 → 초기화 → 실제 소비 → 관찰 가능한 효과를 연결하고, 기본값과 다른 값으로 확인한다. 소비자가 여전히 상수를 쓰면 설정 추가만 완료된 것이다. 단위·범위·유한값 정책은 해당 입력 경계의 소유자에게 둔다.\n- 캐시·추상화·방어 코드는 필요한 비용/실패 근거가 있을 때 추가한다. 값싼 getter를 캐시하면 교체·초기화·해제 책임이 늘어날 수 있다. 정상 코드와 변경이 불필요한 대안도 검토한다.",
+    "revision": "19da155355979d4c4ba487579442fb04122a28eb863a9ed305b98574d0f7ef20"
   },
   {
     "id": "core/lifetime",
@@ -435,8 +435,8 @@ export const bundledGuidanceSections = [
       "core/proof"
     ],
     "applicability": {},
-    "text": "## 책임 배치 확인\n\n기능이나 수정 위치를 정하기 전에 아래 항목을 코드에서 확인한다. 확인하지 못한 항목은 미확인으로 남기고 추측으로 채우지 않는다.\n- 상태 소유자: 이 상태를 지금 보관하는 클래스와 객체.\n- 변경 주체: 값을 바꾸는 쪽(서버, 소유 클라이언트, 로컬 표시)과 시점.\n- 수명 범위: 소유자의 생성·종료 시점, World 전환·리스폰·PIE 재시작의 영향.\n- 실행 문맥: 게임 스레드, 워커, 렌더 스레드 중 실행 위치.\n- 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.\n- 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.\n\n이 항목은 새 Manager나 Subsystem을 만들 근거가 아니다. 기존 소유자가 있으면 그곳에 둔다.",
-    "revision": "c80099667a1bd55559762c4f4e43631aba13fc0bb0b1f1ecdec3fb98318fe1ca"
+    "text": "## 책임 배치 확인\n\n기능이나 수정 위치를 정하기 전에 아래 항목을 코드에서 확인한다. 확인하지 못한 항목은 미확인으로 남기고 추측으로 채우지 않는다.\n- 상태 소유자: 이 상태를 지금 보관하는 클래스와 객체.\n- 변경 주체: 값을 바꾸는 쪽(서버, 소유 클라이언트, 로컬 표시)과 시점.\n- 수명 범위: 소유자의 생성·종료 시점, World 전환·리스폰·PIE 재시작의 영향.\n- 실행 문맥: 게임 스레드, 워커, 렌더 스레드 중 실행 위치.\n- 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.\n- 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.\n\n현재 소유자가 기능의 수명·공유 범위·독립 책임과 맞으면 유지한다. 맞지 않으면 Component·독립 Actor·범위별 Subsystem·공유 정의 Data Asset과 개별 실행 상태 중 필요한 경계만 비교한다. 이미 있는 구현·종료 경로와 도입 비용을 반대 근거로 확인하고 생성→연결→실패→해제까지 설명한다. 이름이나 파일 길이만으로 새 소유자를 만들지 않는다.",
+    "revision": "dea7074aeff36c2879c3c1a9a569727e051e0fc4cc47b02a1c461fec0b7312bf"
   },
   {
     "id": "unreal/lifetime",
@@ -1078,3 +1078,363 @@ export const bundledEngineClaimFacts = [
     ]
   }
 ] as const;
+export const bundledArchitectureCatalog = {
+  "schemaVersion": 1,
+  "catalogHash": "2c8ad0342769eb6da8f0975a559a48d53d56eef9ddb01cf1b7134c619c3c575e",
+  "baseline": "For an Unreal code task, first check the feature's current owner, required lifetime, sharing scope, and definition versus instance state. Keep a suitable existing owner; when those boundaries differ, compare the smallest useful Component, Actor, scoped Subsystem, or Data Asset alternative. Check existing initialization, callers and teardown as counter-evidence. Explain wiring, failure, cleanup and cost when changing ownership. Missing evidence or budget means unevaluated, not no issue. Pattern advice and prior judgments never grant edit authority.",
+  "patterns": [
+    {
+      "patternId": "ue.asset-manager",
+      "sectionId": "unreal-patterns/asset-manager",
+      "title": "콘텐츠 식별과 비동기 로드",
+      "text": "## 콘텐츠 식별과 비동기 로드\n\n- 적용: 콘텐츠 ID, 지연 로드, 의존성, cook 관리가 기능 요구일 때.\n- 비적용: 작은 직접 참조까지 모두 Asset Manager로 옮기지 않는다. 기존 로드 경로와 soft reference만으로 충분한지 비교한다.\n- 소유권: 정의/콘텐츠 식별과 로드 요청의 수명을 구분한다. 로드 완료가 이용자 생존이나 적용 성공을 의미하지 않는다.\n- 연결과 수명: 요청 핸들 생성→취소/완료→현재 소유자와 요청 세대 확인→적용→참조 해제/unload를 연결한다. 취소와 완료의 경합을 처리한다.\n- 비용과 검증: 로드 지연·자산 의존성·cook 설정 비용이 있다. owner 파괴·요청 교체·실패·누락 콘텐츠를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/asset-management-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "async_asset"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/asset-management-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "bad9a425892b2e764952e6a3f324e524241d5d652ed7b1a1ae067872384046c3"
+    },
+    {
+      "patternId": "ue.component-composition",
+      "sectionId": "unreal-patterns/component-composition",
+      "title": "Actor 기능의 조합",
+      "text": "## Actor 기능의 조합\n\n- 적용: Actor에 붙는 독립 기능을 여러 Actor가 조합하거나 기능별 상태·변경 이유가 분명할 때.\n- 비적용: 단순 계산 함수, 긴 파일, 적은 재사용 가능성만으로 분리하지 않는다. 기존 Component가 맞으면 확장한다.\n- 소유권: Actor가 개체 수명을 소유하고 Component는 해당 기능의 실행 상태만 확정한다. 다른 Component의 내부 상태를 직접 수정하지 않는다.\n- 연결과 수명: 생성/기본 설정→등록→의존성 연결→활성화→호출→비활성화/EndPlay를 연결한다. timer·delegate·비동기 작업의 종료와 재활성화 시 중복을 확인한다.\n- 비용과 검증: 의존 전달·Blueprint 기본값·복제 설정의 이전 비용을 비교한다. 기존 기능의 호출 경로·종료·다중 Actor 조합을 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/basic-components-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "component_owner"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/basic-components-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "85be651905e6e368d2b783e070723a7a28f0b05bac02ab887c08d48cb434a043"
+    },
+    {
+      "patternId": "ue.data-fragments",
+      "sectionId": "unreal-patterns/data-fragments",
+      "title": "정의 데이터의 조합",
+      "text": "## 정의 데이터의 조합\n\n- 적용: 종류별 콘텐츠 설정 조합과 확장이 반복되고 단일 거대 정의가 조건부 필드로 복잡해질 때.\n- 비적용: 단순 struct 하나로 충분하면 fragment 계층을 만들지 않는다. 미래 확장 가능성만으로 분리하지 않는다.\n- 소유권: fragment는 우선 정의를 소유한다. 가변 상태·생성된 Actor/Component의 소유자는 별도로 명시한다.\n- 연결과 수명: 정의/fragment 검증→인스턴스 구성→실제 이용자 연결→해제 순서와 필수 fragment 누락 처리를 정한다.\n- 비용과 검증: 탐색·자산 제작·타입 계약의 비용을 평가한다. 조합 누락·중복·Blueprint 소비자를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/lyra-inventory-and-equipment-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "fragment_definition"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/lyra-inventory-and-equipment-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "f3595a50ef3c21081a3084299db67e898f397f9fee0f7868c239ecd9861ada70"
+    },
+    {
+      "patternId": "ue.definition-instance",
+      "sectionId": "unreal-patterns/definition-instance",
+      "title": "정의 데이터와 실행 인스턴스",
+      "text": "## 정의 데이터와 실행 인스턴스\n\n- 적용: 같은 콘텐츠 정의를 여러 개체가 공유하면서 durability·ammo·진행도 같은 값은 개별로 바뀔 때.\n- 비적용: 모든 상수를 Data Asset화하지 않는다. 간단한 struct/default 값으로 충분하면 유지한다.\n- 소유권: Data Asset/DataTable은 공유 정의의 정본이며 읽기 전용 사용 계약을 둔다. 가변 실행 상태는 개체/인스턴스가 소유한다.\n- 연결과 수명: 정의 로드→검증→인스턴스 초기화→실행 상태 변경→리셋/저장/파괴를 연결한다. 정의가 누락됐을 때 부분 초기화를 성공으로 확정하지 않는다.\n- 비용과 검증: 자산 제작·cook·참조 이전 비용을 비교한다. 두 인스턴스가 동일 정의를 공유해도 실행 값이 섞이지 않는지 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/data-assets-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "mutable_instance_state",
+          "shared_definition"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/data-assets-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "c5148ac7a6e8ab78bbb2cf83ffc03122fe9df36259b559d1874030c8cb6c4e51"
+    },
+    {
+      "patternId": "ue.event-observer",
+      "sectionId": "unreal-patterns/event-observer",
+      "title": "결과 관찰과 구독",
+      "text": "## 결과 관찰과 구독\n\n- 적용: 하나의 규칙 결과를 UI·음향·다른 기능이 독립적으로 관찰할 때.\n- 비적용: 필수 처리 순서나 요청 응답을 무조건 broadcast로 바꾸지 않는다. 간단한 직접 호출 대안도 비교한다.\n- 소유권: 규칙 소유자가 상태를 확정한 뒤 사실을 알리고 관찰자는 표시/반응을 담당한다. 관찰자에 같은 확정 상태를 중복 소유시키지 않는다.\n- 연결과 수명: 등록 주체→중복 방지→통지→재진입→구독 해제→재활성화를 연결한다. widget 재생성·owner 종료·late callback을 확인한다.\n- 비용과 검증: 추적 가능성과 해제 책임이 추가된다. 중복 구독·통지 중 제거·순서 의존성·종료 뒤 호출을 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/delegates-and-lambda-functions-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "registration"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/delegates-and-lambda-functions-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "21156a497a996879f50bda93f37350f0829954a3a245653f4bb43218321552b0"
+    },
+    {
+      "patternId": "ue.gameplay-ability-system",
+      "sectionId": "unreal-patterns/gameplay-ability-system",
+      "title": "능력·효과·속성의 수명",
+      "text": "## 능력·효과·속성의 수명\n\n- 적용: 능력·효과·속성·예측·취소가 복잡하거나 프로젝트가 이미 GAS를 사용할 때.\n- 비적용: 쿨다운 하나 때문에 시스템을 도입하지 않는다. 기존 컴포넌트·timer·상태 전이의 비용과 비교한다.\n- 소유권: ASC 소유자와 Avatar의 수명을 구분한다. 지속 속성과 Pawn별 상태, 서버 확정/예측 역할을 기존 네트워크 계약과 연결한다.\n- 연결과 수명: 능력 부여→활성화→효과/태스크→취소/완료→possession/respawn→정리를 연결한다. 이전 Avatar의 작업이 새 Pawn에 적용되지 않게 한다.\n- 비용과 검증: 플러그인·콘텐츠·학습·네트워크 비용이 크다. 현재 엔진 API를 확인하고 부활·재접속·태스크 종료를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "ability_system"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "4a94ac0b357ee29efe50b6b51be4e1645362051805deb32b7f13439949479aca"
+    },
+    {
+      "patternId": "ue.gameplay-tags",
+      "sectionId": "unreal-patterns/gameplay-tags",
+      "title": "의미 분류와 질의",
+      "text": "## 의미 분류와 질의\n\n- 적용: 조합 가능한 의미 분류·조건 질의가 실제로 필요할 때.\n- 비적용: 수치 상태나 단독 확정 상태를 tag와 별도로 중복 관리하지 않는다. 단순 enum/값으로 충분한지 비교한다.\n- 소유권: tag 사전과 변경 소유자를 정하고 등록·계층 질의의 의미를 계약으로 둔다.\n- 연결과 수명: 등록→추가/제거→질의→이벤트→리셋/종료를 연결한다. 일시 tag의 중첩과 제거 책임을 확인한다.\n- 비용과 검증: 사전/콘텐츠/질의 유지 비용을 평가한다. 부모/자식 매칭·중복·리셋 후 잔류를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-tags-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "semantic_tags"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-tags-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "5c9e2f685b247dfd499d7ff37a99829ffcc4cf42d5cb0072dbf589efd0d8dd7d"
+    },
+    {
+      "patternId": "ue.independent-actor",
+      "sectionId": "unreal-patterns/independent-actor",
+      "title": "독립 월드 객체",
+      "text": "## 독립 월드 객체\n\n- 적용: 위치·충돌·스폰/파괴·식별이 독립적이며 월드와 상호작용해야 할 때.\n- 비적용: 단순 서비스의 관리 편의를 위해 Actor를 추가하지 않는다. 소유 Actor의 Component나 함수로 충분한지 비교한다.\n- 소유권: 월드 객체는 자신의 실행 상태를 관리하고 생성자는 생성 성공 후 참조와 소유 관계를 확정한다.\n- 연결과 수명: spawn 실패→참조 전달→호출→destroy/level unload를 명시한다. 파괴 후 timer/async 결과가 옛 객체를 되살리지 않게 한다.\n- 비용과 검증: 스폰 수·참조·복제·레벨 저장 비용을 평가한다. 생성 실패·레벨 전환·파괴 후 접근을 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "world_object"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "e63827c08fae1db780f9ea4786ea828f53444c03a4a9e2468935361e12925710"
+    },
+    {
+      "patternId": "ue.interface-capability",
+      "sectionId": "unreal-patterns/interface-capability",
+      "title": "능력의 계약",
+      "text": "## 능력의 계약\n\n- 적용: 여러 구현을 같은 능력 계약으로 사용하고 구현 교체가 실제로 필요할 때.\n- 비적용: 소유권·순서·실패를 interface가 자동 해결한다고 가정하지 않는다. 같은 단일 구현에 불필요한 추상화를 추가하지 않는다.\n- 소유권: interface는 이용자가 필요한 기능의 입력·결과·실패 계약만 노출한다. 상태 정본은 구체 소유자에 남는다.\n- 연결과 수명: 대상 획득→유효성/구현 여부→호출→실패/미구현→대상 종료 처리를 연결한다. Blueprint 구현도 소비자로 고려한다.\n- 비용과 검증: 호출 경로·대체 구현·Blueprint 연동 비용을 비교한다. 미구현·파괴 대상·부분 실패에서도 계약이 같은지 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "interface_capability"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "79e1f5a736e5228c378e8b0e079d2cfeef74902827d76adbf2f14f25c53fd43d"
+    },
+    {
+      "patternId": "ue.modular-features",
+      "sectionId": "unreal-patterns/modular-features",
+      "title": "기능 단위 활성화",
+      "text": "## 기능 단위 활성화\n\n- 적용: 기능을 콘텐츠와 함께 활성화/비활성화하고 조립하는 요구가 있을 때.\n- 비적용: 일반 클래스 분리를 Game Feature 플러그인화와 동일시하지 않는다. 단순 module/component 대안을 비교한다.\n- 소유권: 기능 상태와 등록한 서비스/component의 소유권을 분명히 하고 기존 실행 주체를 중복 생성하지 않는다.\n- 연결과 수명: 활성화→등록/주입→사용→비활성화→구독/작업/component 해제를 연결한다. 의존 플러그인과 재활성화를 확인한다.\n- 비용과 검증: 패키징·플러그인 의존성·활성 순서 비용이 있다. 비활성 뒤 잔류 객체/등록과 반복 활성화를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/game-features-and-modular-gameplay-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "modular_feature"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/game-features-and-modular-gameplay-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "8290393daabd9000075587a484c6625ffd666aac7399325c8210b96f74d0e098"
+    },
+    {
+      "patternId": "ue.object-pooling",
+      "sectionId": "unreal-patterns/object-pooling",
+      "title": "객체 재사용과 활성 세대",
+      "text": "## 객체 재사용과 활성 세대\n\n- 적용: 측정된 생성/폐기 비용이 의미 있고 재사용 계약을 지킬 수 있을 때.\n- 비적용: 측정 없는 성능 추측으로 pooling을 도입하지 않는다. 단순 생성/파괴 대안을 유지한다.\n- 소유권: 객체 수명과 활성화 한 회의 수명을 구분한다. 포인터 유효성만으로 옛 작업의 적용 권한을 판단하지 않는다.\n- 연결과 수명: 획득→reset→활성화→사용→timer/구독/async 취소→반환→재획득을 연결한다. 이전 활성 세대의 late result를 차단한다.\n- 비용과 검증: 메모리·reset·세대 관리 비용이 있다. 반환 뒤 callback·이중 반환·초기화 실패·상태 잔류를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "pool_activation"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "231bc99ed779e751a5686037ee763293d75419555cc52c495eabc4b3dce31be1"
+    },
+    {
+      "patternId": "ue.save-runtime-boundary",
+      "sectionId": "unreal-patterns/save-runtime-boundary",
+      "title": "저장 snapshot과 실행 상태",
+      "text": "## 저장 snapshot과 실행 상태\n\n- 적용: 저장 형식과 현재 World 객체 참조·실행 상태가 혼재할 때.\n- 비적용: SaveGame을 live state manager로 사용하지 않는다. 작은 설정/명시적 snapshot으로 충분한지 비교한다.\n- 소유권: 실행 상태 확정자와 저장 snapshot의 버전/완료 경계를 구분한다. 과거 저장값을 현재 객체 권위로 사용하지 않는다.\n- 연결과 수명: snapshot→직렬화/저장 완료→로드→검증/이전→현재 World 재바인딩→실패 처리를 연결한다.\n- 비용과 검증: 포맷 이전·로드 순서·참조 복구 비용이 있다. 부분 저장/실패·다른 World·구버전 데이터를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/saving-and-loading-your-game-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "save_snapshot"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/saving-and-loading-your-game-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "891e71ae050629f3c9aab8efed8ede6c0cc04665d26b16d3f30599b8073041a1"
+    },
+    {
+      "patternId": "ue.scoped-subsystem",
+      "sectionId": "unreal-patterns/scoped-subsystem",
+      "title": "범위에 맞는 서비스",
+      "text": "## 범위에 맞는 서비스\n\n- 적용: Engine, GameInstance, World, LocalPlayer 중 하나의 범위에서 여러 이용자가 공유하는 서비스가 필요할 때.\n- 비적용: GameMode/GameState/PlayerState 또는 기존 서비스가 이미 적절하면 재사용한다. 전역 접근 편의만으로 도입하지 않는다.\n- 소유권: 선택한 subsystem의 수명과 상태의 공유 범위를 일치시킨다. World별 상태를 전역이나 GameInstance에 무조건 모으지 않는다.\n- 연결과 수명: 초기화→필요 의존성 확인→이용자 연결→서비스 호출→이용자 해제→Deinitialize를 연결한다. PIE 다중 World와 여행 중 오래된 World 참조를 확인한다.\n- 비용과 검증: 접근 경로 변경과 테스트 격리 비용이 있다. 동일 프로세스의 두 World/LocalPlayer에서 상태가 섞이지 않는지 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/programming-subsystems-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "scoped_service"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/programming-subsystems-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "cc45d7e832d823ed045e44016d5ef22525394ad580767fc09842403dfc79f5a6"
+    },
+    {
+      "patternId": "ue.state-machine",
+      "sectionId": "unreal-patterns/state-machine",
+      "title": "상태 전이와 진입·종료",
+      "text": "## 상태 전이와 진입·종료\n\n- 적용: 허용 동작과 진입/종료/취소가 상태에 따라 달라질 때.\n- 비적용: 독립된 모든 상태를 거대 enum 하나에 합치지 않는다. 단순 전이 함수면 충분한지, StateTree가 실제로 필요한지 비교한다.\n- 소유권: 전이 확정자를 하나로 두고 UI·tag·복제 값은 그 상태의 역할에 맞게 파생한다.\n- 연결과 수명: 전이 조건→entry→실행→취소/실패→exit→다음 상태를 연결한다. 중복 entry/exit·재진입·병렬 작업을 확인한다.\n- 비용과 검증: 엔진 기능 의존성과 콘텐츠 편집 비용이 있다. 금지 전이·취소·파괴·상태별 정리·재시작을 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/overview-of-state-tree-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "state_transitions"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/overview-of-state-tree-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "5898f0b4d1e62334fce41a724f06d3a8743147aa903b90b14c16b8b7d99aa4e7"
+    },
+    {
+      "patternId": "ue.strategy-policy",
+      "sectionId": "unreal-patterns/strategy-policy",
+      "title": "교체 가능한 판정 규칙",
+      "text": "## 교체 가능한 판정 규칙\n\n- 적용: 실제로 교체되는 판정·전략이 반복되며 변경 이유가 분리될 때.\n- 비적용: 단순 분기까지 별도 클래스/UObject로 만들지 않는다. 함수·데이터 테이블·기존 소유자 대안을 비교한다.\n- 소유권: 정책은 입력에 대한 판정과 실패 의미를 갖고 실행 상태 정본을 임의로 중복 소유하지 않는다.\n- 연결과 수명: 정책 선택→의존성 전달→판정→적용 소유자→실패→교체/종료를 연결한다. UObject/GC가 필요한지 따로 판단한다.\n- 비용과 검증: 정책 수·디버깅·간접 호출 비용을 비교한다. 대체 정책도 같은 불변 조건과 실패 계약을 만족하는지 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-framework-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "strategy_rule"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-framework-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "325f2b4393cbf981cd441b3489c256a55a73c145d5df2084f463672bc3572b49"
+    },
+    {
+      "patternId": "ue.ui-viewmodel",
+      "sectionId": "unreal-patterns/ui-viewmodel",
+      "title": "표시 모델과 게임 규칙",
+      "text": "## 표시 모델과 게임 규칙\n\n- 적용: 표시 변환·관찰 상태와 게임 규칙이 혼재하고 UI 재사용/테스트가 필요할 때.\n- 비적용: 작은 위젯까지 무조건 MVVM화하지 않는다. 플러그인 적용성과 기존 binding 구조를 확인한다.\n- 소유권: 게임 규칙 소유자가 상태를 확정하고 ViewModel은 표시를 위한 파생값을 제공한다. LocalPlayer별 상태를 섞지 않는다.\n- 연결과 수명: widget attach→model 연결→관찰/갱신→detach→해제→재생성을 연결한다. stale binding·중복 구독·종료 순서를 확인한다.\n- 비용과 검증: binding·변환·플러그인 유지 비용이 있다. 두 플레이어·widget 재생성·game object 파괴를 검증한다.\n- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-viewmodel-for-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.",
+      "applicability": {
+        "concept": "unreal",
+        "validatedApiVersions": []
+      },
+      "selection": {
+        "facets": [
+          "ui_binding"
+        ]
+      },
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-viewmodel-for-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ],
+      "contentHash": "f0c32f875b643615f87374bfba5242c0abbb8f9ef3c1a2d4f8b43a243d415318"
+    }
+  ]
+} as const;

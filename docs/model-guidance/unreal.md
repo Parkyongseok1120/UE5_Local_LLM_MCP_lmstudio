@@ -55,7 +55,7 @@
 - 종료 책임: 등록한 delegate·타이머·ticker·비동기 작업을 해제하는 쪽.
 - 기존 기능 재사용: 엔진 기본 동작이나 기존 프로젝트 클래스가 이미 맡고 있는지.
 
-이 항목은 새 Manager나 Subsystem을 만들 근거가 아니다. 기존 소유자가 있으면 그곳에 둔다.
+현재 소유자가 기능의 수명·공유 범위·독립 책임과 맞으면 유지한다. 맞지 않으면 Component·독립 Actor·범위별 Subsystem·공유 정의 Data Asset과 개별 실행 상태 중 필요한 경계만 비교한다. 이미 있는 구현·종료 경로와 도입 비용을 반대 근거로 확인하고 생성→연결→실패→해제까지 설명한다. 이름이나 파일 길이만으로 새 소유자를 만들지 않는다.
 <!-- /guidance-section: responsibility -->
 
 <!-- guidance-section: lifetime -->

@@ -241,6 +241,11 @@ const COVERAGE_CLAIM = /(?:전체|모든)[^.\n]{0,20}?(\d+)\s*개\s*(?:의\s*)?(
 
 /** Footer when the answer claims more checked files than returned bodies. */
 export function fileCoverageNotice(source: ReturnedSources, answer: string): string | null {
+  // A withdrawn past claim is not a new assertion. Keep other clauses so a
+  // correction followed by a renewed overclaim still receives the notice.
+  answer = (answer || "").split(/(?<=[.!?。])\s+|\r?\n/u).filter(sentence =>
+    !/(?:철회|잘못(?:된|했| 쓴)|부정확|withdraw|retract|incorrect|mistaken)/iu.test(sentence)
+      || /(?:그래도|하지만|그러나|nevertheless|however|still)/iu.test(sentence)).join("\n");
   if (/(?:모든|전체)\s*(?:소스\s*)?파일(?:을|를)?\s*(?:모두\s*)?(?:확인|검토|읽)|\ball\s+(?:source\s+)?files\s+(?:were\s+)?(?:read|reviewed|checked)/iu.test(answer || ""))
     return "[파일 검토 범위] 파일 목록과 반환된 본문은 서로 다릅니다. 이 실행의 반환 자료만으로 저장소 전체의 의미 검토 완료를 증명하지 않았습니다. 읽은 구현과 미확인 범위를 구분해야 합니다.";
   const match = COVERAGE_CLAIM.exec(answer || "");

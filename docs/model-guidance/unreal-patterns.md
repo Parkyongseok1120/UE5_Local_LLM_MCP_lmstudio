@@ -1,0 +1,184 @@
+# Unreal 구조 패턴과 연결 수명
+
+일반 개념을 비교하기 위한 참고다. API의 세부 수명은 대상 엔진 버전의 공식 소스로 확인한다. 기존 구현·해제 경로·Blueprint 소비자를 반대 근거로 확인하며 패턴 추천은 수정 권한이나 결함 인증이 아니다.
+
+<!-- guidance-section: baseline -->
+For an Unreal code task, first check the feature's current owner, required lifetime, sharing scope, and definition versus instance state. Keep a suitable existing owner; when those boundaries differ, compare the smallest useful Component, Actor, scoped Subsystem, or Data Asset alternative. Check existing initialization, callers and teardown as counter-evidence. Explain wiring, failure, cleanup and cost when changing ownership. Missing evidence or budget means unevaluated, not no issue. Pattern advice and prior judgments never grant edit authority.
+<!-- /guidance-section: baseline -->
+
+<!-- guidance-section: component-composition -->
+## Actor 기능의 조합
+
+- 적용: Actor에 붙는 독립 기능을 여러 Actor가 조합하거나 기능별 상태·변경 이유가 분명할 때.
+- 비적용: 단순 계산 함수, 긴 파일, 적은 재사용 가능성만으로 분리하지 않는다. 기존 Component가 맞으면 확장한다.
+- 소유권: Actor가 개체 수명을 소유하고 Component는 해당 기능의 실행 상태만 확정한다. 다른 Component의 내부 상태를 직접 수정하지 않는다.
+- 연결과 수명: 생성/기본 설정→등록→의존성 연결→활성화→호출→비활성화/EndPlay를 연결한다. timer·delegate·비동기 작업의 종료와 재활성화 시 중복을 확인한다.
+- 비용과 검증: 의존 전달·Blueprint 기본값·복제 설정의 이전 비용을 비교한다. 기존 기능의 호출 경로·종료·다중 Actor 조합을 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/basic-components-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: component-composition -->
+
+<!-- guidance-section: independent-actor -->
+## 독립 월드 객체
+
+- 적용: 위치·충돌·스폰/파괴·식별이 독립적이며 월드와 상호작용해야 할 때.
+- 비적용: 단순 서비스의 관리 편의를 위해 Actor를 추가하지 않는다. 소유 Actor의 Component나 함수로 충분한지 비교한다.
+- 소유권: 월드 객체는 자신의 실행 상태를 관리하고 생성자는 생성 성공 후 참조와 소유 관계를 확정한다.
+- 연결과 수명: spawn 실패→참조 전달→호출→destroy/level unload를 명시한다. 파괴 후 timer/async 결과가 옛 객체를 되살리지 않게 한다.
+- 비용과 검증: 스폰 수·참조·복제·레벨 저장 비용을 평가한다. 생성 실패·레벨 전환·파괴 후 접근을 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: independent-actor -->
+
+<!-- guidance-section: scoped-subsystem -->
+## 범위에 맞는 서비스
+
+- 적용: Engine, GameInstance, World, LocalPlayer 중 하나의 범위에서 여러 이용자가 공유하는 서비스가 필요할 때.
+- 비적용: GameMode/GameState/PlayerState 또는 기존 서비스가 이미 적절하면 재사용한다. 전역 접근 편의만으로 도입하지 않는다.
+- 소유권: 선택한 subsystem의 수명과 상태의 공유 범위를 일치시킨다. World별 상태를 전역이나 GameInstance에 무조건 모으지 않는다.
+- 연결과 수명: 초기화→필요 의존성 확인→이용자 연결→서비스 호출→이용자 해제→Deinitialize를 연결한다. PIE 다중 World와 여행 중 오래된 World 참조를 확인한다.
+- 비용과 검증: 접근 경로 변경과 테스트 격리 비용이 있다. 동일 프로세스의 두 World/LocalPlayer에서 상태가 섞이지 않는지 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/programming-subsystems-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: scoped-subsystem -->
+
+<!-- guidance-section: definition-instance -->
+## 정의 데이터와 실행 인스턴스
+
+- 적용: 같은 콘텐츠 정의를 여러 개체가 공유하면서 durability·ammo·진행도 같은 값은 개별로 바뀔 때.
+- 비적용: 모든 상수를 Data Asset화하지 않는다. 간단한 struct/default 값으로 충분하면 유지한다.
+- 소유권: Data Asset/DataTable은 공유 정의의 정본이며 읽기 전용 사용 계약을 둔다. 가변 실행 상태는 개체/인스턴스가 소유한다.
+- 연결과 수명: 정의 로드→검증→인스턴스 초기화→실행 상태 변경→리셋/저장/파괴를 연결한다. 정의가 누락됐을 때 부분 초기화를 성공으로 확정하지 않는다.
+- 비용과 검증: 자산 제작·cook·참조 이전 비용을 비교한다. 두 인스턴스가 동일 정의를 공유해도 실행 값이 섞이지 않는지 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/data-assets-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: definition-instance -->
+
+<!-- guidance-section: data-fragments -->
+## 정의 데이터의 조합
+
+- 적용: 종류별 콘텐츠 설정 조합과 확장이 반복되고 단일 거대 정의가 조건부 필드로 복잡해질 때.
+- 비적용: 단순 struct 하나로 충분하면 fragment 계층을 만들지 않는다. 미래 확장 가능성만으로 분리하지 않는다.
+- 소유권: fragment는 우선 정의를 소유한다. 가변 상태·생성된 Actor/Component의 소유자는 별도로 명시한다.
+- 연결과 수명: 정의/fragment 검증→인스턴스 구성→실제 이용자 연결→해제 순서와 필수 fragment 누락 처리를 정한다.
+- 비용과 검증: 탐색·자산 제작·타입 계약의 비용을 평가한다. 조합 누락·중복·Blueprint 소비자를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/lyra-inventory-and-equipment-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: data-fragments -->
+
+<!-- guidance-section: asset-manager -->
+## 콘텐츠 식별과 비동기 로드
+
+- 적용: 콘텐츠 ID, 지연 로드, 의존성, cook 관리가 기능 요구일 때.
+- 비적용: 작은 직접 참조까지 모두 Asset Manager로 옮기지 않는다. 기존 로드 경로와 soft reference만으로 충분한지 비교한다.
+- 소유권: 정의/콘텐츠 식별과 로드 요청의 수명을 구분한다. 로드 완료가 이용자 생존이나 적용 성공을 의미하지 않는다.
+- 연결과 수명: 요청 핸들 생성→취소/완료→현재 소유자와 요청 세대 확인→적용→참조 해제/unload를 연결한다. 취소와 완료의 경합을 처리한다.
+- 비용과 검증: 로드 지연·자산 의존성·cook 설정 비용이 있다. owner 파괴·요청 교체·실패·누락 콘텐츠를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/asset-management-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: asset-manager -->
+
+<!-- guidance-section: interface-capability -->
+## 능력의 계약
+
+- 적용: 여러 구현을 같은 능력 계약으로 사용하고 구현 교체가 실제로 필요할 때.
+- 비적용: 소유권·순서·실패를 interface가 자동 해결한다고 가정하지 않는다. 같은 단일 구현에 불필요한 추상화를 추가하지 않는다.
+- 소유권: interface는 이용자가 필요한 기능의 입력·결과·실패 계약만 노출한다. 상태 정본은 구체 소유자에 남는다.
+- 연결과 수명: 대상 획득→유효성/구현 여부→호출→실패/미구현→대상 종료 처리를 연결한다. Blueprint 구현도 소비자로 고려한다.
+- 비용과 검증: 호출 경로·대체 구현·Blueprint 연동 비용을 비교한다. 미구현·파괴 대상·부분 실패에서도 계약이 같은지 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: interface-capability -->
+
+<!-- guidance-section: event-observer -->
+## 결과 관찰과 구독
+
+- 적용: 하나의 규칙 결과를 UI·음향·다른 기능이 독립적으로 관찰할 때.
+- 비적용: 필수 처리 순서나 요청 응답을 무조건 broadcast로 바꾸지 않는다. 간단한 직접 호출 대안도 비교한다.
+- 소유권: 규칙 소유자가 상태를 확정한 뒤 사실을 알리고 관찰자는 표시/반응을 담당한다. 관찰자에 같은 확정 상태를 중복 소유시키지 않는다.
+- 연결과 수명: 등록 주체→중복 방지→통지→재진입→구독 해제→재활성화를 연결한다. widget 재생성·owner 종료·late callback을 확인한다.
+- 비용과 검증: 추적 가능성과 해제 책임이 추가된다. 중복 구독·통지 중 제거·순서 의존성·종료 뒤 호출을 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/delegates-and-lambda-functions-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: event-observer -->
+
+<!-- guidance-section: strategy-policy -->
+## 교체 가능한 판정 규칙
+
+- 적용: 실제로 교체되는 판정·전략이 반복되며 변경 이유가 분리될 때.
+- 비적용: 단순 분기까지 별도 클래스/UObject로 만들지 않는다. 함수·데이터 테이블·기존 소유자 대안을 비교한다.
+- 소유권: 정책은 입력에 대한 판정과 실패 의미를 갖고 실행 상태 정본을 임의로 중복 소유하지 않는다.
+- 연결과 수명: 정책 선택→의존성 전달→판정→적용 소유자→실패→교체/종료를 연결한다. UObject/GC가 필요한지 따로 판단한다.
+- 비용과 검증: 정책 수·디버깅·간접 호출 비용을 비교한다. 대체 정책도 같은 불변 조건과 실패 계약을 만족하는지 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-framework-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: strategy-policy -->
+
+<!-- guidance-section: state-machine -->
+## 상태 전이와 진입·종료
+
+- 적용: 허용 동작과 진입/종료/취소가 상태에 따라 달라질 때.
+- 비적용: 독립된 모든 상태를 거대 enum 하나에 합치지 않는다. 단순 전이 함수면 충분한지, StateTree가 실제로 필요한지 비교한다.
+- 소유권: 전이 확정자를 하나로 두고 UI·tag·복제 값은 그 상태의 역할에 맞게 파생한다.
+- 연결과 수명: 전이 조건→entry→실행→취소/실패→exit→다음 상태를 연결한다. 중복 entry/exit·재진입·병렬 작업을 확인한다.
+- 비용과 검증: 엔진 기능 의존성과 콘텐츠 편집 비용이 있다. 금지 전이·취소·파괴·상태별 정리·재시작을 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/overview-of-state-tree-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: state-machine -->
+
+<!-- guidance-section: gameplay-tags -->
+## 의미 분류와 질의
+
+- 적용: 조합 가능한 의미 분류·조건 질의가 실제로 필요할 때.
+- 비적용: 수치 상태나 단독 확정 상태를 tag와 별도로 중복 관리하지 않는다. 단순 enum/값으로 충분한지 비교한다.
+- 소유권: tag 사전과 변경 소유자를 정하고 등록·계층 질의의 의미를 계약으로 둔다.
+- 연결과 수명: 등록→추가/제거→질의→이벤트→리셋/종료를 연결한다. 일시 tag의 중첩과 제거 책임을 확인한다.
+- 비용과 검증: 사전/콘텐츠/질의 유지 비용을 평가한다. 부모/자식 매칭·중복·리셋 후 잔류를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-tags-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: gameplay-tags -->
+
+<!-- guidance-section: gameplay-ability-system -->
+## 능력·효과·속성의 수명
+
+- 적용: 능력·효과·속성·예측·취소가 복잡하거나 프로젝트가 이미 GAS를 사용할 때.
+- 비적용: 쿨다운 하나 때문에 시스템을 도입하지 않는다. 기존 컴포넌트·timer·상태 전이의 비용과 비교한다.
+- 소유권: ASC 소유자와 Avatar의 수명을 구분한다. 지속 속성과 Pawn별 상태, 서버 확정/예측 역할을 기존 네트워크 계약과 연결한다.
+- 연결과 수명: 능력 부여→활성화→효과/태스크→취소/완료→possession/respawn→정리를 연결한다. 이전 Avatar의 작업이 새 Pawn에 적용되지 않게 한다.
+- 비용과 검증: 플러그인·콘텐츠·학습·네트워크 비용이 크다. 현재 엔진 API를 확인하고 부활·재접속·태스크 종료를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: gameplay-ability-system -->
+
+<!-- guidance-section: modular-features -->
+## 기능 단위 활성화
+
+- 적용: 기능을 콘텐츠와 함께 활성화/비활성화하고 조립하는 요구가 있을 때.
+- 비적용: 일반 클래스 분리를 Game Feature 플러그인화와 동일시하지 않는다. 단순 module/component 대안을 비교한다.
+- 소유권: 기능 상태와 등록한 서비스/component의 소유권을 분명히 하고 기존 실행 주체를 중복 생성하지 않는다.
+- 연결과 수명: 활성화→등록/주입→사용→비활성화→구독/작업/component 해제를 연결한다. 의존 플러그인과 재활성화를 확인한다.
+- 비용과 검증: 패키징·플러그인 의존성·활성 순서 비용이 있다. 비활성 뒤 잔류 객체/등록과 반복 활성화를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/game-features-and-modular-gameplay-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: modular-features -->
+
+<!-- guidance-section: ui-viewmodel -->
+## 표시 모델과 게임 규칙
+
+- 적용: 표시 변환·관찰 상태와 게임 규칙이 혼재하고 UI 재사용/테스트가 필요할 때.
+- 비적용: 작은 위젯까지 무조건 MVVM화하지 않는다. 플러그인 적용성과 기존 binding 구조를 확인한다.
+- 소유권: 게임 규칙 소유자가 상태를 확정하고 ViewModel은 표시를 위한 파생값을 제공한다. LocalPlayer별 상태를 섞지 않는다.
+- 연결과 수명: widget attach→model 연결→관찰/갱신→detach→해제→재생성을 연결한다. stale binding·중복 구독·종료 순서를 확인한다.
+- 비용과 검증: binding·변환·플러그인 유지 비용이 있다. 두 플레이어·widget 재생성·game object 파괴를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-viewmodel-for-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: ui-viewmodel -->
+
+<!-- guidance-section: object-pooling -->
+## 객체 재사용과 활성 세대
+
+- 적용: 측정된 생성/폐기 비용이 의미 있고 재사용 계약을 지킬 수 있을 때.
+- 비적용: 측정 없는 성능 추측으로 pooling을 도입하지 않는다. 단순 생성/파괴 대안을 유지한다.
+- 소유권: 객체 수명과 활성화 한 회의 수명을 구분한다. 포인터 유효성만으로 옛 작업의 적용 권한을 판단하지 않는다.
+- 연결과 수명: 획득→reset→활성화→사용→timer/구독/async 취소→반환→재획득을 연결한다. 이전 활성 세대의 late result를 차단한다.
+- 비용과 검증: 메모리·reset·세대 관리 비용이 있다. 반환 뒤 callback·이중 반환·초기화 실패·상태 잔류를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: object-pooling -->
+
+<!-- guidance-section: save-runtime-boundary -->
+## 저장 snapshot과 실행 상태
+
+- 적용: 저장 형식과 현재 World 객체 참조·실행 상태가 혼재할 때.
+- 비적용: SaveGame을 live state manager로 사용하지 않는다. 작은 설정/명시적 snapshot으로 충분한지 비교한다.
+- 소유권: 실행 상태 확정자와 저장 snapshot의 버전/완료 경계를 구분한다. 과거 저장값을 현재 객체 권위로 사용하지 않는다.
+- 연결과 수명: snapshot→직렬화/저장 완료→로드→검증/이전→현재 World 재바인딩→실패 처리를 연결한다.
+- 비용과 검증: 포맷 이전·로드 순서·참조 복구 비용이 있다. 부분 저장/실패·다른 World·구버전 데이터를 검증한다.
+- 근거: [Epic 공식 문서](https://dev.epicgames.com/documentation/en-us/unreal-engine/saving-and-loading-your-game-in-unreal-engine). 일반 개념 참고이며 현재 설치 엔진 API 검증을 의미하지 않는다.
+<!-- /guidance-section: save-runtime-boundary -->
+

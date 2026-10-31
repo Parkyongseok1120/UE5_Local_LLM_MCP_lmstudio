@@ -682,8 +682,7 @@ class WorkingContext {
   }
 
   noteRecordRefs(note) {
-    const requested = new Set(["decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"]
-      .flatMap(key => (note?.[key] || []).flatMap(item => item.refs || [])));
+    const requested = modelNotes.noteRefs(note);
     const verified = new Map();
     if (!requested.size) return verified;
     for (const [id, version] of this.refs) {

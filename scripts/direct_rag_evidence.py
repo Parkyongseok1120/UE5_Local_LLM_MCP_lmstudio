@@ -7,6 +7,21 @@ import json
 from typing import Any
 
 from direct_rag_result import render_model_json
+from pathlib import Path
+from direct_rag_corpus import corpus_capabilities
+
+
+def pattern_search_metadata(index: Path, expected_generation: str | None, *, requested: bool, matches: list[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if requested:
+        coverage = corpus_capabilities(index, expected_generation=expected_generation).get("architecturePatterns")
+        result["architecturePatternCorpus"] = {
+            "status": "unknown" if coverage is None else "no_pattern_corpus" if coverage["count"] == 0 else "matched" if matches else "no_match",
+            **(coverage or {}),
+        }
+    if any(item.get("patternId") for item in matches):
+        result["indexGenerationId"] = expected_generation
+    return result
 
 _NON_FACTUAL_SOURCES = frozenset({"rag_sidecar", "unreal_failure_memory"})
 _TRUNCATED_SUFFIX = "\n...[truncated]"
@@ -89,6 +104,14 @@ def compact_match_refs(
 ) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     for row in factual_rows(rows)[:limit]:
+        metadata = row.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         candidate = {
             key: (
                 value
@@ -105,6 +128,8 @@ def compact_match_refs(
                 "symbolKind": row.get("symbol_kind"),
                 "score": row.get("score"),
                 "otherProject": row.get("otherProject"),
+                **({key: metadata[key] for key in ("patternId", "contentHash", "catalogHash", "patternConcept", "validatedApiVersions", "patternSources") if key in metadata}
+                   if metadata.get("guidanceKind") == "architecture_pattern" else {}),
             }.items()
             if value not in (None, "", False)
         }

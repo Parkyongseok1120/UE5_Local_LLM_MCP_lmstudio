@@ -12,8 +12,10 @@ const { sanitizeDerivedOperationalText } = require("./durable-memory-sanitizer.j
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 const { exchangeIndex, uniqueLatest } = require("./tool-exchange-index.js");
 const { resultSemantics } = require("./tool-result-semantics.js");
+const architecture = require("./architecture-note-contract.js");
 
 const NOTE_START = "\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n";
+const NOTE_V2_START = "\n<!-- direct-continuity-note-v2 -->\n<continuity-note>\n";
 const NOTE_END = "\n</continuity-note>";
 const NOTE_MARKER = "[Prior assistant continuity note v1]";
 const MAX_NOTE_CHARS = 1500;
@@ -139,17 +141,31 @@ function insideCodeFence(text, offset) {
 
 function splitVisibleAnswer(text) {
   const source = String(text || "");
-  const start = source.lastIndexOf(NOTE_START);
+  const v2 = source.lastIndexOf(NOTE_V2_START)>source.lastIndexOf(NOTE_START);
+  const marker = v2 ? NOTE_V2_START : NOTE_START;
+  const start = source.lastIndexOf(marker);
+  if(start<0) {
+    const reserved=/\n<!-- direct-continuity-note-v[12](?: -->|$)/gu;
+    const partial=[...source.matchAll(reserved)].at(-1);
+    if(partial && !insideCodeFence(source,partial.index))return {visibleText:source.slice(0,partial.index).trimEnd() || "The model did not provide a visible answer.",hasFooter:true,note:null};
+  }
   if (start < 0 || insideCodeFence(source, start)) {
     return { visibleText: source, hasFooter: false, note: null };
   }
   const visibleText = source.slice(0, start).trimEnd() || "The model did not provide a visible answer.";
-  const suffix = source.slice(start + NOTE_START.length).trimEnd();
+  const suffix = source.slice(start + marker.length).trimEnd();
   if (!suffix.endsWith(NOTE_END)) return { visibleText, hasFooter: true, note: null };
   const rawJson = suffix.slice(0, -NOTE_END.length).trim();
-  if (rawJson.length > 1800) return { visibleText, hasFooter: true, note: null };
+  if (rawJson.length > (v2 ? architecture.LIMITS.footerChars : 1800)) return { visibleText, hasFooter: true, note: null };
   try {
-    return { visibleText, hasFooter: true, note: validateDraftNote(JSON.parse(rawJson)) };
+    const parsed=JSON.parse(rawJson);
+    if(!v2)return { visibleText, hasFooter: true, note: validateDraftNote(parsed) };
+    if(!isRecord(parsed) || parsed.schemaVersion!==2 || !exactKeys(parsed,["schemaVersion","decisions","rejectedHypotheses","openQuestions","reviewClaims","architecture"]))
+      return {visibleText,hasFooter:true,note:null,architectureError:"invalid_v2_envelope"};
+    const general=Object.fromEntries(["decisions","rejectedHypotheses","openQuestions","reviewClaims"].filter(k=>Object.hasOwn(parsed,k)).map(k=>[k,parsed[k]]));
+    const patch=parsed.architecture===undefined?undefined:architecture.validateArchitecturePatch(parsed.architecture);
+    return {visibleText,hasFooter:true,note:Object.keys(general).length?validateDraftNote(general):null,
+      architecturePatch:patch || undefined,architectureError:patch===null?"invalid_architecture_patch":undefined,footerVersion:2};
   } catch {
     return { visibleText, hasFooter: true, note: null };
   }
@@ -332,10 +348,17 @@ function reconcileStoredNote(note, messages, additionalVerifiedRefs = new Set(),
   const reconciled = { scope: validated.scope,
     ...verifiedRefs(validated, provenance.verifiedToolIds, provenance, additionalVerifiedRefs) };
   if (options.discardReviewClaims) delete reconciled.reviewClaims;
-  return validateStoredNote(reconciled);
+  return validateStoredNote(architecture.mergeArchitecture(reconciled, architecture.architecturePart(validated), validated.scope));
 }
 
 function validateStoredNote(value) {
+  if (isRecord(value) && value.schemaVersion===2) {
+    if(!exactKeys(value,["schemaVersion","scope","decisions","rejectedHypotheses","openQuestions","reviewClaims","architecture","architectureTombstones","architectureOmittedCount"]))return null;
+    const general=validateStoredNote(architecture.generalNote(value));
+    if(!general || JSON.stringify(value).length>architecture.LIMITS.storedChars)return null;
+    const part=architecture.architecturePart(value);
+    return part?architecture.mergeArchitecture(general,part,general.scope):general;
+  }
   if (!isRecord(value) || !exactKeys(value, ["scope", "decisions", "rejectedHypotheses", "openQuestions", "reviewClaims"])) return null;
   if (!isRecord(value.scope) || !exactKeys(value.scope, ["objectiveFingerprint", "projectIdentity"])) return null;
   const fingerprint = value.scope.objectiveFingerprint;
@@ -355,6 +378,8 @@ function validateStoredNote(value) {
 }
 
 function renderAssistantNote(note, messages = []) {
+  // Persisted architecture is optional reference data, never part of the base note input.
+  note = architecture.generalNote(note);
   const provenance = provenanceFromMessages(messages);
   const records = [...provenance.observations];
   const identity = value => noteFileIdentity(value, provenance.projectDescriptor);
@@ -495,6 +520,10 @@ class ContinuityNoteStore {
 }
 
 module.exports = {
+  generalNote: architecture.generalNote,
+  mergeArchitecture: architecture.mergeArchitecture,
+  architecturePart: architecture.architecturePart,
+  noteRefs: architecture.noteRefs,
   resolveNoteUpdate,
   NOTE_INSTRUCTION,
   NOTE_MARKER,

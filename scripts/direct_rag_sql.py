@@ -68,6 +68,7 @@ def _select_columns(available: set[str], *, score: str) -> list[str]:
         f"chunks.{column}" if column in available else f"'' as {column}"
         for column in META_COLUMNS
     )
+    columns.append("chunks.metadata_json as metadata" if "metadata_json" in available else "'{}' as metadata")
     return columns
 
 

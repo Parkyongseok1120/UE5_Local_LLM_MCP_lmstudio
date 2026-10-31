@@ -15,6 +15,11 @@ import { autoGuidanceCandidates, designGuidanceCandidates, focusedGuidanceCandid
 import { selectGuidanceTopics, type GuidanceIntent } from "./guidance-topic-selection";
 import type { ToolScope } from "./tool-scope";
 import { referenceGuidanceScope } from "./reference-context";
+import { bundledArchitectureCatalog } from "./generated-design-guidance";
+import { architectureEnabled, selectArchitectureContext, ARCHITECTURE_BASELINE } from "./architecture-policy";
+import { projectArchitectureEvidence } from "./architecture-observation";
+import { renderArchitectureContext } from "./architecture-input";
+import type {ArchitectureBinding,ArchitectureSnapshot,ArchitectureInputRefs,PatternCard} from "./architecture-contracts";
 
 /** Older reasoning a projection round keeps, newest first, when no
  * pastReasoningTokens budget is configured. */
@@ -27,6 +32,8 @@ type RetainedGuidance = { ids: readonly string[]; instruction?: string; selectio
 /** Optional reference text admitted earlier in this execution, or the one it dropped. */
 export type GuidanceRetention = { kept?: RetainedGuidance; dropped?: RetainedGuidance; pendingScope?: string; roundInstructions?: string };
 type RoundInputOptions = {
+  architecture?:{binding:ArchitectureBinding;snapshot:ArchitectureSnapshot};
+  architectureObjectiveText?:string;
   objective?: import("./execution-contracts").TaskObjective;
   mutationTargets?: Array<{path:string;sourceKey?:string}>;
   ctl: PredictionLoopHandlerController; config: DirectConfig;
@@ -103,6 +110,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   if (initialReasoningBounded) { rewriteCauses.add("reasoning_bound"); rewritingInput = true; }
   let referenceSelectionPending = true;
   let selectedReference: { instruction?: string; referenceData?: string } = {};
+  let architectureInputRefs:ArchitectureInputRefs|undefined;
+  let architectureVariants:Array<{text:string;issued:ArchitectureInputRefs}>=[];
+  let architectureSelection:Record<string,unknown>|undefined;
   const assembleModelInput = createInputAssembler({ tokenSource, config, roundTools,
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
@@ -384,6 +394,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
     let selectionScope = "unscoped";
     let applicabilityScope = "unscoped";
+    let effectiveArchitectureScope:ReturnType<typeof referenceGuidanceScope>|undefined;
     // A malformed optional catalogue/selector omits guidance. Cancellation and
     // baseline measurement still belong to their existing execution owners.
     ctl.guardAbort();
@@ -391,6 +402,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       if (focused && options.guidanceScope) {
         const snapshot = evidenceManager.referenceSnapshot(workingHistory);
         const guidanceScope = referenceGuidanceScope(options.guidanceScope, snapshot);
+        effectiveArchitectureScope=guidanceScope;
         selectionScope = JSON.stringify([guidanceScope.engine, guidanceScope.source, snapshot.applicability]);
         applicabilityScope = selectionScope;
         if (config.designGuidanceMode === "auto") {
@@ -409,6 +421,27 @@ export async function prepareRoundInput(options: RoundInputOptions) {
           : options.guidanceDocuments || []);
       }
     } catch { ctl.guardAbort(); }
+    architectureVariants=[];
+    const architectureOn=effectiveArchitectureScope && architectureEnabled(config,effectiveArchitectureScope) && !finalizing && !options.referenceRecovery;
+    if(architectureOn && options.objective?.kind!=="explain") {
+      const sources=evidenceManager.architectureSources(workingHistory);
+      const catalog=bundledArchitectureCatalog as unknown as {catalogHash:string;patterns:PatternCard[]};
+      const observations=projectArchitectureEvidence(sources);
+      const choice=selectArchitectureContext({enabled:true,objectiveKind:options.objective?.kind||"mutate",observations,patterns:catalog.patterns,objectiveText:options.architectureObjectiveText});
+      architectureSelection={depth:choice.depth,reasonCodes:choice.reasons,observedFacetCount:observations.reduce((n,o)=>n+o.facets.length,0),requestedPatternIds:choice.selectedPatternIds};
+      const binding=options.architecture?.binding || {executionId,lineage:executionId,objectiveFingerprint,scopeRevision:0,catalogHash:catalog.catalogHash};
+      const state=options.architecture?.snapshot || {architecture:[],architectureTombstones:[],architectureOmittedCount:0};
+      candidates=candidates.flatMap(candidate=>{
+        const cards=catalog.patterns.filter(p=>choice.selectedPatternIds.includes(p.patternId)).slice(0,Math.max(0,6-candidate.ids.length));
+        const variants=[cards,[]].filter((cards,i,all)=>i===0 || all[0].length>0).map(cards=>renderArchitectureContext(binding,modelInputId,state,sources.map(s=>s.ref),cards,choice.depth,Boolean(options.architecture && noteEnabled),evidenceManager.architecturePatterns(workingHistory)));
+        architectureVariants.push(...variants);
+        return [...variants.map(view=>({...candidate,instruction:candidate.instruction+"\n"+ARCHITECTURE_BASELINE,
+          referenceData:[candidate.referenceData,view.text].filter(Boolean).join("\n\n")})),
+          {...candidate,instruction:candidate.instruction+"\n"+ARCHITECTURE_BASELINE}];
+      });
+      // Preserve the original minimal fallback and the existing bounded admission attempts.
+      if(candidates.length>7)candidates=[...candidates.slice(0,6),candidates[candidates.length-1]];
+    }
     // A topic from the request, a returned observation or the configured mode
     // backs the material; the bare core fallback stays generic.
     const topicBacked = config.designGuidanceMode === "auto"
@@ -445,6 +478,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         admissionWater: reuse || topicBacked ? "high" : "low" });
     assembledInput = guidance.assembled;
     selectedReference = { instruction: guidance.selectedInstruction, referenceData: guidance.selectedReferenceData };
+    architectureInputRefs=architectureVariants.find(view=>guidance.selectedReferenceData?.includes(view.text))?.issued;
     const telemetry: typeof guidance.telemetry & { stickyCause?: string } = { ...guidance.telemetry };
     const included = telemetry.reason === "included";
     // The omission reasons describe the instruction actually offered.
@@ -510,6 +544,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   assembledInput = await assembleModelInput(workingHistory, {
     instructions: selectedReference.instruction ? [...roundScopeInstructions, selectedReference.instruction] : roundScopeInstructions,
     referenceData: selectedReference.referenceData });
+  if(!selectedReference.referenceData || !architectureVariants.some(view=>selectedReference.referenceData!.includes(view.text)))architectureInputRefs=undefined;
   if (assembledInput.composition.forcedRewrite && !rewritingInput && !finalizing
     && (options.guidanceRetention?.pendingScope || options.guidanceRetention?.dropped)) {
     rewriteCauses.add(assembledInput.composition.forcedRewrite); rewritingInput = true;
@@ -522,6 +557,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   if (assembledInput.composition.forcedRewrite) rewriteCauses.add(assembledInput.composition.forcedRewrite);
   if (guidanceEvent) ctl.debug({ ...guidanceEvent, finalInputTokens: assembledInput.measurement.inputTokens });
   const finalMeasurement = assembledInput.measurement;
+  if(architectureInputRefs && !architectureVariants.some(view=>assembledInput.history.getMessagesArray().some(message=>message.getText().includes(view.text))))architectureInputRefs=undefined;
+  if(config.showDebugInfo && architectureSelection)ctl.debug({event:"architecture_context",executionId,modelInputId,roundIndex,
+    ...architectureSelection,admittedPatternIds:architectureInputRefs?[...architectureInputRefs.patterns.values()].map(p=>p.patternId):[],
+    omittedReasons:architectureInputRefs?[]:["architecture_view_omitted_by_shared_admission"],
+    actualAddedTokens:"unknown",sharedReferenceAddedTokens:guidanceEvent?.addedTokens ?? "unknown"});
   projectionExhausted = releasedAllPins && contextManager.shouldProjectEvidence(finalMeasurement, hasReadTools,
     minimumReadBudget(roundTools));
   const pressure = Object.freeze({ workingSetExhausted: projectionExhausted, measuredStage: "final" as const });
@@ -550,7 +590,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   }
   if (config.contextManagementMode !== "legacy") compacted = compacted && lowWater.success;
   if (options.guidanceRetention) options.guidanceRetention.roundInstructions = instructionsKey;
-  return { kind: "ready" as const, ...baseResult(), before, workingHistory, modelHistory: workingHistory,
+  return { kind: "ready" as const, ...baseResult(), architectureInputRefs, before, workingHistory, modelHistory: workingHistory,
     modelComposition: assembledInput.composition, modelInput: assembledInput.history, finalMeasurement, assembledInput,
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
     lowWater, rewriteCauses: [...rewriteCauses], projectionApplied, projectionExhausted, pressure, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,

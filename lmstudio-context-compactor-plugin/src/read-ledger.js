@@ -135,10 +135,25 @@ class ReadLedger {
     this.returnedSpans = [];
     this.returnedFactsIncomplete = false;
     this.returnedContracts = [];
+    this.sourceObservations = new Map();
     this.counters = { redundantRereads: 0, duplicatedChars: 0, archiveRepages: 0, deliveries: 0 };
   }
 
   get size() { return this.items.size; }
+  /** A delivered body stays historical evidence after a write, but cannot be
+   * reissued as the current observed version until a later direct read. */
+  invalidateReturnedSource(sourceKey) {
+    this.recordSourceObservation(sourceKey,{...this.sourceObservation(sourceKey),invalidated:true});
+  }
+  invalidateSourceObservations() {
+    for(const value of this.sourceObservations.values())value.invalidated=true;
+  }
+  sourceObservation(sourceKey) {return this.sourceObservations.get(sourceKey) || null;}
+  recordSourceObservation(sourceKey,value) {
+    this.sourceObservations.delete(sourceKey);
+    this.sourceObservations.set(sourceKey,value);
+    if(this.sourceObservations.size>MAX_RESULT_SIZES){this.sourceObservations.delete(this.sourceObservations.keys().next().value);this.returnedFactsIncomplete=true;}
+  }
 
   /** Returned text is evidence of delivery, not hash/range coverage. In
    * particular search hits must never suppress a later full source read. */
@@ -155,6 +170,8 @@ class ReadLedger {
       const row = {sourceKey:sourceKey || fileSourceKey({...value,...source,path}),path:String(path).slice(0,4096),
         sourceVersion:String(source.sha256 || source.hash || source.sourceVersion || "unknown"),via,executionId,
         lines:lines.filter(([line,text])=>Number.isSafeInteger(line)&&line>0&&typeof text==='string')};
+      if(via==="body" && executionId)this.recordSourceObservation(row.sourceKey,
+        {version:SHA256.test(row.sourceVersion)?row.sourceVersion:null,invalidated:!SHA256.test(row.sourceVersion),historical:false});
       this.returnedSpans.push({sourceKey:row.sourceKey,path:row.path,sourceVersion:row.sourceVersion,via,executionId,
         ranges:normalizeRanges(row.lines.map(([line])=>[line,line]))});
       if(this.returnedSpans.length>256){this.returnedSpans.shift();this.returnedFactsIncomplete=true;}
@@ -230,7 +247,7 @@ class ReadLedger {
         if(end-start>=f.lines.size)return false;
         for(let line=start;line<=end;line++)if(!f.lines.has(line))return false;return true;
       }));
-      return {...f,completeText,bodyReturned:f.bodyReturned||spans.some(r=>r.via!=="search_hit"),
+      return {...f,...(this.sourceObservation(f.sourceKey)?.invalidated?{sourceInvalidated:true}:{}),completeText,bodyReturned:f.bodyReturned||spans.some(r=>r.via!=="search_hit"),
         scope:spans.every(r=>r.executionId&&r.executionId===executionId)?"execution":"conversation"};
     });
     return {files:projected,contractIds:new Set(this.returnedContracts.map(r=>r.id)),
@@ -408,6 +425,7 @@ class ReadLedger {
     return { schemaVersion: 2, entries: this.entries().map(({ sequence: _sequence, ...entry }) => entry),
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
       returnedText:this.returnedText,returnedContracts:this.returnedContracts,returnedSpans:this.returnedSpans,returnedFactsIncomplete:this.returnedFactsIncomplete,
+      sourceObservations:[...this.sourceObservations].map(([key,value])=>[key,{...value,historical:true}]),
       sizeHints: [...this.sizeHints].slice(-MAX_RESULT_SIZES) };
   }
 
@@ -416,6 +434,10 @@ class ReadLedger {
   load(value) {
     this.reset();
     if (!value || ![1, 2].includes(value.schemaVersion) || !Array.isArray(value.entries)) return false;
+    for(const row of (Array.isArray(value.sourceObservations)?value.sourceObservations:[]).slice(-MAX_RESULT_SIZES)) {
+      if(!Array.isArray(row) || row.length!==2 || typeof row[0]!=="string" || row[0].length>1200 || !row[1] || typeof row[1]!=="object")continue;
+      this.recordSourceObservation(row[0],{version:SHA256.test(row[1].version||"")?row[1].version:null,invalidated:row[1].invalidated!==false,historical:true});
+    }
     if (Array.isArray(value.sizeHints)) for (const row of value.sizeHints.slice(-MAX_RESULT_SIZES))
       if (Array.isArray(row) && row.length === 2) this.recordSizeHint(row[0], row[1]);
     for(const row of (Array.isArray(value.returnedText)?value.returnedText:[]).slice(-64)) {

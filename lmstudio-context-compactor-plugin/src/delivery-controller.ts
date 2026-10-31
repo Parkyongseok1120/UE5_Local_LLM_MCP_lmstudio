@@ -11,6 +11,13 @@ import {
 import type { DirectConfig, ExecutionOutcome, FinalizationTrigger, TaskObjective } from "./execution-contracts";
 import { finalizationCause } from "./execution-instructions";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
+export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.";
+export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
+export function outputLimitStatusText(stage:OutputLimitStage|undefined):string {
+  return stage==="tool_arguments" ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
+    : stage==="reasoning" ? "생각 단계에서 생성 한도에 도달했습니다. 자동 복구가 꺼져 있거나 허용 조건을 충족하지 않아 중단했습니다."
+      : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.";
+}
 import { hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
 import type { RemoteToolLike } from "./tool-capability-registry";

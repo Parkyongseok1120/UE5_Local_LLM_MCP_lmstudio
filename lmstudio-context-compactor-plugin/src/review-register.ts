@@ -3,6 +3,7 @@ import { stripInternalDataEcho } from "./internal-data-output";
 import type { TextFinding } from "./engine-claim-anchoring";
 import { FINDING, REJECTED } from "./review-patterns.js";
 import { type EvidenceBundle, ReviewEvidenceIndex } from "./review-evidence";
+import { mentionsSubject } from "./review-subject";
 const { pathKey } = require("./read-ledger.js") as { pathKey(value: string): string };
 import { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
 export { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
@@ -48,7 +49,9 @@ const NOT_A_SUBJECT = new Set(["this", "self", "Super", "GameMode", "GameState",
   "BlueprintReadOnly", "BlueprintCallable", "BlueprintPure", "BlueprintAuthorityOnly", "Replicated", "ReplicatedUsing",
   "OnRep", "NetMulticast", "Server", "Client", "Reliable", "Unreliable", "Transient", "Category", "Meta",
   // Continuity-note schema fields cannot become missing code findings.
-  "openQuestions", "rejectedHypotheses", "reviewClaims", "modelNotes", "decisions", "currentTurnFindings"]);
+  "openQuestions", "rejectedHypotheses", "reviewClaims", "modelNotes", "decisions", "currentTurnFindings",
+  "currentOwner", "connectionPlan", "requiredLifetime", "sharingScope", "definitionVsRuntime", "counterEvidence",
+  "patternRefs", "evidenceRefs", "architectureTombstones", "architectureOmittedCount"]);
 // Tool-call and evidence ids in backticks: long tokens mixing case and digits.
 const OPAQUE_ID = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9_-]{20,}$/u;
 const global = (pattern: RegExp) => new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
@@ -174,11 +177,12 @@ export class ReviewRegister {
   /** Found rows the answer does not name, including ones the bounded register
    * already pushed out of the model input. */
   missing(answer: string): ReviewRow[] {
-    return [...this.retired.values(), ...this.rows].filter(row => {
+    const rows = [...this.retired.values(), ...this.rows];
+    return rows.filter(row => {
       if (row.status === "cleared") return false;
-      if (row.status === "needs_recheck") return !answer.split(/\r?\n/u).some(line => line.includes(row.identifier)
+      if (row.status === "needs_recheck") return !answer.split(/\r?\n/u).some(line => mentionsSubject(line, row, rows)
         && /미확인|미검증|재검토|needs_recheck|unverified|not verified|recheck|withdraw/iu.test(line));
-      return Boolean(row.bundle?.path) && !answer.includes(row.identifier);
+      return Boolean(row.bundle?.path) && !answer.split(/\r?\n/u).some(line => mentionsSubject(line, row, rows));
     });
   }
 }

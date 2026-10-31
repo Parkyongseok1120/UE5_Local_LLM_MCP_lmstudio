@@ -5,6 +5,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DIRECT_SOURCE_FILES = Object.freeze([
+  "src/architecture-contracts.ts",
+  "src/architecture-note-contract.js",
+  "src/architecture-observation.ts",
+  "src/architecture-policy.ts",
+  "src/architecture-state.ts",
+  "src/architecture-input.ts",
+  "src/architecture-round.ts",
+  "src/review-subject.ts",
   "src/config-defaults.ts",
   "src/generated-runtime-identity.ts",
   "src/generated-tool-contract.ts",

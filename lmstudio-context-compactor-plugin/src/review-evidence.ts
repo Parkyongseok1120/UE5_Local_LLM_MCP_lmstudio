@@ -2,6 +2,7 @@ import { Chat, type ChatMessage } from "@lmstudio/sdk";
 import { workingContextModule } from "./context-ports";
 import { capabilityFor, isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
 import { resultSemantics } from "./tool-result-semantics.js";
+import { subjectLeaf } from "./review-subject";
 const { normalizeObservation } = require("./evidence-identity.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js") as {
   decodeToolResultRecord(content: unknown): { value: unknown };
@@ -115,7 +116,7 @@ export class ReviewEvidenceIndex {
   }
 
   bundleFor(identifier: string, evidence: string): EvidenceBundle | null {
-    const name = identifier.split("::").pop()!;
+    const name = subjectLeaf(identifier);
     const word = new RegExp(`(?<![\\w])${escapeRegExp(name)}(?![\\w])`, "u");
     const searches = this.searches.filter(search => word.test(search.query) || search.hits.some(hit => word.test(hit.text)));
     const search = searches.at(-1);

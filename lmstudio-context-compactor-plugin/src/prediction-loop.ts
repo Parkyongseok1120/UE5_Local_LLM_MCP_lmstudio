@@ -14,37 +14,34 @@ import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput, type GuidanceRetention } from "./round-input";
 import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
-  partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice } from "./delivery-controller";
+  partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeConfigTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
-import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause } from "./execution-instructions";
-import { classifyObjective, executionObjective, hasMutationCapability } from "./tool-capability-registry";
-import { continuationStatusText } from "./prediction-ui";
 import { NotePersistence } from "./note-persistence";
-import { reportScopeGaps, reportScopeReviewFact } from "./report-scope";
+import { reportReviewObligations } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
 import { PRIOR_TURN_INTERRUPTED_FACT, partialProjectionFact, priorTurnInterrupted, reportNowFact } from "./resume-facts";
 import { acceptedValidatePackets, packetQuoteMismatches, quoteCheckFact, returnedSourceLines, validatePackets,
   type QuoteMismatch } from "./quote-anchoring";
 import { confirmedProgressStatements, engineClaimFact, gradedSections, packetEngineClaimGaps,
-  returnedEngineEvidence, textEngineClaimGaps, unresolvedEngineClaimGaps, unresolvedReportEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
-import { ReviewEvidenceIndex, ReviewRegister, deliveredReportFact, reportReviewFact, type ReviewRow } from "./review-register";
+  returnedEngineEvidence, textEngineClaimGaps, unresolvedEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
+import { ReviewEvidenceIndex, ReviewRegister, type ReviewRow } from "./review-register";
 import { unverifiedWriteApis, writeApiFact } from "./write-api-anchoring";
-import { BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, REPORT_REVIEW_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, REPETITION_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
+import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause, BOUNDED_AUDIT_FINAL_INSTRUCTION, CONTEXT_BUDGET_FINAL_INSTRUCTION, OUTPUT_RECOVERY_FINAL_INSTRUCTION, REPORT_REVIEW_INSTRUCTION, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, REPETITION_RECOVERY_INSTRUCTION, RESEARCH_RECOVERY_FINAL_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
-import { createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
+import { continuationStatusText, createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
+import { beginArchitectureRound, finishArchitectureRound, reconcileArchitectureRound, type ArchitectureState } from "./architecture-round";
 import { decideReasoningRecovery, reasoningRecoveryOutputCap, repetitionFact } from "./reasoning-recovery";
-import { runtimeInstallationIdentity } from "./runtime-identity";
 import { classifyToolCallBoundary, createToolGuard, readHostToolApprovalPolicy } from "./tool-boundary";
-import { hasReadCapability, isObservationOnlyToolCall, localObservationTools, readOnlyReviewRequest, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
+import { classifyObjective, executionObjective, hasMutationCapability, hasReadCapability, isObservationOnlyToolCall, localObservationTools, readOnlyReviewRequest, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import {
   bindProjectArguments,
   detectMentionedProject,
@@ -72,6 +69,7 @@ export function createPredictionLoopHandler(
     let showDebugInfo = true;
     let releaseContext: (() => void) | null = null;
     let releaseSession: (() => void) | null = null;
+    let architectureState:ArchitectureState|null=null;
     const cleanupFailures: string[] = [];
     try {
     ctl.guardAbort();
@@ -125,7 +123,8 @@ export function createPredictionLoopHandler(
     // history before the latest user message.
     const latestUserIndex = guidanceMessages ? guidanceMessages.map(m => m.role).lastIndexOf("user") : -1;
     const earlierMessages = guidanceMessages && latestUserIndex > 0 ? guidanceMessages.slice(0, latestUserIndex) : [];
-    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjectiveOf(guidanceMessages),
+    const guidanceObjective = guidanceMessages ? guidanceObjectiveOf(guidanceMessages) : undefined;
+    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjective!,
       earlierMessages.some(m => m.role === "user") ? guidanceObjectiveOf(earlierMessages) : undefined) : undefined;
     const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
       || focusedReferences ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
@@ -166,21 +165,8 @@ export function createPredictionLoopHandler(
     const readOnlyReview = !config.observeOnly && objective.kind === "review";
     const modelTools = config.auditCompletionMode === "bounded" && !objective.requiredEffects.has("mutation") ? capabilityRegistry.readProfile()
       : readOnlyReview ? capabilityRegistry.reviewProfile() : allModelTools;
-    if (config.showDebugInfo) ctl.debug({
-      event: "direct_runtime_identity",
-      objectiveKind: objective.kind, mutationState: objective.mutationState,
-      executionId,
-      ...runtimeInstallationIdentity(),
-      modelIdentifier: String((tokenSource as { identifier?: unknown }).identifier || "unknown"),
-      toolRegistryFingerprint: telemetryFingerprint(registeredModelTools.map(tool => ({
-        name: tool.name,
-        pluginIdentifier: tool.pluginIdentifier || null,
-        schema: tool.parametersJsonSchema || null,
-      }))),
-      fullToolCount: modelTools.length,
-      toolProfile: config.auditCompletionMode === "bounded" ? "bounded_audit" : readOnlyReview ? "read_only_review" : "full",
-      ...runtimeConfigTelemetry(config),
-    });
+    if (config.showDebugInfo) ctl.debug(runtimeExecutionTelemetry(config,objective,executionId,
+      String((tokenSource as {identifier?:unknown}).identifier || "unknown"),registeredModelTools,modelTools,readOnlyReview));
     const scopeInstructions = config.observeOnly ? [] : [
       ...(scope.availableUnityTools + scope.availableUnrealTools > 0
         ? [renderToolScopeInstruction(scope)] : []),
@@ -215,12 +201,14 @@ export function createPredictionLoopHandler(
     const objectiveFingerprint = modelNotes.objectiveFingerprint(originalHistory.getMessagesArray());
     const originalMessages = originalHistory.getMessagesArray();
     const noteScope = { objectiveFingerprint, projectDescriptor: scope.projectIdentity };
-    const notes = new NotePersistence(noteStore, workingContext, noteWorkingDirectory, noteScope);
+    const notes = new NotePersistence(noteStore, workingContext, noteWorkingDirectory, noteScope,
+      config.showDebugInfo?e=>ctl.debug({executionId,...e}):undefined);
     let activeNote = notes.restore(originalMessages,
       Boolean(cleanAttachmentHistory.getMessagesArray().at(-1)?.hasFiles()));
     const replaceActiveNote = (note: ContinuityNote | null) => {
-      activeNote = note;
-      notes.mirror(note);
+      activeNote = modelNotes.mergeArchitecture(note,architectureState?.snapshot() || modelNotes.architecturePart(activeNote),
+        note?.scope || activeNote?.scope || modelNotes.attachScope({},objectiveFingerprint,originalMessages)?.scope,activeNote);
+      notes.mirror(activeNote);
     };
     const restoredWindowApplied = restoredWindow?.reason === "restored_remeasure_required";
     let workingHistory = restoredWindow?.history || originalHistory;
@@ -430,13 +418,18 @@ export function createPredictionLoopHandler(
         activeActivity = createRoundActivityTracker(ctl, roundIndex);
         const noteEnabled = Boolean(noteWorkingDirectory && objectiveFingerprint && !config.observeOnly);
         if (noteEnabled && activeNote) {
-          replaceActiveNote(modelNotes.reconcileStoredNote(
-            activeNote, visibleHistory.getMessagesArray(), workingContext?.verifiedNoteRefs(activeNote),
-            noteScope,
-          ));
+          ({state:architectureState,note:activeNote}=reconcileArchitectureRound(architectureState,activeNote,
+            visibleHistory.getMessagesArray(),workingContext?.verifiedNoteRefs(activeNote),noteScope));
+          notes.mirror(activeNote);
         }
+        const architectureRound=beginArchitectureRound(architectureState,config,noteEnabled,scope,evidenceManager,workingHistory,
+          {executionId,lineage:contextBoundary.scope?.lineage || executionId,objectiveFingerprint,projectIdentity:scope.projectIdentity},activeNote);
+        architectureState=architectureRound.state;
+        const architectureActive=architectureRound.active;
+        if(architectureActive)replaceActiveNote(activeNote);
         const postProjectionHistory = Chat.from(workingHistory);
         const prepared = await prepareRoundInput({
+          ...(architectureActive && architectureState?{architecture:{binding:architectureState.currentBinding(),snapshot:architectureState.snapshot()}}:{}),
           objective, mutationTargets:[...priorMutationTargets, ...reviewRegister.rows.filter(row=>row.status==="found" && row.bundle?.path)
             .map(row=>({path:row.bundle!.path,sourceKey:row.bundle!.sourceKey}))],
           ctl, config, tokenSource, contextManager, evidenceManager, workingContext,
@@ -451,6 +444,7 @@ export function createPredictionLoopHandler(
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
           guidanceIntent,
+          architectureObjectiveText:guidanceObjective?.text,
           guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
           referenceRecovery: researchRecoveryRound || reasoningRecoveryRound,
@@ -876,6 +870,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         activeActivity.complete();
         activeActivity = null;
         const transaction = new RoundTransaction(captured, roundSignal.aborted);
+        const pendingArchitecturePatches:unknown[]=[];
         let noteLifecycle = activeNote ? "injected_existing" : "absent";
         for (const message of captured.messages) {
           const live = liveMessages.get(message);
@@ -896,6 +891,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               visibleMessage = stream.visibleMessage(message);
             }
             if (extracted.hasFooter) {
+              if(transaction.planningCommitted && architectureActive && extracted.architecturePatch)pendingArchitecturePatches.push(extracted.architecturePatch);
               if (transaction.planningCommitted && noteEnabled && extracted.note) {
                 const update = modelNotes.resolveNoteUpdate(
                   extracted.note, objectiveFingerprint, visibleHistory.getMessagesArray(),
@@ -927,6 +923,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
           !config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0);
+        if(architectureState) {
+          const result=finishArchitectureRound(architectureState,evidenceManager,workingHistory,captured.messages,transaction.planningCommitted,
+            runtimeToolTrace.values(),prepared.architectureInputRefs,pendingArchitecturePatches,activeNote,
+            activeNote?.scope || modelNotes.attachScope({},objectiveFingerprint,visibleHistory.getMessagesArray())!.scope);
+          replaceActiveNote(result.note);
+          if(config.showDebugInfo)for(const event of result.events)ctl.debug({executionId,modelInputId,roundIndex,...event});
+        }
         const outputLimitStage = classifyOutputLimitStage(visibleCaptured, finalizing, generationAtRoundEnd);
         if (toolPlanningRetryRound) execution.finishReplan();
         const outputEvidence = messageEvidenceTelemetry(captured.messages);
@@ -1522,26 +1525,19 @@ event: decision.trigger === "research_recovery_exhausted"
           && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
           && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
           const answer = visibleTranscript.lastAnswerText;
-          const gaps = unresolvedReportEngineClaimGaps(answer,
-            returnedEngineEvidence(evidenceManager.returnedSources()), scope.engine);
-          reviewMissing = reviewRegister.missing(answer);
-          const scopeGaps = reportScopeGaps(visibleTranscript.snapshot(), answer, evidenceManager.returnedSources());
-          if (answer.trim() && (scopeGaps.length || ["review", "explain"].includes(objective.kind) && (reviewMissing.length || gaps.length))) {
+          const review=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objective.kind,reviewRegister);
+          reviewMissing=review.missing;
+          if (review.needed) {
             reportReviewAttempted = true;
-            runtimeFacts.set("report_review", reportReviewFact(reviewMissing, gaps) + "\n" + reportScopeReviewFact(scopeGaps));
-            // The delivered answer is data, not the last message: a trailing
-            // complete assistant answer is one the model only continues, and a
-            // finished answer continues with EOS (conversation 1792929236226:
-            // one token from 53,802 input tokens). The input ends with the last
-            // tool results, so the supplement is a new assistant turn.
-            runtimeFacts.set("delivered_report", deliveredReportFact(answer));
+            runtimeFacts.set("report_review",review.reviewFact);
+            runtimeFacts.set("delivered_report",review.deliveredFact);
             reportContinuation = answer;
             deliveryController.retainReportPrefix(answer);
             deliveryController.beginSupplement("report_review", true);
             workingHistory = historyBeforeRound;
             execution.finishResearch("report_review");
             if (config.showDebugInfo) ctl.debug({ event: "report_review_scheduled", executionId, modelInputId,
-              missing: reviewMissing.map(row => row.identifier), contracts: gaps.map(gap => gap.factId), toolCount: 0 });
+              ...review.telemetry });
             roundIndex++;
             continue;
           }
@@ -1589,18 +1585,14 @@ event: decision.trigger === "research_recovery_exhausted"
         if (captured.finishReason === "maxPredictedTokensReached" && !captured.continueAfterTools) {
           ctl.createStatus({
             status: "canceled",
-            text: outputLimitStage === "tool_arguments"
-              ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
-              : outputLimitStage === "reasoning"
-                ? "생각 단계에서 생성 한도에 도달했습니다. 자동 복구가 꺼져 있거나 허용 조건을 충족하지 않아 중단했습니다."
-                : "응답이 출력 한도에 도달해 완료로 처리하지 않았습니다.",
+            text: outputLimitStatusText(outputLimitStage),
           });
         }
         if (toolPlanningRetryRound && captured.predictionUsage.rawToolIntentCandidate
           && !captured.continueAfterTools) {
           ctl.createStatus({
             status: "canceled",
-            text: "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.",
+            text: TOOL_RETRY_EXHAUSTED_STATUS,
           });
         }
         if (hasUnexecutedRawToolSyntax(rawIntentText) && structuredToolRequestCount === 0
@@ -1608,7 +1600,7 @@ event: decision.trigger === "research_recovery_exhausted"
           // The research path ends with only unexecuted tool text and no retry left or allowed:
           // hand the user the evidence already gathered instead of the raw text alone.
           if (!toolPlanningRetryRound) ctl.createStatus({ status: "canceled",
-            text: "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다." });
+            text: RAW_INTENT_PARTIAL_STATUS });
           deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
         }
         if (!captured.continueAfterTools) break;
@@ -1683,6 +1675,7 @@ event: decision.trigger === "research_recovery_exhausted"
       throw executionFailure;
     } finally {
       let cleanupError: unknown;
+      architectureState?.close();
       try { releaseContext?.(); }
       catch (error) { cleanupFailures.push(String(error)); cleanupError = error; }
       try { releaseSession?.(); }

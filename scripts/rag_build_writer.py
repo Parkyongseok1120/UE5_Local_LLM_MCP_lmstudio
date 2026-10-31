@@ -13,6 +13,7 @@ from rag_build_metadata_projection import compact_metadata
 from rag_build_schema import CHUNK_INSERT_SQL, schema_counts
 from workspace_config import canonical_workspace_root, find_workspace_root
 from workspace_locator import normalize_locator_impl
+from architecture_pattern_catalog import PatternInventory
 
 
 def _normalize_locator(locator: str, workspace_root: Path) -> str:
@@ -48,6 +49,7 @@ class ChunkIndexWriter:
         self.total_chunks = 0
         self.engine_evidence_chunks = 0
         self.project_evidence_chunks = 0
+        self.architecture_inventory = PatternInventory()
         self._document_id_counts: dict[str, int] = {}
         self._batch: list[tuple] = []
 
@@ -59,6 +61,8 @@ class ChunkIndexWriter:
         metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
         text = str(doc.get("text") or "").strip()
         if not text:
+            return
+        if not self.architecture_inventory.add(metadata):
             return
 
         document_id = self._unique_document_id(str(doc.get("id") or ""))
@@ -93,6 +97,7 @@ class ChunkIndexWriter:
             )
 
     def finish(self) -> None:
+        self.architecture_inventory.validate()
         self._flush()
         if self.total_chunks <= 0:
             raise RuntimeError(

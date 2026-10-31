@@ -108,10 +108,15 @@ def ensure_engine_inputs(
     if provenance.get("ok") is not True:
         return steps, "validate-engine-raw-provenance"
     guidelines = workspace / "RAG_Project_Guidelines"
-    if guidelines.is_dir() and not (stage / "raw_guidelines.jsonl").is_file():
+    pattern_export = workspace / "docs" / "model-guidance" / "generated-pattern-catalog.json"
+    from architecture_pattern_catalog import collected_catalog_current
+    raw_guidelines = stage / "raw_guidelines.jsonl"
+    patterns_changed = pattern_export.is_file() and not collected_catalog_current(raw_guidelines, pattern_export)
+    if (guidelines.is_dir() or pattern_export.is_file()) and (not raw_guidelines.is_file() or patterns_changed):
         step = _run(
             run_script, workspace, emit, "collect_project_guidelines.py",
             "--root", str(guidelines), "--out", str(stage / "raw_guidelines.jsonl"),
+            *(["--pattern-export", str(pattern_export)] if pattern_export.is_file() else []),
         )
         steps.append({"name": "collect_project_guidelines.py", **step})
         if step.get("ok") is not True:
