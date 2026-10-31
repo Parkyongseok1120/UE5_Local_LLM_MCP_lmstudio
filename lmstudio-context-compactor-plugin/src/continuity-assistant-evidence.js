@@ -27,7 +27,7 @@ function retainVisibleResponse(source, replacement) {
   };
   const text = message => message.content.filter(part => part.type === "text").map(part => part.text).join("");
   const visible = tail(source).messages.map(message => {
-    const raw = visibleAssistantText(text(message)).split("\n<!-- direct-continuity-note-v1 -->")[0];
+    const raw = visibleAssistantText(text(message)).split(/\n<!-- direct-continuity-note-v[12] -->/u)[0];
     // An unparsed provider request is not a report. Quoted examples may remain
     // in normal completed history; this recovery path does not manufacture them.
     if (/<(?:tool_call|function=)|\|(?:tool_call|python_tag)\|/iu.test(raw)) return "";

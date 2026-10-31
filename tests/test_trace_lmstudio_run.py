@@ -46,6 +46,27 @@ def test_thinking_is_not_delivered_but_context_exclusion_does_not_hide_prose():
     assert any("Verified always wrong" in claim["sentence"] for claim in claims)
 
 
+def test_host_notice_origin_is_separate_from_the_model_claim_it_corrects():
+    doc = _conversation([{"type": "text", "text": "검증 완료."}])
+    steps = doc["messages"][1]["versions"][0]["steps"]
+    steps.extend([
+        {"type": "contentBlock", "content": [{"type": "text", "text": "[검증 범위] '검증 완료'는 사실 확인이 아닙니다."}]},
+        {"type": "debugInfoBlock", "debugInfo": json.dumps({"event": "verification_scope_notice"})},
+    ])
+    turn = trace.parse_conversation(doc)["turns"][0]
+    assert len(turn["claims"]) == 1 and turn["claims"][0]["sentence"] == "검증 완료."
+    assert turn["hostNotices"][0]["event"] == "verification_scope_notice"
+
+
+def test_metadata_budget_keeps_retry_minimum_and_suggestion_in_trace():
+    result = {"ok": False, "errorCode": "OUTPUT_LIMIT_EXCEEDED",
+              "retry": {"allowed": True, "mode": "different_arguments", "minimum": {"field": "byteBudget", "value": 2173}},
+              "suggestion": {"tool": "read_file_range", "args": {"path": "project://A.h", "byteBudget": 2173}}}
+    turn = trace.parse_conversation(_conversation(_call("r", "read_file", {"path": "project://A.h"}, result)))["turns"][0]
+    assert turn["calls"][0]["failureKind"] == "response_metadata_budget"
+    assert "2173" in str(turn["calls"][0]["result"]["retry"])
+
+
 def test_not_found_then_identical_retry_and_absence_claim_are_linked():
     missing = {"ok": False, "errorCode": "NOT_FOUND", "message": "File not found: engine://Engine/x/A.cpp"}
     blocks = _call("1", "read_file", {"path": "engine://Engine/x/A.cpp"}, missing) \

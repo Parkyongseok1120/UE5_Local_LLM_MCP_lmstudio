@@ -1,9 +1,13 @@
 import { REVIEW_REGISTER_HEADER as REVIEW_HEADER, REVIEW_REGISTER_GUIDANCE as REVIEW_GUIDANCE } from "./review-patterns.js";
 const LEDGER_HEADER = "Runtime read ledger (kept across compaction)";
 /** The header renderReferenceData writes (reference-rendering.ts). */
-const { DERIVED_HEADER, derivedEnvelopePrefix } = require("./internal-data-contract.js") as {
-  DERIVED_HEADER: string; derivedEnvelopePrefix(body: string): boolean;
+const { DERIVED_HEADER, HOST_FRAME_HEADERS, HOST_FRAME_MAX_PROSE_LINES, derivedEnvelopePrefix } = require("./internal-data-contract.js") as {
+  DERIVED_HEADER: string; HOST_FRAME_HEADERS: readonly string[]; HOST_FRAME_MAX_PROSE_LINES: number;
+  derivedEnvelopePrefix(body: string): boolean;
 };
+export { HOST_FRAME_HEADERS };
+// Lines of a JSON echo, including a pretty-printed one.
+const JSON_LINE = /^(?:[{}\[\]",:0-9-]|true\b|false\b|null\b)/u;
 const OBSERVATION_HEADER = "Runtime evidence observation:";
 const OMITTED_HEADER = "Runtime data omitted for budget:";
 const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared)\] \S+ \((?:reasoning|visible), round \d+\): /u;
@@ -44,10 +48,14 @@ export class InternalDataOutputFilter {
   private readonly ledgerInjected: boolean;
   private readonly observationInjected: boolean;
   private readonly reviewInjected: boolean;
+  /** Headers of host frames this input carries, and their fixed prose lines. */
+  private readonly frameHeaders: string[];
+  private readonly frameLines: Set<string>;
   private inRuntime = false;
   private pending = "";
   private candidate = "";
-  private mode: "normal" | "refs" | "derived" | "derivedEnd" = "normal";
+  private frameJson = "";
+  private mode: "normal" | "refs" | "derived" | "derivedEnd" | "frame" = "normal";
   private fence: { character: string; length: number } | null = null;
   private passthrough = false;
   private ended = false;
@@ -72,6 +80,32 @@ export class InternalDataOutputFilter {
     this.refsHeader = parts.find(p => p.startsWith("[Available tool-call refs]"))?.split(/\r?\n/u)[0];
     this.derivedParts = parts.filter(p => p.startsWith(DERIVED_HEADER)).map(p => p.replace(/\r\n/gu, "\n"));
     this.derivedHeader = this.derivedParts[0]?.split("\n")[0];
+    // A frame may follow derived data inside one part, so scan every line.
+    const frames = parts.flatMap(part => {
+      const lines = part.replace(/\r\n/gu, "\n").split("\n");
+      return lines.flatMap((line, index) => HOST_FRAME_HEADERS.includes(line)
+        ? [{ header: line, prose: lines.slice(index + 1, index + 1 + HOST_FRAME_MAX_PROSE_LINES)
+          .map(row => row.trimEnd()).filter(row => row && !row.trimStart().startsWith("{")) }] : []);
+    });
+    this.frameHeaders = [...new Set(frames.map(frame => frame.header))];
+    this.frameLines = new Set(frames.flatMap(frame => frame.prose));
+  }
+
+  /** Inside an injected host frame: its prose lines, then its JSON (complete,
+   * pretty-printed or cut off). Anything else ends the frame and is user text. */
+  private frameLine(line: string, trimmed: string): string | null {
+    if (this.frameJson || trimmed.startsWith("{")) {
+      this.frameJson += line;
+      try { JSON.parse(this.frameJson); this.protocolSuppressed = true; this.frameJson = ""; this.mode = "normal"; return ""; }
+      catch { /* Incomplete so far. */ }
+      if (this.frameJson.length <= 131072 && (!trimmed || JSON_LINE.test(trimmed))) return "";
+      // A cut-off echo followed by prose: the JSON part is still the protocol.
+      this.frameJson = ""; this.protocolSuppressed = true; this.protocolIncomplete = true; this.mode = "normal";
+      return null;
+    }
+    if (!trimmed || this.frameLines.has(line.replace(/\r?\n$/u, "").trimEnd())) return "";
+    this.mode = "normal";
+    return null;
   }
 
   /** A re-rendered header of an injected runtime part (its counts may differ). */
@@ -107,6 +141,10 @@ export class InternalDataOutputFilter {
 
   private line(line: string): string {
     const trimmed = line.trim();
+    if (this.mode === "frame") {
+      const handled = this.frameLine(line, trimmed);
+      if (handled !== null) return handled;
+    }
     if (this.mode === "derived") {
       if (this.discardedDerived) {
         if (trimmed === "[End derived reference data]") { this.mode = "derivedEnd"; this.discardedDerived = false; }
@@ -119,8 +157,7 @@ export class InternalDataOutputFilter {
         // Match the observation envelope, not arbitrary JSON after a heading.
         // Its items may be rearranged in an echo (2026-10-25 run moved them
         // under referenceContext), so the envelope's own fields decide.
-        if (data && typeof data === "object" && typeof data.interpretation === "string"
-          && data.coverage?.scope === "bounded_current_execution") {
+        if (derivedEnvelopePrefix(body)) {
           this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
         }
         const literal = this.candidate;
@@ -132,7 +169,7 @@ export class InternalDataOutputFilter {
         // fields, it is still the protocol, not report text.
         if (trimmed === "[End derived reference data]") {
           const json = body.slice(0, body.lastIndexOf("[End derived reference data]")).trim();
-          if (json.startsWith('{"interpretation":') && json.includes('"scope":"bounded_current_execution"')) {
+          if (derivedEnvelopePrefix(json)) {
             this.protocolSuppressed = true; this.candidate = ""; this.mode = "derivedEnd"; return "";
           }
         }
@@ -166,6 +203,7 @@ export class InternalDataOutputFilter {
     if (marker) { this.fence = { character: marker[1][0], length: marker[1].length }; return line; }
     // Do not trim leading indentation: indented code and blockquotes are literal.
     const bare = line.replace(/\r?\n$/u, "").trimEnd();
+    if (this.frameHeaders.includes(bare)) { this.mode = "frame"; this.frameJson = ""; return ""; }
     if (this.runtimeHeader(bare)) { this.inRuntime = true; return ""; }
     if (this.inRuntime && this.runtimeBlockLine(bare)) return "";
     this.inRuntime = false;
@@ -205,7 +243,8 @@ export class InternalDataOutputFilter {
 
   push(text: string): string {
     if (this.ended || !text) return "";
-    if (!this.refsHeader && !this.derivedHeader && !this.budgetParts.length && !this.runtimeParts.length) return text;
+    if (!this.refsHeader && !this.derivedHeader && !this.budgetParts.length && !this.runtimeParts.length
+      && !this.frameHeaders.length) return text;
     this.pending += text;
     let output = "", newline: number;
     while ((newline = this.pending.indexOf("\n")) >= 0) {
@@ -222,7 +261,7 @@ export class InternalDataOutputFilter {
       && !"[End derived reference data]".startsWith(this.pending.trimEnd())) this.mode = "normal";
     // Ordinary prose streams immediately; only possible metadata/fence prefixes
     // are held until their line is classified. No paragraph-sized delay.
-    const prefixes = [this.refsHeader, this.derivedHeader, ...this.runtimeHeaders,
+    const prefixes = [this.refsHeader, this.derivedHeader, ...this.frameHeaders, ...this.runtimeHeaders,
       ...(this.ledgerInjected ? [LEDGER_HEADER] : []), ...(this.observationInjected ? [OBSERVATION_HEADER] : []),
       ...(this.runtimeInjected ? RUNTIME_SENTENCE_OPENINGS : []),
       ...(this.reviewInjected ? [REVIEW_GUIDANCE] : []),
@@ -240,6 +279,10 @@ export class InternalDataOutputFilter {
       || /^ {0,3}(?:`{3,}|~{3,})/u.test(this.pending);
     if (this.pending && (this.passthrough || (this.mode === "normal" && !possibleHeader && !possibleFence))) {
       output += this.pending; this.pending = ""; this.passthrough = true;
+    }
+    if (this.mode === "frame" && this.pending.length + this.frameJson.length > 131072) {
+      this.protocolSuppressed = true; this.protocolIncomplete = true;
+      this.frameJson = ""; this.pending = ""; this.mode = "normal"; return output;
     }
     if (this.pending.length + this.candidate.length > 131072) {
       const body = this.candidate.slice(this.candidate.indexOf("\n") + 1) + this.pending;
@@ -262,6 +305,10 @@ export class InternalDataOutputFilter {
       && this.pending.length >= 25 && this.runtimeParts.some(part => part.startsWith(this.pending));
     let output = canceledBudgetEcho || canceledRuntimeEcho ? "" : this.passthrough ? this.pending : this.pending ? this.line(this.pending) : "";
     this.pending = "";
+    if (this.frameJson) {
+      // A frame echo cut off by the end of generation.
+      this.protocolSuppressed = true; this.protocolIncomplete = true; this.frameJson = "";
+    }
     if (this.candidate) {
       const partial = this.candidate.replace(/\r\n/gu, "\n").trimEnd();
       const body = partial.slice(partial.indexOf("\n") + 1);

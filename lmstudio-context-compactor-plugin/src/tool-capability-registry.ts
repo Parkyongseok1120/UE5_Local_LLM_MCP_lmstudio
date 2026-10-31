@@ -116,6 +116,21 @@ export function classifyObjective(text: string): TaskObjective {
   return { kind, requiredEffects, mutationState: "none" };
 }
 
+/** Continue the existing user objective at the same boundary guidance uses.
+ * Explicit new work keeps its own effects. Host approval preferences never
+ * turn an acknowledgement into permission to widen a prior review. */
+export function executionObjective(messages: readonly ChatMessage[]): TaskObjective {
+  const latest = messages.filter(m => m.isUserMessage()).at(-1)?.getText() || "";
+  const direct = classifyObjective(latest);
+  if (direct.kind !== "explain") return direct;
+  const normalized = messages.map((m, index) => ({ role: m.getRole(), text: m.getText(), index,
+    toolRequests: m.getToolCallRequests() }));
+  const { buildObjectiveContinuity } = require("./continuity-objectives.js");
+  const previous = require("./continuity-memory.js").extractPriorContinuityState(normalized);
+  const active = buildObjectiveContinuity(normalized, previous).activeObjective;
+  return active?.continuedBy ? classifyObjective(active.text) : direct;
+}
+
 export class ToolCapabilityRegistry {
   readonly tools: Array<RemoteToolLike>;
   readonly collisions: Array<string>;
@@ -165,13 +180,22 @@ export class ToolCapabilityRegistry {
     }
     return Object.freeze(outcomes);
   }
-  /** Every tool except the manifest's known file/project mutations, for a
-   * review-only request. Validators, long-running checks and tools of other
-   * providers stay: only what the request ruled out is withheld. */
+  /** Review checks may run, but file/project mutations are withheld for every
+   * provider. Mixed tools publish only the remaining operations and the guard
+   * independently enforces that profile, including confirmed overrides. */
   reviewProfile() {
-    return this.tools.filter(tool => {
-      const capability = capabilityFor(tool);
-      return !(capability?.scope === "unreal" && capability.effect === "mutation");
+    return this.tools.flatMap(tool => {
+      const operations = operationCapabilities(tool);
+      if (!operations.some(op => op.effect === "mutation")) return [tool];
+      const actions = operations.filter(op => op.effect !== "mutation" && op.action).map(op => op.action);
+      if (!actions.length) return [];
+      const schema = tool.parametersJsonSchema as { properties?: Record<string, unknown>; required?: string[] };
+      const narrowed = Object.create(tool) as RemoteToolLike;
+      Object.defineProperty(narrowed, "parametersJsonSchema", { enumerable: true, value: { ...schema,
+        properties: { ...schema?.properties, action: { type: "string", enum: actions } },
+        required: [...new Set([...(schema?.required || []), "action"])] } });
+      restrictedOperationProfiles.set(narrowed, actions);
+      return [narrowed];
     });
   }
   readProfile() {

@@ -267,6 +267,10 @@ jobs:
         run: npm ci --no-fund --no-audit
         working-directory: lmstudio-unreal-agent-mcp
 
+      - name: Check authored guidance against committed generated assets
+        run: npm run guidance:check
+        working-directory: lmstudio-context-compactor-plugin
+
       - name: Context Compactor build and full semantic test suite
         run: npm test
         working-directory: lmstudio-context-compactor-plugin

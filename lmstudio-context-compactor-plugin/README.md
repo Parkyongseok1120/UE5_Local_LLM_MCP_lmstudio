@@ -179,7 +179,7 @@ npm run dev
 
 `eval:audit-pressure`는 8개 파일 fixture에서 실제 압축 뒤 과거 원문 퇴출과 현재 원문 잔존을 독립 oracle로 먼저 확인합니다. 파일럿이 이 조건을 충족할 때만 A/B 본 반복을 실행합니다. A/B는 `Observe`와 `Inject`의 메타데이터 효과만 비교하고, A/C는 사용자가 선택한 `eval/AUDIT_TASK_CONTRACT.md`의 감사 지시 효과를 별도의 탐색 실험으로 비교합니다. 계약은 제품 하네스가 자동 주입하지 않으며, 실패·timeout·압축 미발생 실행도 보고서에서 삭제하지 않습니다. 재조회 반환량은 요청을 만든 `modelInputId`의 실제 입력 원문과 과거 원문 ledger를 각각 대조해 현재 입력 중첩·과거 근거 재획득·새 근거로 나눕니다.
 
-설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.85 / revision 132입니다.
+설치기는 잠금 파일대로 패키지를 준비하고 검사·빌드 후 `lms dev --install -y`로 등록합니다. 이름·소유자·revision과 `.lmstudio/production.js`가 있는지 확인합니다. 현재 버전은 0.4.86 / revision 133입니다.
 
 도구 승인 시 LM Studio의 저장된 `Allow all` 또는 개별 도구 허용 설정을 매번 확인합니다. SDK 1.5.0의 직접 승인 요청은 이 설정을 적용하지 않으므로, 컴팩터가 `LMSTUDIO_HOME/settings.json`(기본값 `~/.lmstudio/settings.json`)의 `chat` 승인 설정을 읽습니다. 설정을 읽을 수 없거나 허용 항목이 없으면 같은 `callId`의 기본 도구 카드에 승인·거절 버튼을 표시합니다. 승인 뒤 인수 편집, 거절, 취소와 결과 반환을 카드에 반영하며, 이 설정은 프로젝트 범위나 MCP 제공자의 쓰기·실행 권한을 변경하지 않습니다.
 

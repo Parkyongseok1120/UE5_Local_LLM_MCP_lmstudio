@@ -117,6 +117,6 @@ def schema_counts(conn: sqlite3.Connection) -> tuple[int, int, int]:
         ).fetchone()[0]
     )
     project = int(
-        conn.execute("select count(*) from chunks where project_root != ''").fetchone()[0]
+        conn.execute("select count(*) from chunks where project_root != '' and doc_type != 'architecture_pattern'").fetchone()[0]
     )
     return stored, engine, project

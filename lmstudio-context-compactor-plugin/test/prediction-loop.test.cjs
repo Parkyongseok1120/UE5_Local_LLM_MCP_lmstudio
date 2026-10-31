@@ -98,6 +98,73 @@ function fakeController(history, tokenSource, overrides = {}, tools = []) {
   return ctl;
 }
 
+for(const scenario of ["ordinary","same_round_change","cancel","off","note_disabled","malformed","v1_clear","truncated_objective"])
+test(`architecture production replay: ${scenario}`,async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"architecture-replay-"));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const project=path.join(directory,"Fixture.uproject");fs.writeFileSync(project,'{"EngineAssociation":"5.7"}');
+  const source="Source/Health.cpp",writes=[],abort=new AbortController();let rounds=0,sawInput=false;
+  const store={read(){return null;},write(key,note){writes.push({key,note});return true;}};
+  const toolList=["read_file","replace_in_file"].map(name=>({name,pluginIdentifier:"mcp/unreal-agent",description:name,
+    parametersJsonSchema:{type:"object",properties:{path:{type:"string"},project:{type:"string"}}}}));
+  const call=(opts,id,name,result,text="")=>{
+    opts.onMessage(ChatMessage.from({role:"assistant",content:[...(text?[{type:"text",text}]:[]),
+      {type:"toolCallRequest",toolCallRequest:{type:"function",id,name,arguments:{path:source,project}}}]}));
+    opts.onMessage(ChatMessage.from({role:"tool",content:[{type:"toolCallResult",toolCallId:id,content:JSON.stringify(result)}]}));
+  };
+  const observed={ok:true,path:source,canonicalProject:project,sha256:"a".repeat(64),startLine:1,endLine:1,totalLines:1,content:"class UHealth : public UActorComponent {};"};
+  const model={identifier:"architecture-production-replay",async getContextLength(){return 131072;},
+    async applyPromptTemplate(chat){return chat.toString();},async countTokens(text){return Math.ceil(text.length/4);},
+    async act(chat,_tools,opts){
+      const n=rounds++;assert.ok(n<4,"architecture never starts an extra model loop");
+      if(n===0){call(opts,"source_a","read_file",observed);opts.onPredictionCompleted({stats:{stopReason:"toolCalls"}});opts.onRoundEnd();throw opts.signal.reason;}
+      const text=chat.getMessagesArray().map(m=>m.getText()).join("\n");
+      if(scenario==="off"){assert.doesNotMatch(text,/For an Unreal code task|Architecture reference data/);completeRecoveryReply(opts,"Done.");return;}
+      assert.match(text,/For an Unreal code task/);sawInput=true;
+      if(scenario==="note_disabled"){assert.doesNotMatch(text,/optionally use a private v2 footer/);completeRecoveryReply(opts,"Done.");return;}
+      if(n===2){
+        const suffix=scenario==="v1_clear"?'\n<!-- direct-continuity-note-v1 -->\n<continuity-note>\n{}\n</continuity-note>':"";
+        completeRecoveryReply(opts,"Done."+suffix);return;
+      }
+      const line=text.split("\n").filter(line=>line.startsWith('{"depth":')).at(-1);
+      assert.ok(line,"admitted structural reference data is visible to the actual model input");
+      const data=JSON.parse(line);assert.ok(data.evidence.length,"the returned source has an input-issued handle");
+      const decision=require("./helpers/architecture.cjs").draft({refs:data.evidence.map(e=>e.handle)});
+      const body=scenario==="malformed"?{schemaVersion:2,decisions:[{statement:"Preserve cleanup",rationale:"Already present"}],architecture:{upsert:[{approved:true}]}}
+        :{schemaVersion:2,architecture:{upsert:[decision]}};
+      const footer='\n<!-- direct-continuity-note-v2 -->\n<continuity-note>\n'+JSON.stringify(body)+'\n</continuity-note>';
+      if(scenario==="cancel"){opts.onMessage(ChatMessage.create("assistant","Interrupted."+footer));abort.abort(Error("test user cancel"));throw abort.signal.reason;}
+      if(scenario==="same_round_change" || scenario==="v1_clear"){
+        call(opts,"source_b",scenario==="v1_clear"?"read_file":"replace_in_file",scenario==="v1_clear"?observed:
+          {ok:true,path:source,canonicalProject:project,changed:true,status:"completed",sha256:"b".repeat(64)},"Continuing."+footer);
+        opts.onPredictionCompleted({stats:{stopReason:"toolCalls"}});opts.onRoundEnd();throw opts.signal.reason;
+      }
+      completeRecoveryReply(opts,"Done."+footer);
+    }};
+  // A truncated objective has no complete text: no pattern is selected from it.
+  const request="피격 처리 수정해줘"+(scenario==="truncated_objective"?" "+"세부 조건 ".repeat(700):"");
+  const ctl=fakeController(Chat.from([{role:"user",content:request}]),model,{projectEngine:"unreal",projectIdentity:project,
+    designGuidanceMode:scenario==="off"?"off":"auto",designGuidanceMaxTokens:8192,reportReviewMode:"off",semanticHandoff:false},toolList);
+  if(scenario!=="note_disabled")ctl.getWorkingDirectory=()=>directory;
+  ctl.abortSignal=abort.signal;ctl.guardAbort=()=>{if(abort.signal.aborted)throw abort.signal.reason;};
+  const run=productionHandler(store,undefined,undefined,undefined,()=>({}))(ctl);
+  if(scenario==="cancel")await assert.rejects(run,/test user cancel/);else await run;
+  assert.equal(ctl.session.disposed,true);
+  const note=writes.at(-1)?.note;
+  if(["ordinary","v1_clear","truncated_objective"].includes(scenario)){assert.equal(note.architecture.length,1);assert.equal(note.architecture[0].applicability,"same_observed_version");}
+  else assert.ok(!note?.architecture?.length);
+  if(scenario==="same_round_change")assert.ok(ctl.debugValues.some(e=>e.event==="architecture_decision" && e.reason==="superseded_reference"));
+  if(scenario==="malformed")assert.equal(note.decisions[0].statement,"Preserve cleanup");
+  if(scenario==="ordinary") {
+    assert.ok(ctl.debugValues.some(e=>e.event==="architecture_context" && e.admittedPatternIds.includes("ue.component-composition")));
+    assert.ok(ctl.debugValues.some(e=>e.event==="architecture_persistence" && e.status==="stored" && e.stateItemCount===1));
+  }
+  if(scenario==="truncated_objective")assert.ok(ctl.debugValues.some(e=>e.event==="architecture_context"
+    && e.requestedPatternIds.length===0 && e.reasonCodes.includes("objective_truncated")));
+  assert.equal(sawInput,scenario!=="off");
+  assert.ok(ctl.blocks.every(block=>!block.text.includes("direct-continuity-note-v2")));
+});
+
 // v3 uses a synthetic prior audit and returned declarations only.
 for (const objective of ["mutate", "review"]) test(`v3 ${objective === "mutate"
   ? "mutation objective under working-set pressure reaches a mutation tool call"
@@ -6150,7 +6217,7 @@ test('a projection that already lands under low water changes nothing more, and 
   assert.equal(run.byRound('conversation_prose_archived').length, 0);
 });
 
-test('retained guidance is still admitted within budget after a projection round reaches the target', async () => {
+test('retained guidance stays within budget after projection and preserves growth below the midpoint', async () => {
   const run = proseAndReadRun({ rounds: 10, proseChars: 6000, readLines: 220,
     overrides: { projectEngine: 'unreal', designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 } });
   await handlePredictionLoop(run.ctl);
@@ -6160,7 +6227,15 @@ test('retained guidance is still admitted within budget after a projection round
   assert.ok(projectedRounds.length > 0);
   for (const round of projectedRounds) {
     const low = lows[round], admitted = guidance.find(e => e.roundIndex === round);
-    assert.ok(low.finalExactInputTokens <= low.effectiveLowWaterTokens, `round ${round} reached the target`);
+    if (low.compactionRequested) {
+      assert.ok(low.finalExactInputTokens <= low.effectiveLowWaterTokens, `round ${round} reached the target`);
+    } else {
+      // Optional reference growth may move projection to a different round.
+      // Existing policy preserves the conversation below the midpoint.
+      assert.ok(low.finalExactInputTokens <= (low.effectiveLowWaterTokens + low.effectiveHighWaterTokens) / 2,
+        `round ${round} retained only normal growth`);
+      assert.equal(low.selectedCandidate, 'unchanged');
+    }
     assert.equal(admitted.outcome, 'included', `round ${round}`);
     assert.ok(admitted.finalInputTokens <= low.effectiveHighWaterTokens, `round ${round} guidance within high water`);
   }
@@ -6768,4 +6843,20 @@ for(const streaming of [false,true])test(`truncated transformed reference data n
   assert.ok(ctl.blocks.every(b=>!b.text.includes('[Derived reference data')));
   const outcome=ctl.debugValues.find(e=>e.event==='execution_outcome');
   assert.equal(outcome.reportCompleted,false);assert.equal(outcome.reportDelivered,false);
+});
+
+test('structure-only overclaim schedules one existing tool-free scope supplement',async()=>{
+ let calls=0;
+ const model={identifier:'scope-supplement',async getContextLength(){return 65536;},async applyPromptTemplate(chat){return chat.toString();},async countTokens(text){return Math.ceil(text.length/4);},
+  async act(chat,tools,opts){calls++;
+   if(calls===1){opts.onPredictionCompleted({stats:{stopReason:'toolCalls'}});
+    opts.onMessage(ChatMessage.from({role:'assistant',content:[{type:'toolCallRequest',toolCallRequest:{id:'v',type:'function',name:'evidence_first_validate',arguments:{packet:{claims:[]}}}}]}));
+    opts.onMessage(ChatMessage.from({role:'tool',content:[{type:'toolCallResult',toolCallId:'v',content:JSON.stringify({ok:true,validationScope:'packet_structure_and_record_consistency',factualEvidenceVerified:false})}]}));opts.onRoundEnd();throw opts.signal.reason;
+   }
+   if(calls===3){assert.equal(tools.length,0);assert.match(chat.toString(),/report scope corrections/);}
+   opts.onPredictionCompleted({stats:{stopReason:'eosFound'}});opts.onMessage(ChatMessage.create('assistant',calls===2?'검증 완료.':'## 검토 보완\n형식 검사만 통과했으며 사실 검증은 하지 않았습니다.'));
+  }};
+ const validator={name:'evidence_first_validate',pluginIdentifier:'mcp/evidence-first',description:'packet structure',parametersJsonSchema:{type:'object',properties:{}}};
+ const ctl=fakeController(Chat.from([{role:'user',content:'코드 감사해줘'}]),model,{reportReviewMode:'on'},[validator]);await handlePredictionLoop(ctl);
+ assert.equal(calls,3);assert.equal(ctl.debugValues.filter(e=>e.event==='report_review_scheduled').length,1);
 });

@@ -14,6 +14,7 @@ import { estimateReadResponseBytes } from "./budget-broker";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics, decodeEnvelope } from "./tool-result-semantics.js";
+import type { ArchitectureEvidenceRef, PatternRef } from "./architecture-contracts";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
 import { extractPriorContinuityState } from "./continuity-memory.js";
 const identity = require("./evidence-identity.js") as {
@@ -112,9 +113,82 @@ export class EvidenceManager {
         sourceMode:record.value.sourceMode || record.request.arguments?.sourceMode,
         canonicalProject:record.value.canonicalProject || record.request.arguments?.project},kind,executionId,{contractLookup:capability.roles?.includes("contract_lookup")});
     }
+    for(const change of this.architectureChanges(messages)) {
+      if(change.sourceKey)this.ledger.invalidateReturnedSource(change.sourceKey);
+      else this.invalidateReturnedSources();
+    }
   }
   returnedSource(sourceKey:string,span:[number,number]) { return this.ledger.returnedSource(sourceKey,span,this.sourceExecutionId); }
   returnedSources() { return this.ledger.returnedSources(this.sourceExecutionId); }
+  /** Read-only architecture projection, derived from the existing returned-source ledger. */
+  architectureSources(history:Chat):Array<{ref:ArchitectureEvidenceRef;body:string}> {
+    const files=this.returnedSources().files, result:Array<{ref:ArchitectureEvidenceRef;body:string}>=[];
+    for(const item of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
+      if(!item.trustedRead || !item.request || !item.value || !item.tool || capabilityFor(item.tool,item.request)?.resultKind!=="source_body")continue;
+      const value={...item.value,sourceMode:item.value.sourceMode || item.request.arguments?.sourceMode,
+        canonicalProject:item.value.canonicalProject || item.request.arguments?.project};
+      const key=identity.fileSourceKey(value),file=files.find(f=>f.sourceKey===key);
+      const body=[item.value.content,item.value.text,item.value.body,item.value.code].find(v=>typeof v==="string");
+      if(!file || !body || item.value.bodyOmitted || !file.bodyReturned)continue;
+      const version=String(item.value.sha256 || item.value.hash || "");
+      const observed=this.ledger.sourceObservation(key);
+      result.push({ref:{ref:`tool-call:${item.request.id}`,sourceKey:file.sourceKey,...(version?{observedVersion:version}:{}),
+        applicability:observed?.invalidated || !observed?"unknown":observed.version!==version?"unknown"
+          :observed.historical?"historical":"same_observed_version",
+        availability:"in_input"},body:String(body).slice(0,262144)});
+    }
+    const unique=new Map<string,{ref:ArchitectureEvidenceRef;body:string}>();
+    for(const item of result) {
+      const prior=unique.get(item.ref.sourceKey!);
+      if(!prior || item.ref.applicability==="same_observed_version" || prior.ref.applicability!=="same_observed_version")unique.set(item.ref.sourceKey!,item);
+    }
+    return [...unique.values()].slice(-16);
+  }
+  architectureVersions():ArchitectureEvidenceRef[] {
+    return this.returnedSources().files.map(file=>{
+      const observed=this.ledger.sourceObservation(file.sourceKey);
+      return {ref:"tool-call:version-observation",sourceKey:file.sourceKey,
+        ...(observed?.version?{observedVersion:observed.version}:{}),availability:"metadata_only",
+        applicability:!observed || observed.invalidated?"unknown":observed.historical?"historical":"same_observed_version"};
+    });
+  }
+  invalidateReturnedSources() {this.ledger.invalidateSourceObservations();}
+  architectureChanges(messages:ChatMessage[]):ArchitectureEvidenceRef[] {
+    const output:ArchitectureEvidenceRef[]=[];
+    for(const item of observationRecords(messages,this.tools,{confirmedPairsOnly:true})) {
+      if(!item.request || !item.tool || !item.value)continue;
+      const capability=capabilityFor(item.tool,item.request);
+      if(capability?.effect!=="mutation")continue;
+      const value=item.value,status=resultSemantics(value,item.tool.pluginIdentifier).operationStatus;
+      if(value.changed===false || value.status==="no_change" || status==="failed" && value.status!=="partially_applied" && !String(value.errorCode||"").includes("CONFLICT"))continue;
+      const files=Array.isArray(value.files)?value.files:[value];
+      if(["outcome_unknown","unknown","canceled","pending","accepted"].includes(status)
+        && capability.roles?.includes("source_write") && !files.some(file=>file && typeof file.path==="string"))
+        output.push({ref:`tool-call:${item.request.id}`,applicability:"unknown",availability:"unavailable"});
+      for(const file of files) {
+        if(!file || typeof file.path!=="string")continue;
+        const normalized=identity.normalizeObservation({...value,...file,canonicalProject:file.canonicalProject || value.canonicalProject || item.request.arguments?.project},item.request,item.tool.pluginIdentifier || "local");
+        const key=identity.fileSourceKey(normalized);
+        const version=file.sha256 || file.hash;
+        output.push({ref:`tool-call:${item.request.id}`,sourceKey:key,...(typeof version==="string"?{observedVersion:version}:{}),
+          applicability:status==="completed"?"stale":"unknown",availability:"unavailable"});
+      }
+    }
+    return output;
+  }
+  architecturePatterns(history:Chat):PatternRef[] {
+    const patterns:PatternRef[]=[];
+    for(const item of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
+      if(!item.trustedRead || !item.value || !Array.isArray(item.value.matches))continue;
+      for(const row of item.value.matches) {
+        if(!row || typeof row.patternId!=="string" || !/^ue\.[a-z-]+$/u.test(row.patternId)
+          || !/^[a-f0-9]{64}$/u.test(row.contentHash) || !/^[a-f0-9]{64}$/u.test(row.catalogHash))continue;
+        patterns.push({patternId:row.patternId,contentHash:row.contentHash,catalogHash:row.catalogHash,origin:"rag",applicability:"unverified",
+          ...(typeof item.value.indexGenerationId==="string"?{indexGenerationId:item.value.indexGenerationId}:{})});
+      }
+    }
+    return [...new Map(patterns.map(p=>[JSON.stringify(p),p])).values()].slice(-2);
+  }
   rebuildReturnedSources(history: Chat) {
     if(this.ledger.returnedSources().files.length || this.ledger.returnedSources().contractIds.size)return;
     for(const record of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {

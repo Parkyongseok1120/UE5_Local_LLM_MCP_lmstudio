@@ -1,6 +1,8 @@
 import { Chat, type ChatMessage } from "@lmstudio/sdk";
 import { workingContextModule } from "./context-ports";
-import { isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+import { capabilityFor, isObservationOnlyToolCall, type RemoteToolLike } from "./tool-capability-registry";
+import { resultSemantics } from "./tool-result-semantics.js";
+import { subjectLeaf } from "./review-subject";
 const { normalizeObservation } = require("./evidence-identity.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js") as {
   decodeToolResultRecord(content: unknown): { value: unknown };
@@ -33,18 +35,37 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\
 export class ReviewEvidenceIndex {
   private readonly reads = new Map<string, IndexedRead>();
   private readonly searches: IndexedSearch[] = [];
+  private readonly committedVersions = new Map<string, string | null>();
   constructor(private readonly tools?: readonly RemoteToolLike[]) {}
 
   observe(messages: readonly ChatMessage[]) {
     const history = Chat.empty(); for (const message of messages) history.append(message);
     const pairs = workingContextModule.exchangeIndex(history);
+    const batchCommits = new Map<string, string | null>();
     for (const [mi, message] of messages.entries()) for (const [ri, result] of message.getToolCallResults().entries()) {
       const request = pairs.matches.get(`${mi}:${ri}`);
       let value = decodeToolResultRecord(result.content).value as Record<string, any> | null;
       if (!request || !value || typeof value !== "object" || value.ok === false) continue;
       if (this.tools) {
         const matches = this.tools.filter(tool => tool.name === request.name);
-        if (matches.length !== 1 || !isObservationOnlyToolCall(matches[0], request)) continue;
+        if (matches.length !== 1) continue;
+        if (capabilityFor(matches[0], request)?.effect === "mutation") {
+          if (resultSemantics(value, matches[0].pluginIdentifier).operationStatus === "completed"
+            && value.changed !== false && value.status !== "no_change") {
+            const files = Array.isArray(value.files) ? value.files : [value];
+            for (const item of files) {
+              const target = item?.path || (files.length === 1 ? request.arguments?.path : null);
+              if (typeof target !== "string" || item?.ok === false || item?.applied === false) continue;
+              const normalized = normalizeObservation({ ...value, ...item, path: target }, request, matches[0].pluginIdentifier || "local");
+              const removed = ["deleted", "moved_to_trash"].includes(String(item.operation || value.operation));
+              const key = fileSourceKey(normalized), version = !removed && typeof item.sha256 === "string" ? item.sha256 : null;
+              batchCommits.set(key, batchCommits.has(key) && batchCommits.get(key) !== version ? null : version);
+            }
+            while (this.committedVersions.size > 256) this.committedVersions.delete(this.committedVersions.keys().next().value!);
+          }
+          continue;
+        }
+        if (!isObservationOnlyToolCall(matches[0], request)) continue;
         value = normalizeObservation(value, request, matches[0].pluginIdentifier || "local") as Record<string, any>;
       }
       if (SOURCE_READS.has(request.name) && typeof value.content === "string" && typeof value.path === "string") this.addRead(value);
@@ -55,6 +76,10 @@ export class ReviewEvidenceIndex {
         hits: value.results.filter((hit: any) => hit && Number.isSafeInteger(hit.line))
           .map((hit: any) => ({ uri: String(hit.uri || hit.path || ""), line: hit.line, text: String(hit.text || "") })) });
     }
+    // Calls in one round can run in parallel. Their arrival order cannot
+    // establish that a body followed a commit, so the commit invalidates last.
+    for (const [key, version] of batchCommits) this.committedVersions.set(key, version);
+    while (this.committedVersions.size > 256) this.committedVersions.delete(this.committedVersions.keys().next().value!);
     while (this.searches.length > MAX_SEARCHES) this.searches.shift();
   }
 
@@ -67,7 +92,9 @@ export class ReviewEvidenceIndex {
     // Keep the widest body of the newest version: a later narrow range does
     // not replace the whole file it lies in.
     const lines = String(value.content).split(/\r?\n/u).map(line => line.replace(LINE_PREFIX, ""));
-    if (prior && prior.sha === sha && prior.startLine === 1 && prior.lines.length >= lines.length && startLine !== 1) return;
+    this.committedVersions.delete(key);
+    if (prior && sha && prior.sha === sha && prior.startLine !== null && startLine !== null
+      && prior.startLine <= startLine && prior.startLine + prior.lines.length >= startLine + lines.length) return;
     this.reads.delete(key);
     this.reads.set(key, { path: value.path, key, sha, startLine, lines });
     let total = [...this.reads.values()].reduce((sum, read) => sum + read.lines.join("\n").length, 0);
@@ -83,9 +110,13 @@ export class ReviewEvidenceIndex {
     const matches = [...this.reads.values()].filter(read => pathKey(read.path) === key);
     return matches.length === 1 ? matches[0].sha : null;
   }
+  superseded(bundle: EvidenceBundle): boolean {
+    return Boolean(bundle.sourceKey && this.committedVersions.has(bundle.sourceKey)
+      && (this.committedVersions.get(bundle.sourceKey) === null || this.committedVersions.get(bundle.sourceKey) !== bundle.sha));
+  }
 
   bundleFor(identifier: string, evidence: string): EvidenceBundle | null {
-    const name = identifier.split("::").pop()!;
+    const name = subjectLeaf(identifier);
     const word = new RegExp(`(?<![\\w])${escapeRegExp(name)}(?![\\w])`, "u");
     const searches = this.searches.filter(search => word.test(search.query) || search.hits.some(hit => word.test(hit.text)));
     const search = searches.at(-1);

@@ -25,12 +25,17 @@ def corpus_capabilities(
             "engineEvidence": None,
             "projectEvidence": None,
         }
+    patterns = raw.get("architecturePatterns")
+    pattern_metadata = {}
+    if isinstance(patterns, dict) and patterns.get("schemaVersion") == 1 and type(patterns.get("count")) is int and patterns["count"] >= 0:
+        pattern_metadata["architecturePatterns"] = {key: patterns[key] for key in ("schemaVersion", "count", "catalogHash") if key in patterns}
     return {
         "known": True,
         "engineEvidence": raw.get("engineEvidence") is True,
         "engineEvidenceChunks": int(raw.get("engineEvidenceChunks") or 0),
         "projectEvidence": raw.get("projectEvidence") is True,
         "projectEvidenceChunks": int(raw.get("projectEvidenceChunks") or 0),
+        **pattern_metadata,
     }
 
 

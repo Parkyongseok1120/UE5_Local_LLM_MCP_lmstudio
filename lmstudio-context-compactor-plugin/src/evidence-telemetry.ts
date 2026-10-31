@@ -5,11 +5,21 @@ import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
 import { type ContinuityNote, type DirectConfig, type InputAvailabilityProjection, type ContextMeasurement, type RewriteCause } from "./execution-contracts";
 import type { RecoveryProgress, ReadScreening } from "./evidence-manager";
+import {runtimeInstallationIdentity} from "./runtime-identity";
+import type {RemoteToolLike} from "./tool-capability-registry";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
   "gitTiming",
 ]);
+export function runtimeExecutionTelemetry(config:DirectConfig,objective:{kind:string;mutationState:string},executionId:string,modelIdentifier:string,
+  registered:RemoteToolLike[],selected:RemoteToolLike[],readOnlyReview:boolean) {
+  return {event:"direct_runtime_identity",objectiveKind:objective.kind,mutationState:objective.mutationState,executionId,
+    ...runtimeInstallationIdentity(),modelIdentifier,
+    toolRegistryFingerprint:telemetryFingerprint(registered.map(tool=>({name:tool.name,pluginIdentifier:tool.pluginIdentifier||null,schema:tool.parametersJsonSchema||null}))),
+    fullToolCount:selected.length,toolProfile:config.auditCompletionMode==="bounded"?"bounded_audit":readOnlyReview?"read_only_review":"full",
+    ...runtimeConfigTelemetry(config)};
+}
 
 export function runtimeConfigTelemetry(config: DirectConfig) {
   return {

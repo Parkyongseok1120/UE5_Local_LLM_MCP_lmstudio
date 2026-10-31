@@ -8,7 +8,7 @@ import { BudgetBroker } from "./budget-broker";
 import { RUNTIME_FACTS, type RuntimeFactEntry } from "./execution-contracts";
 import { boundPastReasoning, resolveGenerationBudget, selectMeasuredCandidate } from "./context-budget";
 import { core, inputAvailability, modelNotes, workingContextModule, REASONING_SEPARATOR } from "./context-ports";
-import { stripInternalDataEcho } from "./internal-data-output";
+import { HOST_FRAME_HEADERS, stripInternalDataEcho } from "./internal-data-output";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { numeric } from "./execution-config";
 import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, type DirectConfig, type NormalizedMessage } from "./execution-contracts";
@@ -359,7 +359,7 @@ export function composeModelHistory(
   const sentParts = [...blocks.values()].flat();
   const privateDataParts = sentParts.filter(part =>
     part.startsWith("[Available tool-call refs]") || part.startsWith("[Derived reference data") || part.startsWith("[Delivered report")
-    || runtimeHeaders.some(header => part.startsWith(header) && !latestUserText.includes(header)));
+    || [...runtimeHeaders, ...HOST_FRAME_HEADERS].some(header => part.startsWith(header) && !latestUserText.includes(header)));
   // Telemetry: the per-round data this input carries (all blocks, earlier ones included).
   const runtimeDataChars = sentParts.reduce((sum, part) => sum + part.length, 0);
   const runtimeDataCurrentChars = runtimeParts.reduce((sum, part) => sum + part.length, 0);

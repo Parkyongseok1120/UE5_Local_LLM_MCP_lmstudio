@@ -55,6 +55,10 @@ export interface PressureSignal {
 export type ContinuationAction = "continue" | "recover_read" | "narrow_to_mutation" | "finalize";
 
 export type ContinuityNote = {
+  schemaVersion?:2;
+  architecture?:import("./architecture-contracts").ArchitectureDecision[];
+  architectureTombstones?:import("./architecture-contracts").ArchitectureSnapshot["architectureTombstones"];
+  architectureOmittedCount?:number;
   scope: { objectiveFingerprint: string; projectIdentity?: string };
   decisions: Array<unknown>;
   rejectedHypotheses: Array<unknown>;
