@@ -49,4 +49,4 @@ LM Studio용 하네스·컴팩터·도구 계약 v4와 아키텍처 판단의 �
 - 이전 실행 기록과 설치 확인은 해당 시점의 관찰입니다. 현재 배포본의 모든 장비·엔진·프로젝트 조합에 대한 설치·실행 증명이 아닙니다.
 - 1.4.x가 마지막 배포 계열이며, 최적화·안정화 지원은 2026년 11월 30일까지 예정되어 있습니다. 1.5 배포 계획은 없습니다.
 
-구현과 검증의 상세 내용은 [v4 계약 기록](Harness_Compactor_Tool_Contract_v4_20261027.md), [출력·복구·저장 후속 수정](Harness_Output_Contract_Followup_20261027.md), [아키텍처 판단 구현](Harness_Architecture_Awareness_Implementation_20261028.md), [계약 수명 경계](Harness_Contract_Lifetimes_20261028.md)에 있습니다.
+구현과 검증의 상세 내용은 [v4 계약 기록](Harness_Compactor_Tool_Contract_v4_20261027.md), [출력·복구·저장 후속 수정](Harness_Output_Contract_Followup_20261027.md), [아키텍처 판단 구현](https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio/blob/v1.4.4/docs/Harness_Architecture_Awareness_Implementation_20261028.md), [계약 수명 경계](Harness_Contract_Lifetimes_20261028.md)에 있습니다.
