@@ -8,7 +8,7 @@
 
 사용자가 작성한 「하네스·컴팩터·아키텍처 기능 전체 계약 감사와 리팩토링 계획(2026-10-28)」이 타당한지 코드 기준으로 다시 확인하고, 계획에 없는 추가 수정사항을 찾는 작업이다.
 
-- 검토 대상 코드: `C:/Users/sster/.codex/worktrees/harness-output-contract-fixes/UE5_Local_LLM_MCP_lmstudio` (`codex/harness-output-contract-fixes` @2b13b38 + **미커밋 수정 42개 파일, 미추적 신규 파일 약 25개**). 이 worktree(`claude/harness-compactor-contract-audit-4fb294` @20ae99e)에는 아키텍처 구현이 없다.
+- 검토 대상 코드: `${WORKTREES}/harness-output-contract-fixes/UE5_Local_LLM_MCP_lmstudio` (`codex/harness-output-contract-fixes` @2b13b38 + **미커밋 수정 42개 파일, 미추적 신규 파일 약 25개**). 이 worktree(`claude/harness-compactor-contract-audit-4fb294` @20ae99e)에는 아키텍처 구현이 없다.
 - 방법: 결함 C1–P1을 하나씩 소스 줄 단위로 대조하고, 같은 경계 안에서 추가 결함을 찾았다. 테스트 재실행이나 실제 모델 실행은 하지 않았다(빌드 단계가 생성 파일을 다시 쓰기 때문).
 - 아래 경로 표기: `src/` = `lmstudio-context-compactor-plugin/src/`.
 
