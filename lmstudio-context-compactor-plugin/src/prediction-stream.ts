@@ -66,28 +66,73 @@ function alignEcho(prefix: string, current: string, maxEdits: number, final: boo
   return { i, j, state: j >= prefix.length ? "complete" as const : "consistent" as const };
 }
 
+// A review may instead rewrite the whole report with a section inserted in the
+// middle (conversation 1793532481549: a new "### 6." at 71%). An echo that
+// covered this much of the report before diverging is held to the end; when the
+// output still contains most report lines, only its new lines are shown.
+const REWRITE_MIN_CHARS = 80, REWRITE_MIN_SHARE = 0.2, REWRITE_MIN_COVERAGE = 0.8, SAME_LINE_RATIO = 0.9;
+const lineKey = (line: string) => line.replace(/\s+/gu, " ").trim();
+/** One line edited in place (a fixed typo or word) still counts as the same line. */
+function sameLine(a: string, b: string): boolean {
+  if (a === b) return true;
+  const longest = Math.max(a.length, b.length);
+  if (longest < 12 || Math.abs(a.length - b.length) > longest * (1 - SAME_LINE_RATIO)) return false;
+  let start = 0, end = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  return (start + end) / longest >= SAME_LINE_RATIO;
+}
+
 /** A supplement may echo a delivered answer before producing its actual delta.
  * Hold only a possible prefix; unrelated replies and short partial matches pass. */
 export class DeliveredPrefixEchoFilter {
   private buffer = "";
   private passthrough = false;
+  private rewriting = false;
   private readonly prefix: string;
+  private readonly deliveredLines: string[];
   private readonly maxEdits: number;
   duplicateSuppressed = false;
   suppressedChars = 0;
   constructor(deliveredPrefix = "") {
     this.prefix = this.normalize(deliveredPrefix);
+    this.deliveredLines = deliveredPrefix.split(/\r?\n/u).map(lineKey).filter(Boolean);
     this.maxEdits = this.prefix.length >= ECHO_EDIT_MIN_PREFIX ? Math.floor(this.prefix.length * ECHO_EDIT_SHARE) : 0;
   }
   private normalize(value: string) { return value.replace(/\s+/gu, " ").trim(); }
   push(text: string): string {
     if (this.passthrough || !this.prefix) return this.release(text);
     this.buffer += text;
+    if (this.rewriting) return "";
     const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, false);
     if (aligned.state === "pending" || aligned.state === "consistent") return "";
+    if (aligned.j < this.prefix.length * 0.9) {
+      if (this.maxEdits && aligned.j >= Math.max(REWRITE_MIN_CHARS, this.prefix.length * REWRITE_MIN_SHARE)) {
+        this.rewriting = true; return "";
+      }
+      this.passthrough = true; return this.drain();
+    }
     this.passthrough = true;
-    if (aligned.j < this.prefix.length * 0.9) return this.drain();
     return this.cutEcho(aligned.i);
+  }
+  /** A held rewrite: its new lines when it still contains most of the report, else all of it. */
+  private rewriteDelta(): string {
+    const lines = this.buffer.split(/\r?\n/u);
+    const known = (line: string) => this.deliveredLines.some(delivered => sameLine(delivered, line));
+    const keys = lines.map(lineKey);
+    const covered = this.deliveredLines.filter(delivered => keys.some(key => key && sameLine(delivered, key))).length;
+    if (covered < this.deliveredLines.length * REWRITE_MIN_COVERAGE) return this.drain();
+    const runs: string[][] = [];
+    let run: string[] | null = null;
+    lines.forEach((line, index) => {
+      const key = keys[index];
+      if (key && !known(key)) { (run ||= (runs.push([]), runs[runs.length - 1])).push(line); return; }
+      if (!key && run) run.push(line); else run = null;
+    });
+    const delta = runs.map(block => block.join("\n").trim()).filter(Boolean).join("\n\n");
+    this.duplicateSuppressed = true; this.suppressedChars += this.buffer.length - delta.length; this.buffer = "";
+    if (!delta) return "";
+    return `\n\n${/^#{1,6}\s*검토 보완/mu.test(delta) ? "" : "## 검토 보완\n"}${delta}`;
   }
   /** Map a normalized echo length back to the original text, preserving the delta. */
   private cutEcho(matched: number): string {
@@ -117,6 +162,7 @@ export class DeliveredPrefixEchoFilter {
   finish(): string {
     if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain()); }
     this.passthrough = true;
+    if (this.rewriting) return this.rewriteDelta();
     const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, true);
     return aligned.j >= this.prefix.length * 0.9 ? this.cutEcho(aligned.i) : this.drain();
   }
