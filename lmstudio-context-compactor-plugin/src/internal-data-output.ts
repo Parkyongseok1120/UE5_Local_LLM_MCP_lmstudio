@@ -10,7 +10,10 @@ export { HOST_FRAME_HEADERS };
 const JSON_LINE = /^(?:[{}\[\]",:0-9-]|true\b|false\b|null\b)/u;
 const OBSERVATION_HEADER = "Runtime evidence observation:";
 const OMITTED_HEADER = "Runtime data omitted for budget:";
-const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared)\] \S+ \((?:reasoning|visible), round \d+\): /u;
+// A register row as review-register.ts lines() renders it. Its identifier may
+// contain spaces ("AActor::TakeDamage engine body"); conversation 1793526507401
+// showed rows the model wrote in this shape for its own reasoning.
+const REVIEW_ROW_SHAPE = /^- \[(?:found|cleared|needs_recheck)\] [^\n]{1,200}? \((?:reasoning|visible), round \d+\): /u;
 // The evidence line under a register row (review-register.ts bundleLine).
 const REVIEW_BUNDLE_SHAPE = /^ {2}↳ \S/u;
 // A re-rendered observation header: its counts change between rounds.
@@ -268,7 +271,9 @@ export class InternalDataOutputFilter {
       ...(this.inRuntime ? [...this.runtimeLines] : []), ...(this.budgetParts.length ? [this.budgetHeader] : [])].filter((p): p is string => Boolean(p));
     // A bullet may be a runtime row: hold its line until it can be classified.
     const possibleRow = (this.runtimeInjected || this.runtimePaths.size > 0)
-      && ("- ".startsWith(this.pending) || this.pending.startsWith("- "));
+      && ("- ".startsWith(this.pending) || this.pending.startsWith("- "))
+      // A register row's evidence line is indented: hold it until classified too.
+      || this.reviewInjected && ("  ↳ ".startsWith(this.pending) || this.pending.startsWith("  ↳ "));
     // Inside a block, a rewritten injected sentence diverges only after its opening.
     const possibleSentence = this.inRuntime && (this.pending.length >= LINE_PREFIX_CHARS
       ? this.runtimeLinePrefixes.has(this.pending.slice(0, LINE_PREFIX_CHARS))
