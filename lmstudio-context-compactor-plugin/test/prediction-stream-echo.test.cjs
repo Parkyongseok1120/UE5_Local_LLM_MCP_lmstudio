@@ -41,3 +41,18 @@ for(const size of [1,7,1000])test(`a long report echoed with a small edit is sup
  const rewritten=REPORT.replace(/\. /g,' 입니다. ').replace(/:/g,' →');
  assert.equal(run(REPORT,rewritten,size).output,rewritten);
 });
+
+// Conversation 1793532481549: the review rewrote the whole report and inserted a
+// new section at 71%, so the user saw the report twice. Only the new lines show.
+const SECTION=['### 6. 실험 RPC 계약','- 낙관적 동시성: 클라이언트가 ExpectedRevision을 보내고 서버가 불일치 시 거부.','- Pending 자동 해제: OnRep_Experiment 뒤 false.'].join('\n');
+const INSERTED=FIXED.replace('## 영역별 종합',SECTION+'\n\n## 영역별 종합');
+for(const size of [1,7,1000])test(`a rewritten report with an inserted section shows only the new section (fragments=${size})`,()=>{
+ const out=run(REPORT,INSERTED,size);
+ assert.equal(out.output,'\n\n## 검토 보완\n'+SECTION);assert.equal(out.suppressed,true);
+ // A supplement the model already headed is kept after the inserted section, without a second heading.
+ const own='## 검토 보완\n- InitNewPlayer 지적은 엔진 순서상 철회합니다.';
+ assert.equal(run(REPORT,INSERTED+'\n\n'+own,size).output,'\n\n'+SECTION+'\n\n'+own);
+ // An answer that starts like the report but then covers little of it is shown whole.
+ const different=REPORT.slice(0,REPORT.indexOf('## P3'))+'\n완전히 다른 결론: 이 보고서는 범위를 벗어났습니다.\n'.repeat(3);
+ assert.equal(run(REPORT,different,size).output,different);
+});
