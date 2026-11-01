@@ -168,8 +168,10 @@ test('budget, scope, read-profile and duplicate denials close their generation s
     const f=make();f.tracker.start(0,42);f.tracker.name(0,42,f.request.name);f.tracker.end(0,42);
     await f.invoke();
     assert.equal(f.outcome.type,'deny');assert.equal(f.trace.at(-1).validationState,expected);
-    assert.equal(f.tracker.hasUnfinished(),false);assert.equal(f.statuses[0].state.status,'canceled');
-    assert.match(f.statuses[0].state.text,/도구 실행 거부/);assert.equal(f.cards.length,0);
+    // A shared read-budget denial defers the read; it is not shown as a refusal.
+    const deferred=expected==='denied_batch_budget';
+    assert.equal(f.tracker.hasUnfinished(),false);assert.equal(f.statuses[0].state.status,deferred?'done':'canceled');
+    assert.match(f.statuses[0].state.text,deferred?/다음 라운드로 미룸/:/도구 실행 거부/);assert.equal(f.cards.length,0);
     const before=f.statuses[0].state;f.tracker.finishPending();assert.deepEqual(f.statuses[0].state,before);
   }
 });

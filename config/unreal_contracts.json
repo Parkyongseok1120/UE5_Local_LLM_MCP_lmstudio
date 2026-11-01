@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 6,
+  "revision": 7,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.7",
@@ -838,6 +838,62 @@
       ]
     },
     {
+      "id": "ue.gameframework.login-playerstate-order",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "lifecycle",
+      "applicability": {
+        "engineVersions": [
+          "5.7",
+          "5.8"
+        ],
+        "types": [
+          "AGameModeBase",
+          "APlayerController"
+        ]
+      },
+      "statement": "On the server, AGameModeBase::Login spawns the PlayerController before it calls InitNewPlayer, and APlayerController::PostInitializeComponents calls InitPlayerState when the net mode is not NM_Client, so the PlayerState already exists inside InitNewPlayer; the base InitNewPlayer reports an error when it is null. PostLogin runs after Login returns.",
+      "preconditions": [
+        "Code in an InitNewPlayer override, or code it calls, reads the new controller's PlayerState."
+      ],
+      "exceptions": [
+        "A project that overrides SpawnPlayerController, InitPlayerState or PostInitializeComponents without calling the base implementation can change this order."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/GameModeBase.cpp",
+          "symbol": "AGameModeBase::SpawnPlayerController",
+          "lines": {
+            "5.7": 721,
+            "5.8": 721
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/GameModeBase.cpp",
+          "symbol": "AGameModeBase::InitNewPlayer",
+          "lines": {
+            "5.7": 731,
+            "5.8": 731
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/PlayerController.cpp",
+          "symbol": "APlayerController::InitPlayerState",
+          "lines": {
+            "5.7": 1080,
+            "5.8": 1076
+          }
+        }
+      ],
+      "guidanceRefs": [
+        "unreal.md#lifetime"
+      ],
+      "claimMarkers": [
+        "(?<![A-Za-z0-9_])InitNewPlayer(?![A-Za-z0-9_])",
+        "PlayerState[^.\\n]{0,60}(?:생성\\s*전|아직\\s*(?:없|생성)|not\\s+(?:yet\\s+)?(?:exist|created|spawned))"
+      ]
+    },
+    {
       "id": "policy.claims.build-evidence",
       "revision": 1,
       "kind": "project_policy",
@@ -910,6 +966,26 @@
       "statement": "Only a claim that something is never set, called or present needs a search whose coverage is complete; other answers do not. For such a claim a partial or truncated search result is not absence: continue it with its nextCursor, and include declaration headers and inline (FORCEINLINE) definitions in the search scope before stating absence.",
       "preconditions": [
         "A finding says a value is never assigned, a function is never called, or a symbol does not exist."
+      ],
+      "exceptions": [],
+      "evidenceRefs": [],
+      "guidanceRefs": [
+        "unreal.md#verification"
+      ]
+    },
+    {
+      "id": "policy.claims.replication-removal",
+      "revision": 1,
+      "kind": "project_policy",
+      "topic": "verification",
+      "applicability": {
+        "engineVersions": [
+          "*"
+        ]
+      },
+      "statement": "Replication setup is not only for Replicated properties. Before calling SetIsReplicatedByDefault, SetIsReplicated or bReplicates unused or recommending its removal, check whether the same actor or component declares UFUNCTION(Server/Client/NetMulticast) RPCs, Replicated properties or replicated subobjects, and name what the replication serves.",
+      "preconditions": [
+        "A finding calls an actor's or component's replication setting dead, unused or removable."
       ],
       "exceptions": [],
       "evidenceRefs": [],
