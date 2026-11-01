@@ -109,10 +109,13 @@ R6에서 4개 파일을 한 번에 읽으려 했다. 이때 입력이 이미 51K
 
 - (a) 엔진 동작에 기대는 P1/P2 주장에 엔진 근거가 없으면 보고에 "엔진 미검증"을 표시한다. `engine_claim_check` gap을 사용자 보고까지 연결한다. (R6)
 - (b) 엔진 fact catalog에 `AGameModeBase::Login`→`InitPlayerState`→`InitNewPlayer` 순서와 "RPC가 있는 component는 replicated여야 함"을 추가한다. (R5/R6)
+  - **반영(2026-11-01):** engine fact `ue.gameframework.login-playerstate-order`(UE 5.7/5.8 근거, claimMarkers 포함)와 review policy `policy.claims.replication-removal`을 `unreal_contracts@7`에 추가했다. component RPC의 복제 필요성은 엔진 소스 한 줄로 확정되지 않아 engine fact가 아니라 리뷰 정책(RPC·Replicated 속성 확인 후 판단)으로 기록했다.
 - (c) 보고서 내부 모순(제거 권장 대상이 다른 항목의 근거와 충돌) 검사를 리뷰 마무리 단계 후보로 둔다. (R6)
 - (d) 이 실행의 R12–R45 수치를 R3 압축 순서 수정(C1/C3)의 실측 재현 근거로 쓴다. (R3)
 - (e) floor로 축소된 byteBudget이 provider 최소 envelope보다 작으면 dispatch하지 않는다. 또는 floor 계산에 그 최소값을 반영한다(1-2절). (R3)
+  - **반영(2026-11-01):** BudgetBroker가 실행 중 provider별로 받은 read 결과의 메타데이터 크기(본문 제외 + provider 예약 256 bytes)와 provider가 밝힌 `OUTPUT_LIMIT_EXCEEDED` 최소값을 기억해 byteBudget 최소값으로 쓴다. 이 실행의 최대값은 2,513 bytes로 R6에 필요했던 2,155를 덮으므로, 같은 호출은 dispatch 전에 예산 부족으로 미뤄진다.
 - (f) 예산 거부를 UI에 "canceled"가 아니라 "다음 라운드로 미룸"으로 표시한다(1-2절).
+  - **반영(2026-11-01):** 공유 읽기 예산 거부(`held_reservations_insufficient`, `remaining_capacity_insufficient`)는 `done` 상태와 "도구 실행을 다음 라운드로 미룸" 문구로 표시한다. 범위·프로필·사용자 거부는 기존처럼 `canceled`다.
 - (g) mandatory floor 구성 분해 telemetry(pinned, 골격, 직전 교환, runtime)를 추가하고, prose archive가 R25 이후 멈춘 원인을 조사한다(1-1절). (R3/§8)
 
 ## 검증

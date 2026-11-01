@@ -16,6 +16,10 @@ function retryScope(tool: RemoteToolLike, args: Record<string, unknown>) {
   const { maxChars, byteBudget, maxBytes, repeatReceipt, ...scope } = args;
   return telemetryFingerprint({ provider: tool.pluginIdentifier, tool: tool.name, scope });
 }
+// A provider's source readers share one metadata shape; paths only lengthen it.
+const metadataScope = (tool: RemoteToolLike) => String(tool.pluginIdentifier || "");
+/** The reserve a direct provider keeps beyond rendered metadata before a body fits. */
+const PROVIDER_RESPONSE_RESERVE_BYTES = 256;
 
 export type Watermarks = {
   contextLength: number; configuredTargetTokens: number; configuredTriggerTokens: number;
@@ -37,7 +41,23 @@ export class BudgetBroker {
   // next user turn or borrowed across tools, projects, queries or operations.
   private readonly retryFloors = new Map<string, RetryMinimum>();
   private readonly retryAliases = new Map<string, Set<string>>();
+  // Execution-local size floor, not request authority: the largest response
+  // metadata (result without its body, plus the provider's 256-byte reserve)
+  // a provider's byteBudget reader returned. A window clamped below it returns
+  // no body, so the read is denied before dispatch (2026-11-01 run, R6).
+  private readonly metadataFloors = new Map<string, number>();
+  private observeMetadataFloor(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
+    if (readResultContract(tool, args).field !== "byteBudget") return;
+    const value = envelope.value as Record<string, unknown> | undefined;
+    const minimum = "minimum" in envelope.retry ? envelope.retry.minimum : undefined;
+    const bytes = envelope.ok && typeof value?.content === "string"
+      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES
+      : envelope.errorCode === "OUTPUT_LIMIT_EXCEEDED" && minimum?.field === "byteBudget" ? Number(minimum.value) : 0;
+    const key = metadataScope(tool);
+    if (bytes > (this.metadataFloors.get(key) || 0)) this.metadataFloors.set(key, bytes);
+  }
   observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>, tools: readonly RemoteToolLike[] = []) {
+    this.observeMetadataFloor(tool, args, envelope);
     const key = retryScope(tool, args);
     const clear = (scope: string) => {
       for (const alias of this.retryAliases.get(scope) || [scope]) { this.retryFloors.delete(alias); this.retryAliases.delete(alias); }
@@ -70,7 +90,12 @@ export class BudgetBroker {
     }
     while (this.retryFloors.size > 256) clear(this.retryFloors.keys().next().value!);
   }
-  retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>) => this.retryFloors.get(retryScope(tool, args));
+  retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>): RetryMinimum | undefined => {
+    const scoped = this.retryFloors.get(retryScope(tool, args));
+    const observed = this.metadataFloors.get(metadataScope(tool));
+    if (!observed || readResultContract(tool, args).field !== "byteBudget" || (scoped && scoped.value >= observed)) return scoped;
+    return { field: "byteBudget", value: observed };
+  };
   constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
     & Partial<Pick<DirectConfig, "workingInputScaling">>) { }
   watermarks(measured: ContextMeasurement, mandatoryFloorTokens = 0, hasReadTools = true, minimumReadTokens = 2048): Watermarks {

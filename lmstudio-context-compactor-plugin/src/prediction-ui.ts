@@ -299,9 +299,14 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
     approvalCards.set(callId, { requestId, startedAt: Date.now(), executing: false,
       controller: ctl.createToolStatus(callId, { type: autoApproved ? "toolCallQueued" : "confirmingToolCall" }) });
   };
-  const denied = (callId: number, denyReason?: string) => {
+  // A shared read-budget denial defers the read to a later round; it is not a
+  // refusal of the request (2026-11-01 run showed it as canceled).
+  const denied = (callId: number, denyReason?: string, deferred = false) => {
     const state = statuses.get(callId);
-    state?.controller.setState({ status: "canceled", text: `도구 실행 거부${state.name ? `: ${state.name}` : ""}${denyReason ? ` · ${denyReason}` : ""}` });
+    const name = state?.name ? `: ${state.name}` : "";
+    state?.controller.setState(deferred
+      ? { status: "done", text: `도구 실행을 다음 라운드로 미룸${name} · 이번 라운드의 읽기 예산이 부족합니다` }
+      : { status: "canceled", text: `도구 실행 거부${name}${denyReason ? ` · ${denyReason}` : ""}` });
     statuses.delete(callId);
     approvalCards.get(callId)?.controller.setStatus({ type: "toolCallDenied", denyReason });
     approvalCards.delete(callId);
