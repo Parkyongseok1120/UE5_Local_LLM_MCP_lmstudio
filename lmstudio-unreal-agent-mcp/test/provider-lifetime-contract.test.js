@@ -8,7 +8,7 @@ const { createDeleteCapabilities } = require("../src/direct-delete-capabilities"
 const { FileSnapshotRegistry } = require("../src/file-snapshot-registry");
 const { BuildChangeLedger } = require("../src/direct-build-change-ledger");
 const { sha256Text } = require("../src/safe-write");
-const { canonicalAbsolutePathIdentity } = require("../src/filesystem-path-identity");
+const { canonicalAbsolutePathIdentity, resolveCanonicalAbsolutePath } = require("../src/filesystem-path-identity");
 const { tryAcquirePathLock, releasePathLock } = require("../src/write-locks");
 const { applyDirectEditBundle } = require("../src/direct-edit-bundle");
 const { recoverRuntimeTransactions } = require("../src/direct-transaction-recovery");
@@ -16,7 +16,8 @@ const { createRuntimeTransaction, updateRuntimeTransactionEntry, saveRuntimeTran
   transactionBackupPath, transactionFilePath } = require("../src/direct-transaction-store");
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "provider-lifetime-"));
+  // Journals and resolver results freeze physical paths, including TEMP aliases.
+  const root = resolveCanonicalAbsolutePath(fs.mkdtempSync(path.join(os.tmpdir(), "provider-lifetime-")));
   const target = path.join(root, "Source", "Probe", "Obsolete.cpp");
   const projectPath = path.join(root, "Probe.uproject");
   const stateRoot = path.join(root, "state");
