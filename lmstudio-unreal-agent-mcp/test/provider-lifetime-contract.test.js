@@ -25,8 +25,8 @@ function fixture(t) {
   fs.writeFileSync(projectPath, "{}");
   fs.writeFileSync(target, "before\n");
   t.after(() => {
-    const absolute = fs.realpathSync(root);
-    assert.equal(path.dirname(absolute).toLowerCase(), fs.realpathSync(os.tmpdir()).toLowerCase());
+    const absolute = resolveCanonicalAbsolutePath(root);
+    assert.equal(canonicalAbsolutePathIdentity(path.dirname(absolute)), canonicalAbsolutePathIdentity(os.tmpdir()));
     assert.ok(path.basename(absolute).startsWith("provider-lifetime-"));
     fs.rmSync(absolute, { recursive: true, force: true });
   });
