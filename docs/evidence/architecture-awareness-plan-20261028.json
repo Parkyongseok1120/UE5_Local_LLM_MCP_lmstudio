@@ -1,0 +1,569 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-28",
+    "timezone": "Asia/Seoul",
+    "root": ".",
+    "baselineCommit": "2b13b38c5644b9072e04c488e642205b46cbc804",
+    "implementation": false,
+    "liveRuntimeModified": false,
+    "userGameModified": false,
+    "report": "docs/Harness_Architecture_Awareness_SOL_Spec_20261028.md"
+  },
+  "claims": [
+    {
+      "id": "F01",
+      "claim": "현재 Auto 주제 선택은 명시적인 목적 표현을 바탕으로 제한된 주제를 고르며 일반 구조 대안 평가 자체를 보장하는 상태 계약은 아니다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts:38",
+          "observation": "명시 문장/규칙 매칭과 core fallback, 최대 두 주제 선택."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-contracts.ts",
+          "observation": "TaskObjective는 review/mutate/build/explain과 실행 효과를 다룬다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts:38",
+          "symbol": "selectGuidanceIntent"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/guidance-topic-selection.ts:45",
+          "symbol": "bounded topic selection"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:396",
+          "symbol": "guidance candidates"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/design.md",
+          "observation": "기존 문서에도 소유자·수명·SOLID·패턴 표가 있다."
+        }
+      ],
+      "unknowns": [
+        "특정 모델 답변의 구조 판단 실패가 이 선택 정책만으로 발생했다는 인과는 검증하지 않았다."
+      ]
+    },
+    {
+      "id": "F03-F05",
+      "claim": "지침 README의 기본 토큰 한도·재입장·관찰 수명 설명이 현재 코드의 6144 토큰 기본값, input_reshaped 재입장, historical 복원과 어긋난다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/config-defaults.ts:3",
+          "observation": "GUIDANCE_DEFAULTS mode off, delivery documents, maxTokens 6144."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:433",
+          "observation": "input_reshaped readmission을 계산한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:134",
+          "observation": "저장 reference observations를 historical로 복원한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "docs/model-guidance/README.md:44",
+          "observation": "기본 2048 및 이후 절의 영구 제외/한 실행 수명 설명."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:381",
+          "symbol": "focused guidance admission"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:433",
+          "symbol": "readmitCause"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:455",
+          "symbol": "sticky_readmitted telemetry"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:430",
+          "observation": "적용성 무효화와 입력 rewrite 원인이 명시되어 있다."
+        }
+      ],
+      "unknowns": [
+        "이 항목은 문서 drift이며 현재 runtime 정책 자체를 잘못된 것으로 판정한 것은 아니다."
+      ]
+    },
+    {
+      "id": "F06",
+      "claim": "기존 라운드는 반환 근거와 완성된 모델 판단의 commit을 분리하고, 종료 이후 도구/콜백을 차단한다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:76",
+          "observation": "RoundTransaction.planningCommitted와 durable 처리."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:139",
+          "observation": "closed/abort 검사."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:249",
+          "observation": "종료 처리와 parent abort listener 해제."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-loop.ts:76",
+          "symbol": "runOneToolRound"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:80",
+          "symbol": "planningCommitted"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:85",
+          "symbol": "durable/commitEvidence"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/execution-state.ts:97",
+          "observation": "미관찰 도구 효과는 interruptionMessage에서 unknown으로 보존한다."
+        }
+      ],
+      "unknowns": [
+        "모든 실제 SDK/외부 provider의 늦은 콜백 발생 상황을 이번 계획 작업에서 재실행하지 않았다."
+      ]
+    },
+    {
+      "id": "F07-F11",
+      "claim": "NotePersistence가 복원 우선순위와 mirror API를 제공하지만 semantic-handoff는 WorkingContext.note를 직접 갱신하는 별도 작성 경로를 갖고 있다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/note-persistence.ts:16",
+          "observation": "복원 우선순위와 mirror/persist 경계."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:176",
+          "observation": "summary.note를 resolveNoteUpdate로 처리한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:184",
+          "observation": "activeNote와 workingContext.note를 직접 대입한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:348",
+          "observation": "updateSemanticContext 결과로 activeNote를 바꾼다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:348",
+          "symbol": "updateSemanticContext"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:178",
+          "symbol": "resolveNoteUpdate"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/semantic-handoff.ts:185",
+          "symbol": "workingContext.note assignment"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:473",
+          "observation": "prepare 후 replaceActiveNote가 동기화 경로로 이어진다."
+        }
+      ],
+      "unknowns": [
+        "현재 직접 쓰기가 실제 손실을 일으켰다는 런타임 증거는 없다.",
+        "새 구조 영역을 추가할 때 직접 쓰기를 제거하지 않으면 단일 작성자 계약이 성립하지 않는다."
+      ]
+    },
+    {
+      "id": "F12",
+      "claim": "현재 note는 optional guidance admission 전에 기본 입력에 들어가므로 구조 저장 note 크기 증가를 그대로 입력에 반영하면 별도 optional 예산 설명만으로는 비용을 제한할 수 없다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:93",
+          "observation": "composeModelHistory에 activeNote를 먼저 전달한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:98",
+          "observation": "prepareWorkingInput에도 activeNote를 전달한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:381",
+          "observation": "optional guidance admission은 이후 경로에 있다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:93",
+          "symbol": "composeModelHistory"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:98",
+          "symbol": "prepareWorkingInput"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:381",
+          "symbol": "optional guidance admission"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:353",
+          "observation": "기존 semantic note 변경 후 입력을 재측정한다."
+        }
+      ],
+      "unknowns": [
+        "새 v2 구현은 아직 없으므로 6000자 주입 문제가 이미 발생했다는 의미가 아니다."
+      ]
+    },
+    {
+      "id": "F09",
+      "claim": "한정 식별자의 유일한 짧은 이름이 이미 최종 보고에 있어도 ReviewRegister.missing의 전체 문자열 검사로 보완 대상이 남는 반례가 있다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-evidence.ts:118",
+          "observation": "근거 매칭은 identifier의 leaf를 사용한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:176",
+          "observation": "보고 누락 검사는 전체 identifier 포함 여부를 사용한다."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793165509278/report-boundary-reproductions.json",
+          "observation": "두 한정 이름이 falselyMissing; 한정 spelling 대조군은 0."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-evidence.ts:117",
+          "symbol": "bundleFor"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:176",
+          "symbol": "missing"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1521",
+          "symbol": "bounded report review"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:176",
+          "observation": "동일 leaf의 서로 다른 주체가 있을 수 있어 모든 namespace 제거만으로는 해결할 수 없다."
+        }
+      ],
+      "unknowns": [
+        "실제 보완 라운드에는 별도 파일 범위 과장도 있었으므로 보완 전체가 불필요했다고 결론내리지 않는다."
+      ]
+    },
+    {
+      "id": "F10",
+      "claim": "과거의 전체 파일 검토 주장을 인용해 철회한 실제 정정문도 fileCoverageNotice가 다시 과장 주장으로 포착하는 반례가 있다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:240",
+          "observation": "COVERAGE_CLAIM은 인용/철회 문맥 없이 범위 표현을 찾는다."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793165509278/report-boundary-reproductions.json",
+          "observation": "correctedSupplementStillTriggersNotice가 존재하고 plainSearchScopeControlProducesNotice는 false."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:243",
+          "symbol": "fileCoverageNotice"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/quote-anchoring.ts:246",
+          "symbol": "COVERAGE_CLAIM.exec"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:502",
+          "symbol": "terminal report notices"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793165509278/report-boundary-reproductions.json",
+          "observation": "원 보고의 전체19/본문15 경고는 실제 범위 차이를 잡는다."
+        }
+      ],
+      "unknowns": [
+        "모든 한국어/영어 정정 문맥을 regex만으로 정확히 파악할 수 있다는 주장은 하지 않는다."
+      ]
+    },
+    {
+      "id": "F08-F13",
+      "claim": "RAG에는 설계 모드·구조 수집·generation/engine binding이 이미 있고 corpus manifest의 현재 분류는 engine/project이므로 패턴 corpus 상태를 검색 miss만으로 확정할 수 없다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/rag_modes.py:7",
+          "observation": "design/planning/prototype_component/prototype_subsystem이 이미 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/collect_project_architecture.py:1",
+          "observation": "프로젝트 Source의 regex 기반 구조 inventory 수집기."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_request_binding.py:24",
+          "observation": "엔진 unknown/multi-version 거부."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/rag_build_outputs.py:72",
+          "observation": "corpusCapabilities는 engineEvidence/projectEvidence를 기록한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "scripts/direct_rag_corpus.py:19",
+          "observation": "세대 일관 manifest에서 corpus 상태를 읽는다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/direct_rag_search.py:126",
+          "symbol": "request generation binding"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/direct_rag_request_binding.py:24",
+          "symbol": "resolve_request_engine_binding"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "scripts/direct_rag_corpus.py:19",
+          "symbol": "corpus_capabilities"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/index_inputs.py:10",
+          "observation": "raw_guidelines/project_architecture 등 기존 raw input 목록을 재사용 가능."
+        }
+      ],
+      "unknowns": [
+        "현재 사용자 인덱스의 상세 패턴 품질/포함률은 이번 계획에서 측정하지 않았다."
+      ]
+    }
+  ],
+  "existing": [
+    "TaskObjective/scope, ToolCapabilityRegistry/tool-boundary/provider receipt and CAS",
+    "EvidenceManager/ReadLedger, reference-context, ReviewEvidenceIndex/ReviewRegister",
+    "RoundTransaction/round-loop, existing budget broker and input admission",
+    "NotePersistence/WorkingContext plus semantic-handoff direct write that must be consolidated",
+    "Markdown/catalog generator, Direct RAG collector/build/generation/request-binding infrastructure"
+  ],
+  "proposed": [
+    {
+      "proofLevel": "Proposed",
+      "id": "P1",
+      "change": "Bounded pure architecture projection/policy and execution-local decision reducer; no tool or authorization ownership."
+    },
+    {
+      "proofLevel": "Proposed",
+      "id": "P2",
+      "change": "Auto Unreal baseline with 16 pattern cards derived from one authored Markdown/catalog source."
+    },
+    {
+      "proofLevel": "Proposed",
+      "id": "P3-P4",
+      "change": "Model-input-issued evidence/pattern handles; typed note v2 per-ID patches; single mirror; optional input projection sharing one allowance."
+    },
+    {
+      "proofLevel": "Proposed",
+      "id": "P5",
+      "change": "Generated pattern export into existing raw_guidelines and generation manifest, hash-preserving search metadata and unknown/no_match/no_pattern_corpus separation."
+    },
+    {
+      "proofLevel": "Proposed",
+      "id": "P6",
+      "change": "Qualified/leaf subject matching and correction-aware current coverage claim handling."
+    },
+    {
+      "proofLevel": "Proposed",
+      "id": "P7",
+      "change": "Deterministic lifecycle/compatibility tests and separate same-model semantic/cost evaluation; no runtime modification in planning."
+    }
+  ],
+  "doNotDuplicate": [
+    "source authority or edit receipt/CAS",
+    "execution objective/scope and permission policy",
+    "RAG project binding/generation/refresh locks",
+    "input measurement/read reservations",
+    "durable note/archive stores or release owners",
+    "legacy architecture gates/proposal stores",
+    "host background searches or new routine model preflights"
+  ],
+  "invariants": [
+    "One writer per information kind.",
+    "A model decision is not a verified fact, approval, or applied mutation.",
+    "Partial model input cannot silently replace unseen decisions.",
+    "Source invalidation survives canceled model planning.",
+    "Only finally admitted model-input handles can support a new patch.",
+    "Stored note and rendered input projection are separate.",
+    "Off/default settings and old providers remain compatible.",
+    "Returned historical evidence grants no current write authority.",
+    "Unknown effects are not retried as if unapplied."
+  ],
+  "impactedSurfaces": [
+    "Compactor architecture projection/policy/state and prediction-loop wiring",
+    "continuity-model-notes, context-ports, note-persistence, semantic-handoff, working-context",
+    "reference views and round-input shared optional admission",
+    "model-guidance catalog/Markdown/generator/exports",
+    "Direct RAG collector, metadata, corpus manifest, evidence serialization",
+    "review identifier and coverage reporting",
+    "contract/lifecycle/portable package tests"
+  ],
+  "validationPlan": [
+    "Implement the 77 deterministic A/L/N/C/R/Q cases in specification section 12.",
+    "Run 7 integrated prediction-loop replays in section 13.1.",
+    "Evaluate 12 semantic cases in B0/B1/B2/B3 with fixed model/config/snapshot; report not-run honestly.",
+    "Reuse existing compactor/MCP/Python/generation/packaging regression suites.",
+    "Evidence packet validation checks format and reasoning-record consistency only."
+  ],
+  "independentReview": {
+    "reviewer": "/root/architecture_contract_plan_review",
+    "mode": "read_only",
+    "proofLevel": "SourceVerified",
+    "implementationPerformed": false,
+    "followupResult": "The seven identified specification conflicts were resolved; no additional implementation-blocking internal contradiction was found in the reviewed sections.",
+    "followupLimit": "Specification contract consistency only; implementation and runtime behavior remain unverified.",
+    "incorporated": [
+      "Existing semantic-handoff direct note write",
+      "Per-ID patch instead of full array replacement",
+      "Final input ref issuance/version handles",
+      "Off/manual/noteEnabled compatibility",
+      "Architecture-only purity, preserving existing semantic summary",
+      "Separate stored note and optional projection with one allowance",
+      "Manifest corpus state and export-only collection",
+      "Separate general/architecture parse results and host invalidation"
+    ]
+  },
+  "unknowns": [
+    "Actual model semantic improvement and latency impact await implementation/evaluation.",
+    "Current installed RAG corpus pattern coverage is not established by this plan.",
+    "Current semantic-handoff direct write is confirmed, but runtime data loss has not been demonstrated."
+  ],
+  "validation": {
+    "scope": "packet_structure_and_record_consistency",
+    "factualEvidenceVerifiedByValidator": false,
+    "wholeTaskVerifiedByValidator": false
+  }
+}

@@ -43,6 +43,43 @@ def test_synthetic_run_metrics() -> None:
     assert [s["roundIndex"] for s in report["reasoningSpikes"]] == [1]
 
 
+def test_v4_runtime_data_cost_is_distinct_from_availability_metadata() -> None:
+    events = [{"event": "direct_context_measurement", "roundIndex": 0, "availabilityMetadataTokens": 80,
+               "runtimeDataTokens": 1600, "runtimeDataCurrentChars": 3000, "runtimeDataSupersededChars": 1500},
+              {"event": "direct_context_measurement", "roundIndex": 1, "metadataTokens": 70}]
+    conversation = {"messages": [{"versions": [{"role": "assistant", "steps": [
+        {"type": "debugInfoBlock", "debugInfo": json.dumps(event)} for event in events]}]}]}
+    rows = analyze_message(conversation, 0)["runtimeDataByRound"]
+    assert rows[0] == {"roundIndex": 0, "availabilityMetadataTokens": 80, "runtimeDataTokens": 1600,
+                       "runtimeDataCurrentChars": 3000, "runtimeDataSupersededChars": 1500}
+    assert rows[1]["runtimeDataTokens"] is None
+    assert rows[1]["availabilityMetadataTokens"] is None
+
+
+def test_v4_round_table_joins_prefix_causes_with_actual_prefill_and_keeps_unknowns(tmp_path) -> None:
+    events = [{"event": "prefix_reuse", "roundIndex": 0, "rewriteCauses": ["turn_start"],
+               "systemChanged": False, "commonPrefixChars": 0},
+              {"event": "direct_round_observation", "roundIndex": 0, "modelPrefillMs": 76123, "callPurpose": "mutation"},
+              {"event": "prefix_reuse", "roundIndex": 1, "rewriteCauses": ["phase_transition", "guidance_budget_drop"],
+               "systemChanged": True, "commonPrefixChars": 500},
+              {"event": "direct_round_observation", "roundIndex": 1, "modelPrefillMs": 6000},
+              {"event": "direct_round_observation", "roundIndex": 2}]
+    path = tmp_path / "prefix.conversation.json"
+    path.write_text(json.dumps({"messages": [{"versions": [{"role": "assistant", "steps": [
+        {"type": "debugInfoBlock", "debugInfo": json.dumps(event)} for event in events]}]}]}), encoding="utf-8")
+    report = analyze_path(str(path), 0)
+    assert report["roundCosts"][0] == {"roundIndex": 0, "prefill_ms": 76123, "rewriteCauses": ["turn_start"],
+                                       "systemChanged": False, "commonPrefixChars": 0}
+    assert report["roundCosts"][1]["commonPrefixChars"] == 500
+    assert report["roundCosts"][2]["prefill_ms"] is None
+    assert report["roundCosts"][2]["rewriteCauses"] is None
+    assert report["callPurposes"]["mutation"] == 1
+    rendered = _run(str(path), "--message", "0")
+    assert rendered.returncode == 0, rendered.stderr
+    assert "round | prefill_ms | rewriteCauses | systemChanged | commonPrefixChars" in rendered.stdout
+    assert "1 | 6000 | phase_transition,guidance_budget_drop | True | 500" in rendered.stdout
+
+
 def test_projection_counts_only_changed_and_uses_round_prefill() -> None:
     report = analyze_path(str(FIXTURE), 1)
 

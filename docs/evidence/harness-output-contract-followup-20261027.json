@@ -1,0 +1,307 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "InternalDataOutputFilter/PredictionStreamRenderer",
+    "DeliveryController/ExecutionState",
+    "WorkingContext/retainVisibleResponse",
+    "BudgetBroker/EvidenceManager/ReadLedger",
+    "Direct payloadFits/serializer",
+    "trace conversation adapter"
+  ],
+  "proposed": [
+    "C17 output normalization and incomplete classification",
+    "C18 legacy assistant protocol sanitization at persistence/restore",
+    "C19 provider retry minimum and adopted reference rewrite; remove unsafe exact size cache",
+    "C20 thinking visibility separation"
+  ],
+  "doNotDuplicate": [
+    "새 전역 관리자·retry loop를 추가하지 않는다.",
+    "기존 exact template gate, fileSourceKey/sizeHint, bounded recovery, window prefix/lineage/lease를 재사용한다."
+  ],
+  "invariants": [
+    "원본 대화/window와 실제 프로젝트를 수정하지 않는다.",
+    "도구 권한·CAS·source coverage·request/result pairing을 완화하지 않는다.",
+    "정상 prose/fence/tool parts와 완료된 결과를 보존한다."
+  ],
+  "impactedSurfaces": [
+    "plugin input/output/recovery/history/persistence",
+    "Unreal read response serializer and retry floor",
+    "portable inventory and status validation",
+    "trace analyzer and tests"
+  ],
+  "validationPlan": [
+    "plugin clean build and full tests",
+    "Unreal agent/Unity tests",
+    "Python full tests including package inclusion/reproducibility",
+    "generated checks4 and diff check",
+    "read-only original window replay"
+  ],
+  "claims": [
+    {
+      "id": "C17",
+      "claim": "F1/F2: 미완성 내부 protocol을 공개하지 않고 정규화된 prose와 tool intent 관찰을 출력·복구·종료가 공유한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+          "observation": "normalizeCaptured/historyMessage"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/output-contract-followup.test.cjs",
+          "observation": "신규 반례와 기존 관련 회귀 통과. 전체 결과는 validationResults에 기록한다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "lmstudio-context-compactor-plugin/node_modules/@lmstudio/sdk/dist/index.d.ts:4105",
+          "observation": "SDK1.5.0 fragment와 onMessage는 별도 전달이며 renderer가 동일 prose로 대응한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+          "symbol": "normalizeCaptured/historyMessage"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts",
+          "symbol": "기존 소유자의 정책 분기"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/output-contract-followup.test.cjs",
+          "symbol": "합성/통합 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/output-contract-followup.test.cjs",
+          "observation": "정상 prose/fence와 SDK reasoning 및 structured tool parts는 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델 성능과 기존 사용자 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C18",
+      "claim": "F3: 구 window의 내부 assistant protocol과 인접 continuation을 모델용 복원 이력에서 제외하고 원본과 bindings 위치를 보존한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "observation": "sanitizeAssistantProtocols"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+          "observation": "신규 반례와 기존 관련 회귀 통과. 전체 결과는 validationResults에 기록한다."
+        },
+        {
+          "kind": "test",
+          "location": "${DIAGNOSTICS}/harness-v4-followup-1793102946974/fix-original-window-replay.json",
+          "observation": "원본 window 읽기 전용 재생: 24 records 유지, assistant25413자 제거, 내부 header잔여0, 원본불변."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "symbol": "sanitizeAssistantProtocols"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "symbol": "기존 소유자의 정책 분기"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+          "symbol": "합성/통합 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/working-context.test.cjs",
+          "observation": "사용자 원문과 인용 fence, 실제 tool parts, source prefix/lineage 검증은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델 성능과 기존 사용자 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C19",
+      "claim": "F4/F5/F6: provider 예산 오류·채택 reference 통합·mutable source 추정의 책임을 기존 owner에 모은다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "observation": "prepareRoundInput/selectReferences"
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/round-input-rewrite-policy.test.cjs",
+          "observation": "신규 반례와 기존 관련 회귀 통과. 전체 결과는 validationResults에 기록한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js",
+          "observation": "최소 응답 예산은 candidate budget 자릿수까지 같은 payloadFits로 계산한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts",
+          "observation": "mutable source의 request->exact size 캐시를 제거하고 scoped sizeHint 추정과 immutable archive 크기를 구분한다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/direct-response-budget.test.js",
+          "observation": "metadata 부족과 실제 긴 줄, 최소 예산의 자릿수 경계를 검증한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "symbol": "prepareRoundInput/selectReferences"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts",
+          "symbol": "기존 소유자의 정책 분기"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/round-input-rewrite-policy.test.cjs",
+          "symbol": "합성/통합 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/round-input-rewrite-policy.test.cjs",
+          "observation": "minimum은 한 줄의 진행을 위한 값이며 전체 range 완료를 보장하지 않는다. unknown 최초 읽기와 exact gate는 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델 성능과 기존 사용자 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C20",
+      "claim": "F7: thinking은 final claim 집계에서 제외하고 일반 화면 본문의 context 제외 스위치는 visibility와 혼동하지 않는다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "scripts/trace_lmstudio_run.py",
+          "observation": "parse_conversation"
+        },
+        {
+          "kind": "test",
+          "location": "tests/test_trace_lmstudio_run.py",
+          "observation": "신규 반례와 기존 관련 회귀 통과. 전체 결과는 validationResults에 기록한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "scripts/trace_lmstudio_run.py",
+          "symbol": "parse_conversation"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "scripts/trace_lmstudio_run.py",
+          "symbol": "기존 소유자의 정책 분기"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "tests/test_trace_lmstudio_run.py",
+          "symbol": "합성/통합 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "tests/test_trace_lmstudio_run.py",
+          "observation": "기존 도구 요청/결과 분석과 일반 visible claim은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델 성능과 기존 사용자 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    }
+  ],
+  "validationResults": {
+    "plugin": {
+      "passed": 1197,
+      "failed": 0,
+      "skipped": 0,
+      "baselinePassed": 1181
+    },
+    "agent": {
+      "passed": 372,
+      "failed": 0,
+      "skipped": 2,
+      "baselinePassed": 370
+    },
+    "unity": {
+      "passed": 132,
+      "failed": 0,
+      "skipped": 5
+    },
+    "python": {
+      "passed": 1490,
+      "failed": 0,
+      "skipped": 41,
+      "durationSeconds": 249.94
+    },
+    "generatedChecks": [
+      "runtime-identity",
+      "tool-contract",
+      "design-guidance",
+      "unity-tool-contract"
+    ],
+    "originalWindowReplay": {
+      "recordsBefore": 24,
+      "recordsAfter": 24,
+      "removedAssistantChars": 25413,
+      "internalHeaderRemaining": false,
+      "originalFileUnchanged": true
+    },
+    "runtimeBuildId": "ef-build-v2-a329647859440b1e5a31fbdb31d1719f3e13c02ac277592d6aae9f01f5b12e50",
+    "realModelReplay": "not_performed",
+    "packetScope": "structure_and_record_consistency_only"
+  }
+}

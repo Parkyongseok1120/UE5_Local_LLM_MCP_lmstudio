@@ -5,6 +5,7 @@ from __future__ import annotations
 
 SUITES: dict[str, tuple[str, ...]] = {
     "portable_direct": (
+        "tests/test_architecture_pattern_corpus.py",
         "tests/test_python_direct_rag_server.py",
         "tests/test_direct_rag_response_budget.py",
         "tests/test_direct_rag_engine_local.py",

@@ -25,6 +25,7 @@ function createReadCapabilities(context) {
     fitUtf8Prefix,
     limits,
     payloadFits,
+    responseBudgetFailure,
     projectScopedSuggestionArgs,
     resolveToolPath,
   } = context;
@@ -260,20 +261,15 @@ function createReadCapabilities(context) {
       ...(end >= requestedEnd && end < lines.length && sourceFile
         ? { afterRange: { owed: false, locateNext: locateAlternatives(args) } } : {}),
     });
-    let low = start;
-    let high = maximumEnd;
-    let payload = null;
-    while (low <= high) {
-      const middle = Math.floor((low + high) / 2);
-      const candidate = makePayload(middle);
-      if (payloadFits(candidate, 256, args.byteBudget)) {
-        payload = candidate;
-        low = middle + 1;
-      } else {
-        high = middle - 1;
-      }
-    }
+    const full = makePayload(maximumEnd);
+    // Completing a range drops continuation metadata, so check it before the
+    // monotone partial-page search rather than assuming completion is larger.
+    const payload = payloadFits(full, 256, args.byteBudget) ? full
+      : fitCount(maximumEnd - start + 1, count => makePayload(start + Math.max(1, count) - 1), args.byteBudget)?.payload;
     if (!payload) {
+      const budgetError = responseBudgetFailure(makePayload(start), args, { tool: "read_file_range",
+        args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: start, endLine: requestedEnd })) });
+      if (budgetError) return budgetError;
       // Count original newline bytes, including CRLF, for the byte reader.
       const prefix = read.content.match(/[^\n]*\n/g)?.slice(0, start - 1).join("") || "";
       const byteOffset = Buffer.byteLength(prefix, "utf8");

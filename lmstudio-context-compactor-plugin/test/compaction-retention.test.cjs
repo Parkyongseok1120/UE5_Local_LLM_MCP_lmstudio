@@ -84,7 +84,7 @@ test("volatile runtime data sits before the latest user message, keeping earlier
   const history = Chat.from([{ role: "system", content: "stable system" },
     { role: "user", content: "first request" }, { role: "assistant", content: "first answer" },
     { role: "user", content: "second request" }]);
-  const render = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts).history
+  const render = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts.map(text=>({key:"budget",text}))).history
     .getMessagesArray().map(m => `${m.getRole()}:${m.getText()}`);
   const a = render(["Runtime read-result budget facts: A"]), b = render(["Runtime read-result budget facts: B"]);
   assert.deepEqual(a.slice(0, 3), b.slice(0, 3));
@@ -147,7 +147,7 @@ test("same-anchor retries append new observations without rewriting already show
   const config = readConfig({ getPluginConfig() { return { get: () => undefined }; } });
   const history = Chat.from([{ role: "system", content: "system" }, { role: "user", content: "request" }]);
   const shown = new Map();
-  const compose = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts, shown);
+  const compose = facts => composeModelHistory(history, null, config, ["scope"], false, undefined, facts.map(text=>({key:"budget",text})), shown);
   const first = compose(["observation A"]);
   shown.set(first.dataBlock.anchor, first.dataBlock.parts);
   const retry = compose(["observation B"]);
@@ -178,7 +178,7 @@ test("with shown data blocks each round's model input is an exact prefix of the 
   for (let round = 0; round <= 4; round++) {
     if (round > 0) { history.append(request(round)); history.append(result(round)); }
     const facts = [`Runtime read-result budget facts: ${round < 3 ? "ample" : "low"}`];
-    const composed = composeModelHistory(history, null, config, ["scope"], true, undefined, facts, shown);
+    const composed = composeModelHistory(history, null, config, ["scope"], true, undefined, facts.map(text=>({key:"budget",text})), shown);
     const messages = composed.history.getMessagesArray();
     assert.equal(messages.at(-1).getRole(), round ? "tool" : "user", "the input never ends with assistant data");
     if (previous) assert.deepEqual(messages.slice(0, previous.length).map(shape), previous.map(shape),

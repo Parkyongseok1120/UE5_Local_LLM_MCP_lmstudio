@@ -5,6 +5,8 @@ from __future__ import annotations
 
 def infer_doc_type(source: str, metadata: dict) -> str:
     if source == "project_guideline":
+        if metadata.get("guidanceKind") == "architecture_pattern":
+            return "architecture_pattern"
         return "guideline"
     if source == "game_design_doc":
         return "game_design"

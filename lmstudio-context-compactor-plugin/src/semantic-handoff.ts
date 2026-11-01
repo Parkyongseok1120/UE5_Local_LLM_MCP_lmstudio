@@ -43,7 +43,7 @@ export async function generateSemanticHandoff(options: {
         latestUser: options.latestUser.slice(0, 4000),
         deterministicCheckpoint: options.checkpoint.checkpoint.slice(0, 16000),
         assistantCheckpoint: options.checkpoint.assistantCheckpoint.slice(0, 6000),
-        priorAssistantClaim: options.priorNote,
+        priorAssistantClaim: modelNotes.generalNote(options.priorNote),
         allowedRefs: [...options.refs],
         verifiedEvidence: options.evidence,
       })
@@ -181,8 +181,7 @@ export async function updateSemanticContext(options: {
         openQuestions: semantic.openQuestions,
       }, objectiveFingerprint, visibleHistory.getMessagesArray(), summaryRefs, { allowClear: false });
       if (update.kind === "accepted_update" && update.note) {
-        activeNote = update.note;
-        workingContext.note = update.note;
+        activeNote = modelNotes.mergeArchitecture(update.note, modelNotes.architecturePart(activeNote), activeNote?.scope,activeNote);
       }
     }
     // Optional summaries must not consume repeated timeout/output-limit calls

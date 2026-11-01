@@ -31,7 +31,7 @@ const {
   statOrNull,
 } = require("./direct-runtime-shared");
 
-const { replaceFileArgumentError, writeFileArgumentError } = require("./direct-mutation-arguments");
+const { replaceFileArgumentError, writeFileArgumentError, normalizeExpectedOccurrences } = require("./direct-mutation-arguments");
 
 function frozenMutationTarget(resolution) {
   const identity = (value) => canonicalAbsolutePathIdentity(
@@ -247,7 +247,7 @@ function createFileMutationCapabilities(context) {
           newText: args.newText,
           edits,
           range,
-          expectedOccurrences: args.expectedOccurrences,
+          expectedOccurrences: normalizeExpectedOccurrences(args.expectedOccurrences).value,
           readHash: version.expectedHash,
         });
       }, { stateRoot });

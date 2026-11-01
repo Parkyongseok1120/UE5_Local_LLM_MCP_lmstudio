@@ -13,6 +13,11 @@ const { textEngineClaimGaps, returnedEngineEvidence: rawReturnedEngineEvidence, 
 const raw = require("./fixtures/review-reasoning-1792916809646.json");
 const assistant = text => ChatMessage.create("assistant", text);
 const reasoning = text => assistant(text + REASONING_SEPARATOR + "Continuing the audit.");
+function attachSource(register, names) {
+  const index = new (require('../dist/review-register').ReviewEvidenceIndex)();
+  index.observe(require('./helpers/v4.cjs').sourceHistory('Audit source.', names).getMessagesArray());
+  register.attach(index);
+}
 
 test("logged r9/r10 reasoning survives as found notes and a cleared TakeDamage judgment", () => {
   const register = new ReviewRegister();
@@ -40,6 +45,7 @@ test("latest status wins, visible notes override reasoning, and found and cleare
   assert.equal(found[0].identifier, "UnusedField5");
   assert.ok(register.rows.some(row => row.identifier === "TakeDamage"), "found rows do not push out a cleared judgment");
   assert.ok(register.rows.every(row => row.evidence.length <= 240));
+  attachSource(register, ['UnusedField0']);
   // A found row pushed out of the rendered register is still a missing finding.
   assert.ok(register.missing("").some(row => row.identifier === "UnusedField0"));
 });
@@ -55,6 +61,7 @@ test("a judgment is filed under the code named nearest its keyword, and noise na
   assert.deepEqual(register.rows.map(row => [row.identifier, row.status]), [["ResetForRespawn", "found"]]);
   register.observe([assistant("- `ue.controller.player-tick-input` P3: `this` pointer and `GameState` bug; `PS` unused")], 27);
   assert.deepEqual(register.rows.map(row => row.identifier), ["ResetForRespawn"], "contract ids, receivers and type families are skipped");
+  attachSource(register, ['ResetForRespawn']);
   assert.deepEqual(register.missing("RespawnPlayer is correct.").map(row => row.identifier), ["ResetForRespawn"]);
 });
 
@@ -62,11 +69,11 @@ test("runtime register is incremental and private; headerless and fragmented ech
   const register = new ReviewRegister(); register.observe([assistant("`ReloadSound` never played")], 1);
   const history = Chat.from([{ role: "user", content: "Audit this project" }]);
   const config = readConfig({ getPluginConfig: () => ({ get: () => undefined }) });
-  const first = composeModelHistory(history, null, config, [], false, undefined, [register.fact()], new Map());
+  const first = composeModelHistory(history, null, config, [], false, undefined, [{key:"review_register",text:register.fact()}], new Map());
   assert.ok(first.privateDataParts.some(part => part.startsWith(REVIEW_REGISTER_HEADER)));
   const shown = new Map([[first.dataBlock.anchor, first.dataBlock.parts]]);
   register.observe([assistant("`RunSpeed` unused")], 2);
-  const second = composeModelHistory(history, null, config, [], false, undefined, [register.fact()], shown);
+  const second = composeModelHistory(history, null, config, [], false, undefined, [{key:"review_register",text:register.fact()}], shown);
   assert.match(second.dataBlock.parts.join("\n"), /RunSpeed/);
   assert.doesNotMatch(second.dataBlock.parts.at(-1), /ReloadSound/);
   const echo = register.lines().join("\n") + "\n" + REVIEW_REGISTER_GUIDANCE + "\nActual report.\n";

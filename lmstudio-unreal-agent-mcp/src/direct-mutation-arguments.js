@@ -106,9 +106,14 @@ function replaceFileArgumentError(args) {
     || optionalStringError(args, "project")
     || optionalStringError(args, "expectedHash")
     || optionalStringError(args, "fileVersionReceipt")
-    || (Number.isInteger(args.expectedOccurrences) && args.expectedOccurrences === 1
-      ? ""
-      : "expectedOccurrences must be the integer 1 for a focused replacement.");
+    || normalizeExpectedOccurrences(args.expectedOccurrences).error || "";
 }
 
-module.exports = { MAX_EDITS_PER_FILE, replaceFileArgumentError, writeFileArgumentError };
+/** Omitted means one occurrence; explicit values are never coerced. */
+function normalizeExpectedOccurrences(value) {
+  if (value === undefined) return { value: 1 };
+  return Number.isInteger(value) && value === 1 ? { value: 1 }
+    : { error: "expectedOccurrences must be the integer 1 for a focused replacement (omit it to use 1)." };
+}
+
+module.exports = { MAX_EDITS_PER_FILE, replaceFileArgumentError, writeFileArgumentError, normalizeExpectedOccurrences };

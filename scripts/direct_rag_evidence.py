@@ -7,6 +7,41 @@ import json
 from typing import Any
 
 from direct_rag_result import render_model_json
+from pathlib import Path
+from direct_rag_corpus import corpus_capabilities
+
+
+def _row_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except ValueError:
+            metadata = {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def pattern_search_metadata(index: Path, expected_generation: str | None, *, requested: bool, matches: list[dict[str, Any]],
+                            rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Pattern corpus status from pattern hits, not from any match of a mixed doc_type query.
+
+    Hits are counted on the matched rows before transport clipping, so a clipped
+    match list is not reported as no_match; identities is what the matches carry."""
+    result: dict[str, Any] = {}
+    identities = sum(1 for item in matches if item.get("patternId"))
+    if requested:
+        hits = (sum(1 for row in factual_rows(rows) if _row_metadata(row).get("guidanceKind") == "architecture_pattern")
+                if rows is not None else identities)
+        coverage = corpus_capabilities(index, expected_generation=expected_generation).get("architecturePatterns")
+        result["architecturePatternCorpus"] = {
+            "status": "unknown" if coverage is None else "no_pattern_corpus" if coverage["count"] == 0 else "matched" if hits else "no_match",
+            **(coverage or {}),
+            "patternHitCount": hits,
+            "patternIdentityCount": identities,
+        }
+    if identities:
+        result["indexGenerationId"] = expected_generation
+    return result
 
 _NON_FACTUAL_SOURCES = frozenset({"rag_sidecar", "unreal_failure_memory"})
 _TRUNCATED_SUFFIX = "\n...[truncated]"
@@ -89,6 +124,14 @@ def compact_match_refs(
 ) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     for row in factual_rows(rows)[:limit]:
+        metadata = row.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except ValueError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         candidate = {
             key: (
                 value
@@ -105,6 +148,8 @@ def compact_match_refs(
                 "symbolKind": row.get("symbol_kind"),
                 "score": row.get("score"),
                 "otherProject": row.get("otherProject"),
+                **({key: metadata[key] for key in ("patternId", "contentHash", "catalogHash", "patternConcept", "validatedApiVersions", "patternSources") if key in metadata}
+                   if metadata.get("guidanceKind") == "architecture_pattern" else {}),
             }.items()
             if value not in (None, "", False)
         }

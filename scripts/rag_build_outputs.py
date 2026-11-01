@@ -57,6 +57,7 @@ def write_manifest(
     total_chunks: int,
     engine_evidence_chunks: int,
     project_evidence_chunks: int,
+    architecture_patterns: dict | None = None,
 ) -> None:
     manifest = {
         "inputPolicyVersion": INDEX_INPUT_POLICY_VERSION,
@@ -74,6 +75,7 @@ def write_manifest(
             "engineEvidenceChunks": engine_evidence_chunks,
             "projectEvidence": project_evidence_chunks > 0,
             "projectEvidenceChunks": project_evidence_chunks,
+            **({"architecturePatterns": architecture_patterns} if architecture_patterns is not None else {}),
         },
         "builtAt": datetime.now(timezone.utc).isoformat(),
         "chunkCount": total_chunks,

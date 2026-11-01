@@ -1,5 +1,248 @@
 {
   "schemaVersion": 2,
+  "patterns": [
+    {
+      "patternId": "ue.component-composition",
+      "file": "unreal-patterns.md",
+      "section": "component-composition",
+      "title": "Actor 기능의 조합",
+      "facets": [
+        "component_owner"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/basic-components-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.independent-actor",
+      "file": "unreal-patterns.md",
+      "section": "independent-actor",
+      "title": "독립 월드 객체",
+      "facets": [
+        "world_object"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.scoped-subsystem",
+      "file": "unreal-patterns.md",
+      "section": "scoped-subsystem",
+      "title": "범위에 맞는 서비스",
+      "facets": [
+        "scoped_service"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/programming-subsystems-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.definition-instance",
+      "file": "unreal-patterns.md",
+      "section": "definition-instance",
+      "title": "정의 데이터와 실행 인스턴스",
+      "facets": [
+        "shared_definition",
+        "mutable_instance_state"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/data-assets-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.data-fragments",
+      "file": "unreal-patterns.md",
+      "section": "data-fragments",
+      "title": "정의 데이터의 조합",
+      "facets": [
+        "fragment_definition"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/lyra-inventory-and-equipment-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.asset-manager",
+      "file": "unreal-patterns.md",
+      "section": "asset-manager",
+      "title": "콘텐츠 식별과 비동기 로드",
+      "facets": [
+        "async_asset"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/asset-management-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.interface-capability",
+      "file": "unreal-patterns.md",
+      "section": "interface-capability",
+      "title": "능력의 계약",
+      "facets": [
+        "interface_capability"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/interfaces-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.event-observer",
+      "file": "unreal-patterns.md",
+      "section": "event-observer",
+      "title": "결과 관찰과 구독",
+      "facets": [
+        "registration"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/delegates-and-lambda-functions-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.strategy-policy",
+      "file": "unreal-patterns.md",
+      "section": "strategy-policy",
+      "title": "교체 가능한 판정 규칙",
+      "facets": [
+        "strategy_rule"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-framework-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.state-machine",
+      "file": "unreal-patterns.md",
+      "section": "state-machine",
+      "title": "상태 전이와 진입·종료",
+      "facets": [
+        "state_transitions"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/overview-of-state-tree-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.gameplay-tags",
+      "file": "unreal-patterns.md",
+      "section": "gameplay-tags",
+      "title": "의미 분류와 질의",
+      "facets": [
+        "semantic_tags"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/using-gameplay-tags-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.gameplay-ability-system",
+      "file": "unreal-patterns.md",
+      "section": "gameplay-ability-system",
+      "title": "능력·효과·속성의 수명",
+      "facets": [
+        "ability_system"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.modular-features",
+      "file": "unreal-patterns.md",
+      "section": "modular-features",
+      "title": "기능 단위 활성화",
+      "facets": [
+        "modular_feature"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/game-features-and-modular-gameplay-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.ui-viewmodel",
+      "file": "unreal-patterns.md",
+      "section": "ui-viewmodel",
+      "title": "표시 모델과 게임 규칙",
+      "facets": [
+        "ui_binding"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/umg-viewmodel-for-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.object-pooling",
+      "file": "unreal-patterns.md",
+      "section": "object-pooling",
+      "title": "객체 재사용과 활성 세대",
+      "facets": [
+        "pool_activation"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/actors-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    },
+    {
+      "patternId": "ue.save-runtime-boundary",
+      "file": "unreal-patterns.md",
+      "section": "save-runtime-boundary",
+      "title": "저장 snapshot과 실행 상태",
+      "facets": [
+        "save_snapshot"
+      ],
+      "sources": [
+        {
+          "url": "https://dev.epicgames.com/documentation/en-us/unreal-engine/saving-and-loading-your-game-in-unreal-engine",
+          "verifiedFor": "general_concept"
+        }
+      ]
+    }
+  ],
   "documents": [
     {
       "id": "core",

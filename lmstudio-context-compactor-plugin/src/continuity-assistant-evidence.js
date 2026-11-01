@@ -1,6 +1,7 @@
 "use strict";
 
 const { clip, clipHeadTail, normalizedTextKey, visibleAssistantText } = require("./continuity-text.js");
+const { sanitizeAssistantProtocols } = require("./internal-data-contract.js");
 const {
   sanitizeDerivedOperationalText,
   sanitizeStructuredDurableValue,
@@ -16,6 +17,8 @@ const isDeliveredPartialResponse = text => String(text || "").startsWith(DELIVER
  * Only the final text-only assistant tail is eligible; never copy tool exchanges.
  * This is lossless apart from the existing durable-material sanitization policy. */
 function retainVisibleResponse(source, replacement) {
+  source = sanitizeAssistantProtocols(source);
+  replacement = sanitizeAssistantProtocols(replacement);
   const tail = messages => {
     let start = messages.length;
     while (start > 0 && messages[start - 1].role === "assistant"
@@ -24,7 +27,7 @@ function retainVisibleResponse(source, replacement) {
   };
   const text = message => message.content.filter(part => part.type === "text").map(part => part.text).join("");
   const visible = tail(source).messages.map(message => {
-    const raw = visibleAssistantText(text(message)).split("\n<!-- direct-continuity-note-v1 -->")[0];
+    const raw = visibleAssistantText(text(message)).split(/\n<!-- direct-continuity-note-v[12] -->/u)[0];
     // An unparsed provider request is not a report. Quoted examples may remain
     // in normal completed history; this recovery path does not manufacture them.
     if (/<(?:tool_call|function=)|\|(?:tool_call|python_tag)\|/iu.test(raw)) return "";

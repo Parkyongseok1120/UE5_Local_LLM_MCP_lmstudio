@@ -49,6 +49,30 @@ function fixture(t, env = {}, options = {}) {
   return { runtime, workspaceRoot, projectRoot, sourceDir };
 }
 
+test('short lines with a metadata-heavy response return a usable retry budget, not a byte-window detour', async t => {
+  const {runtime,sourceDir}=fixture(t);
+  const file=path.join(sourceDir,'AControllerWithOnlyShortLinesAndLongName.h');fs.writeFileSync(file,'// tiny\n'.repeat(45));
+  const first=payloadOf(await runtime.callTool('read_file_range',{path:file,startLine:43,endLine:45,byteBudget:2048}));
+  assert.equal(first.errorCode,'OUTPUT_LIMIT_EXCEEDED');assert.equal(first.retry.minimum.field,'byteBudget');
+  assert.ok(first.retry.minimum.value>2048 && first.retry.minimum.value<=65536);
+  assert.equal(first.suggestion.tool,'read_file_range');assert.equal(first.suggestion.args.startLine,43);
+  const recovered=payloadOf(await runtime.callTool(first.suggestion.tool,first.suggestion.args));
+  assert.equal(recovered.ok,true);assert.ok(recovered.endLine>=43);
+  if (!recovered.requestedRangeComplete) {
+    assert.equal(recovered.suggestion.tool,'read_file_range');
+    assert.equal(recovered.suggestion.args.startLine,recovered.endLine+1);
+  }
+});
+test('computed retry budget includes its new digit width and survives the MCP serializer', async t => {
+  const {runtime,sourceDir}=fixture(t);const dir=path.join(sourceDir,'MetadataPath'.repeat(8));fs.mkdirSync(dir);
+  const file=path.join(dir,'Digits.h');
+  fs.writeFileSync(file,'x'.repeat(8000));
+  const first=payloadOf(await runtime.callTool('read_file_range',{path:file,startLine:1,endLine:1,byteBudget:2048}));
+  assert.equal(first.errorCode,'OUTPUT_LIMIT_EXCEEDED');assert.ok(first.retry.minimum.value>=10000);
+  const retry=payloadOf(await runtime.callTool(first.suggestion.tool,first.suggestion.args));
+  assert.equal(retry.ok,true);assert.equal(retry.content,'1\t'+'x'.repeat(8000));
+});
+
 test("model text is compact JSON and the default response cap is context-sized", async t => {
   assert.equal(DEFAULT_MAX_RESPONSE_CHARS, 48_000);
   const result = toMcpResult({ ok: true, nested: { value: [1, 2] } });

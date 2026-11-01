@@ -11,7 +11,7 @@ const {
 const { resolveReadPath, isWithin } = require("./read-path-resolver.js");
 const { createEngineSourceResolver } = require("./engine-source-access.js");
 const { DirectRepeatCache } = require("./direct-repeat-cache.js");
-const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult } = require("./direct-response.js");
+const { DEFAULT_MAX_RESPONSE_CHARS, renderModelJson, toMcpResult, failure } = require("./direct-response.js");
 const { clamp, errorFromException, relativeSlash } = require("./direct-runtime-shared.js");
 const { resolveMutationLimits } = require("./direct-mutation-limits.js");
 const { assertDirectMutationScope } = require("./direct-mutation-scope.js");
@@ -130,6 +130,26 @@ function createDirectRuntimeContext(options = {}) {
       && (byteBudget === undefined || Buffer.byteLength(rendered, "utf8") + reserveChars <= byteBudget);
   }
 
+  function minimumResponseBudget(payload, reserve = 256) {
+    const at = budget => ({ ...payload, effectiveByteBudget: budget,
+      ...(payload.suggestion ? { suggestion: { ...payload.suggestion, args: { ...payload.suggestion.args, byteBudget: budget } } } : {}) });
+    if (!payloadFits(at(65536), reserve, 65536)) return undefined;
+    let low = 2048, high = 65536;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (payloadFits(at(mid), reserve, mid)) high = mid; else low = mid + 1;
+    }
+    return low;
+  }
+  function responseBudgetFailure(payload, args, suggestion) {
+    if (args.byteBudget === undefined || payloadFits({ ...payload, content: "" }, 256, args.byteBudget)) return null;
+    const minimum = minimumResponseBudget(payload);
+    return minimum ? failure("OUTPUT_LIMIT_EXCEEDED", "Response metadata exceeds byteBudget; increase the whole-response budget.", {
+      retryAllowed: true, retryMode: "different_arguments", retryMinimum: { field: "byteBudget", value: minimum },
+      suggestion: { ...suggestion, args: { ...suggestion.args, byteBudget: minimum } },
+    }) : null;
+  }
+
   function projectScopedSuggestionArgs(args, suggestionArgs) {
     const selector = String(args?.project || "").trim();
     return selector ? { ...suggestionArgs, project: selector } : suggestionArgs;
@@ -221,6 +241,8 @@ function createDirectRuntimeContext(options = {}) {
     options,
     pathPolicyFailure,
     payloadFits,
+    minimumResponseBudget,
+    responseBudgetFailure,
     projectScopedSuggestionArgs,
     repeatCache,
     resolveCallProject,

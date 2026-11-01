@@ -22,6 +22,10 @@ export const continuityState = require("./continuity-memory.js") as {
 };
 
 export const modelNotes = require("./continuity-model-notes.js") as {
+  generalNote(note:ContinuityNote|null):ContinuityNote|null;
+  architecturePart(note:ContinuityNote|null):import("./architecture-contracts").ArchitectureSnapshot|null;
+  mergeArchitecture(note:ContinuityNote|null,part:import("./architecture-contracts").ArchitectureSnapshot|null,scope?:ContinuityNote["scope"],previous?:ContinuityNote|null):ContinuityNote|null;
+  noteRefs(note:ContinuityNote|null):Set<string>;
   NOTE_INSTRUCTION: string;
   ContinuityNoteStore: new () => {
     read(key: string): ContinuityNote | null;
@@ -40,7 +44,8 @@ export const modelNotes = require("./continuity-model-notes.js") as {
     additionalVerifiedRefs?: Set<string>, options?: { objectiveFingerprint?: string; projectDescriptor?: string;
       discardReviewClaims?: boolean }): ContinuityNote | null;
   renderAssistantNote(note: ContinuityNote, messages?: ChatMessage[]): string;
-  splitVisibleAnswer(text: string): { visibleText: string; hasFooter: boolean; note: unknown };
+  splitVisibleAnswer(text: string): { visibleText: string; hasFooter: boolean; note: unknown;
+    architecturePatch?:unknown;architectureError?:string;footerVersion?:number };
 };
 
 export const workingContextModule = require("./working-context.js") as {
@@ -108,6 +113,12 @@ export type LedgerEntry = { path: string; key: string; sourceKey?: string; sourc
   duplicatedChars: number; archivePages: number; checks: Array<{ check: string; round: number | null; claim?: string }>;
   archiveRef?: { evidenceId: string; version: string } };
 export type ReadLedgerLike = {
+  recordSizeHint(sourceKey: string, fields: Partial<SizeHint> & { modifiedAt?: unknown; origin?: string }): void;
+  sizeHint(sourceKey: string): SizeHint | null;
+  invalidateSizeHint(sourceKey: string): void;
+  invalidateReturnedSource(sourceKey:string):void;
+  invalidateSourceObservations():void;
+  sourceObservation(sourceKey:string):{version?:string|null;invalidated:boolean;historical?:boolean}|null;
   recordReturnedSource(value: Record<string, unknown>, resultKind: string, executionId?: string, authority?: {contractLookup?:boolean}): void;
   returnedSource(sourceKey: string, span: [number,number], executionId?: string): {returned:boolean;via:"body"|"search_hit"|"archive_page";scope:"execution"|"conversation"};
   returnedSources(executionId?: string): ReturnedSources;
@@ -123,14 +134,14 @@ export type ReadLedgerLike = {
   noteRedundant(entry: LedgerEntry | null, round: number | null, duplicatedChars?: number, extra?: Record<string, unknown>): void;
   notePage(facts: ReadFacts | null, round: number | null): boolean;
   recordCheck(location: string, check: string, round?: number | null, claim?: string, sourceVersion?: string): boolean;
-  rememberResultSize(requestKey: string, bytes: number): void;
-  knownResultBytes(requestKey: string): number | undefined;
   stats(): Record<string, number>;
   events: Array<Record<string, unknown>>;
   toJSON(): Record<string, unknown>;
   load(value: unknown): boolean;
 };
-export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean}>;
+export type SizeHint = { sizeBytes: number | null; totalLines: number | null; sha256: string | null };
+export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean;
+  knownVersion?:string|null;versionUncertain?:boolean;sourceInvalidated?:boolean;uncertainLines?:number[];unversionedSnippets?:Array<{lines:Array<[number,string]>;via:string;executionId:string}>}>;
   contractIds:Set<string>;scope:"execution"|"conversation";complete?:boolean};
 export const readLedgerModule = require("./read-ledger.js") as {
   ReadLedger: new () => ReadLedgerLike;

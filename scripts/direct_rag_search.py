@@ -14,6 +14,7 @@ from direct_rag_evidence import (
     compact_match_refs,
     evidence_metadata_fits,
     fit_evidence_payload,
+    pattern_search_metadata,
 )
 from direct_rag_limits import detail_limits, next_detail, response_char_limit
 from direct_rag_request_bounds import rag_request_bound_error
@@ -39,9 +40,7 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int | 
     return max(minimum, min(maximum, parsed))
 
 
-def _freshness_advisory(
-    page: Any,
-) -> dict[str, Any] | None:
+def _freshness_advisory(page: Any) -> dict[str, Any] | None:
     if page.resolved_scope == "project_miss":
         return {
             "status": "project_match_unavailable",
@@ -244,6 +243,8 @@ def rag_search(
     }
     if match_metadata_truncated:
         payload["matchMetadataTruncated"] = True
+    payload.update(pattern_search_metadata(index, expected_generation,
+        requested="architecture_pattern" in (arguments.get("doc_type") or []), matches=match_refs, rows=page.rows))
     if page.truncated or match_metadata_truncated:
         payload["nextDetailLevel"] = next_detail(page.detail_level)
         if match_refs:

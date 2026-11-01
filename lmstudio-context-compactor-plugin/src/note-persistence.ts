@@ -23,6 +23,7 @@ export class NotePersistence {
     private readonly workingContext: WorkingContextStore,
     private readonly workingDirectory: string,
     private readonly scope: NoteScope,
+    private readonly observe?: (event: Record<string, unknown>) => void,
   ) { }
 
   /** The note keyed by the history before the new user message wins; the
@@ -35,10 +36,15 @@ export class NotePersistence {
     const stored = historyKey ? this.store.read(historyKey) : null;
     let note = stored
       ? modelNotes.reconcileStoredNote(stored, messages, this.workingContext?.verifiedNoteRefs(stored), scope) : null;
+    let source = note ? "history" : "none";
     const windowNote = this.workingContext?.note as ContinuityNote | null | undefined;
     if (!note && windowNote) {
       note = modelNotes.reconcileStoredNote(windowNote, messages, this.workingContext!.verifiedNoteRefs(windowNote), scope);
+      if(note)source="window";
     }
+    if(stored?.schemaVersion===2 || windowNote?.schemaVersion===2)this.observe?.({event:"architecture_restore",source,
+      restoredCount:note?.architecture?.length || 0,historicalCount:note?.architecture?.length || 0,
+      rejectedCount:note?0:1,rejectionReasons:note?[]:["scope_or_reference_reconciliation"],authority:"historical_on_activation"});
     this.mirror(note);
     return note;
   }
@@ -55,6 +61,8 @@ export class NotePersistence {
     const nextHistoryKey = modelNotes.historyKey(visibleMessages, this.workingDirectory);
     const verified = modelNotes.reconcileStoredNote(note, visibleMessages, this.workingContext?.verifiedNoteRefs(note), this.scope);
     const stored = Boolean(nextHistoryKey && verified && this.store.write(nextHistoryKey, verified));
+    if(note.schemaVersion===2)this.observe?.({event:"architecture_persistence",noteVersion:2,stateItemCount:note.architecture?.length || 0,
+      status:stored?"stored":"not_stored",reason:stored?"accepted":!nextHistoryKey?"unstable_history_key":!verified?"scope_reconciliation_failed":"atomic_write_failed"});
     return {
       status: stored ? "stored" : "not_stored",
       ...(stored ? {} : { reason: !nextHistoryKey ? "unstable_history_key"

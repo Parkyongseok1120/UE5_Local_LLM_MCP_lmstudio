@@ -10,12 +10,15 @@ import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 export { repeatRequestKey };
 import { capabilityFor, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import type { RoundVerdict } from "./execution-contracts";
+import { estimateReadResponseBytes } from "./budget-broker";
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics, decodeEnvelope } from "./tool-result-semantics.js";
+import type { ArchitectureEvidenceRef, PatternRef } from "./architecture-contracts";
 import { retainInterruptedCalls, renderInterruptedCalls, resolveInterruptedCalls } from "./interrupted-calls.js";
 import { extractPriorContinuityState } from "./continuity-memory.js";
 const identity = require("./evidence-identity.js") as {
+  fileSourceKey(value: Record<string, unknown>): string;
   sourceIdentity(value: Record<string, unknown>): string;
   sourceVersion(value: Record<string, unknown>): string;
   queryKey(value: Record<string, unknown>): string;
@@ -67,7 +70,10 @@ export class EvidenceManager {
   constructor(readonly store: InstanceType<typeof workingContextModule.WorkingContext> | null,
     readonly tools: Array<RemoteToolLike>) { }
   private sourceExecutionId = "";
+  // Observed default-project identity for estimates only; never a tool binding.
+  private readonly defaultEstimateProjects = new Map<string, string>();
   recordReturnedSources(messages: ChatMessage[], executionId: string) {
+    if (this.sourceExecutionId !== executionId) this.defaultEstimateProjects.clear();
     this.sourceExecutionId = executionId;
     const counts = new Map<string,number>();
     for(const message of messages) for(const request of message.getToolCallRequests())
@@ -75,13 +81,114 @@ export class EvidenceManager {
     for(const record of observationRecords(messages,this.tools,{confirmedPairsOnly:true})) {
       if(!record.trustedRead || !record.tool || !record.request || !record.value || counts.get(String(record.request.id))!==1)continue;
       const capability=capabilityFor(record.tool,record.request),kind=capability?.resultKind;
+      const observedProject = [record.value.canonicalProject, record.value.activeProject, record.value.canonicalProjectRoot]
+        .find(v => typeof v === "string" && v);
+      const value: Record<string, unknown> = { ...record.value, canonicalProject: observedProject || record.request.arguments?.project };
+      if (record.request.name === "get_active_project" && typeof observedProject !== "string")
+        this.defaultEstimateProjects.delete(record.tool.pluginIdentifier || "local");
+      if (decodeEnvelope(record.content).ok) {
+        if (record.request.arguments?.project === undefined && typeof observedProject === "string")
+          this.defaultEstimateProjects.set(record.tool.pluginIdentifier || "local", observedProject);
+        if (record.request.name === "list_directory" && typeof value.path === "string" && Array.isArray(value.entries)) {
+          for (const entry of value.entries as Array<Record<string, unknown>>) {
+            if (entry?.type !== "file" || typeof entry.name !== "string" || !entry.name
+              || /[\\/]/u.test(entry.name) || [".", ".."].includes(entry.name)
+              || !Number.isSafeInteger(entry.size) || Number(entry.size) < 0) continue;
+            this.ledger.recordSizeHint(identity.fileSourceKey({ ...value, path: String(value.path).replace(/[\\/]$/u, "") + "/" + entry.name }),
+              { sizeBytes: Number(entry.size), modifiedAt: entry.modifiedAt ?? null, totalLines: null, sha256: null, origin: "list_directory" });
+          }
+        } else if (kind === "source_body" && ["read_file", "read_file_range", "read_symbol"].includes(record.request.name)
+          && typeof value.path === "string" && !value.duplicate && !value.bodyOmitted) {
+          const facts = readLedgerModule.verifiedReadFacts(value);
+          const body = [value.content, value.text, value.body, value.code].find(v => typeof v === "string");
+          const range = value.range as { unit?: string; total?: number } | undefined;
+          const total = value.totalLines ?? (range?.unit === "line" ? range.total : undefined) ?? facts?.totalLines;
+          this.ledger.recordSizeHint(identity.fileSourceKey(value), {
+            ...(facts?.complete && typeof body === "string" ? { sizeBytes: Buffer.byteLength(body, "utf8") } : {}),
+            ...(Number.isSafeInteger(total) ? { totalLines: Number(total) } : {}),
+            ...(typeof value.sha256 === "string" ? { sha256: value.sha256 } : {}), origin: record.request.name });
+        }
+      }
       if(kind) this.ledger.recordReturnedSource({...record.value,
         sourceMode:record.value.sourceMode || record.request.arguments?.sourceMode,
         canonicalProject:record.value.canonicalProject || record.request.arguments?.project},kind,executionId,{contractLookup:capability.roles?.includes("contract_lookup")});
     }
+    for(const change of this.architectureChanges(messages)) {
+      if(change.sourceKey)this.ledger.invalidateReturnedSource(change.sourceKey);
+      else this.invalidateReturnedSources();
+    }
   }
   returnedSource(sourceKey:string,span:[number,number]) { return this.ledger.returnedSource(sourceKey,span,this.sourceExecutionId); }
   returnedSources() { return this.ledger.returnedSources(this.sourceExecutionId); }
+  /** Read-only architecture projection, derived from the existing returned-source ledger. */
+  architectureSources(history:Chat):Array<{ref:ArchitectureEvidenceRef;body:string}> {
+    const files=this.returnedSources().files, result:Array<{ref:ArchitectureEvidenceRef;body:string}>=[];
+    for(const item of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
+      if(!item.trustedRead || !item.request || !item.value || !item.tool || capabilityFor(item.tool,item.request)?.resultKind!=="source_body")continue;
+      const value={...item.value,sourceMode:item.value.sourceMode || item.request.arguments?.sourceMode,
+        canonicalProject:item.value.canonicalProject || item.request.arguments?.project};
+      const key=identity.fileSourceKey(value),file=files.find(f=>f.sourceKey===key);
+      const body=[item.value.content,item.value.text,item.value.body,item.value.code].find(v=>typeof v==="string");
+      if(!file || !body || item.value.bodyOmitted || !file.bodyReturned)continue;
+      const version=String(item.value.sha256 || item.value.hash || "");
+      const observed=this.ledger.sourceObservation(key);
+      result.push({ref:{ref:`tool-call:${item.request.id}`,sourceKey:file.sourceKey,...(version?{observedVersion:version}:{}),
+        applicability:observed?.invalidated || !observed?"unknown":observed.version!==version?"unknown"
+          :observed.historical?"historical":"same_observed_version",
+        availability:"in_input"},body:String(body).slice(0,262144)});
+    }
+    const unique=new Map<string,{ref:ArchitectureEvidenceRef;body:string}>();
+    for(const item of result) {
+      const prior=unique.get(item.ref.sourceKey!);
+      if(!prior || item.ref.applicability==="same_observed_version" || prior.ref.applicability!=="same_observed_version")unique.set(item.ref.sourceKey!,item);
+    }
+    return [...unique.values()].slice(-16);
+  }
+  architectureVersions():ArchitectureEvidenceRef[] {
+    return this.returnedSources().files.map(file=>{
+      const observed=this.ledger.sourceObservation(file.sourceKey);
+      return {ref:"tool-call:version-observation",sourceKey:file.sourceKey,
+        ...(observed?.version?{observedVersion:observed.version}:{}),availability:"metadata_only",
+        applicability:!observed || observed.invalidated?"unknown":observed.historical?"historical":"same_observed_version"};
+    });
+  }
+  invalidateReturnedSources() {this.ledger.invalidateSourceObservations();}
+  architectureChanges(messages:ChatMessage[]):ArchitectureEvidenceRef[] {
+    const output:ArchitectureEvidenceRef[]=[];
+    for(const item of observationRecords(messages,this.tools,{confirmedPairsOnly:true})) {
+      if(!item.request || !item.tool || !item.value)continue;
+      const capability=capabilityFor(item.tool,item.request);
+      if(capability?.effect!=="mutation")continue;
+      const value=item.value,status=resultSemantics(value,item.tool.pluginIdentifier).operationStatus;
+      if(value.changed===false || value.status==="no_change" || status==="failed" && value.status!=="partially_applied" && !String(value.errorCode||"").includes("CONFLICT"))continue;
+      const files=Array.isArray(value.files)?value.files:[value];
+      if(["outcome_unknown","unknown","canceled","pending","accepted"].includes(status)
+        && capability.roles?.includes("source_write") && !files.some(file=>file && typeof file.path==="string"))
+        output.push({ref:`tool-call:${item.request.id}`,applicability:"unknown",availability:"unavailable"});
+      for(const file of files) {
+        if(!file || typeof file.path!=="string")continue;
+        const normalized=identity.normalizeObservation({...value,...file,canonicalProject:file.canonicalProject || value.canonicalProject || item.request.arguments?.project},item.request,item.tool.pluginIdentifier || "local");
+        const key=identity.fileSourceKey(normalized);
+        const version=file.sha256 || file.hash;
+        output.push({ref:`tool-call:${item.request.id}`,sourceKey:key,...(typeof version==="string"?{observedVersion:version}:{}),
+          applicability:status==="completed"?"stale":"unknown",availability:"unavailable"});
+      }
+    }
+    return output;
+  }
+  architecturePatterns(history:Chat):PatternRef[] {
+    const patterns:PatternRef[]=[];
+    for(const item of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
+      if(!item.trustedRead || !item.value || !Array.isArray(item.value.matches))continue;
+      for(const row of item.value.matches) {
+        if(!row || typeof row.patternId!=="string" || !/^ue\.[a-z-]+$/u.test(row.patternId)
+          || !/^[a-f0-9]{64}$/u.test(row.contentHash) || !/^[a-f0-9]{64}$/u.test(row.catalogHash))continue;
+        patterns.push({patternId:row.patternId,contentHash:row.contentHash,catalogHash:row.catalogHash,origin:"rag",applicability:"unverified",
+          ...(typeof item.value.indexGenerationId==="string"?{indexGenerationId:item.value.indexGenerationId}:{})});
+      }
+    }
+    return [...new Map(patterns.map(p=>[JSON.stringify(p),p])).values()].slice(-2);
+  }
   rebuildReturnedSources(history: Chat) {
     if(this.ledger.returnedSources().files.length || this.ledger.returnedSources().contractIds.size)return;
     for(const record of observationRecords(history.getMessagesArray(),this.tools,{confirmedPairsOnly:true})) {
@@ -162,6 +269,23 @@ export class EvidenceManager {
   }
   observe(messages: Array<ChatMessage>, roundId?: string, screening?: ReadScreening, budgetDenied: readonly string[] = []): ReadDelta {
     if (roundId && this.observedRounds.has(roundId)) return this.observedRounds.get(roundId)!;
+    const registry = new ToolCapabilityRegistry(this.tools);
+    for (const record of observationRecords(messages, this.tools, { confirmedPairsOnly: true })) {
+      if (!record.tool || !record.request || !record.value || !registry.isMutation(record.tool, record.request)) continue;
+      if (record.request.name === "set_active_project") this.defaultEstimateProjects.delete(record.tool.pluginIdentifier || "local");
+      if (resultSemantics(record.value, record.tool.pluginIdentifier).operationStatus !== "completed") continue;
+      const value = record.value;
+      const files = Array.isArray(value.files) ? value.files : [value];
+      for (const item of files as Array<Record<string, unknown>>) {
+        if (!item || item.ok === false || item.applied === false) continue;
+        const path = item.path || (files.length === 1 && !Array.isArray(value.files) ? record.request.arguments?.path : undefined);
+        if (typeof path !== "string") continue;
+        this.ledger.invalidateSizeHint(identity.fileSourceKey({ ...value, ...item, path,
+          canonicalProject: item.canonicalProject || value.canonicalProject || item.activeProject || value.activeProject
+            || record.request.arguments?.project || this.defaultEstimateProjects.get(record.tool.pluginIdentifier || "local"),
+          provider: record.tool.pluginIdentifier || "local" }));
+      }
+    }
     const observed = observeRecoveryProgress(messages, this.fingerprints, this.coverage, this.currentCoverage, this.tools,
       this.isArchiveRepage);
     const repeatRestoreOnly = Boolean(screening && screening.otherResults === 0 && screening.repeatRestores > 0
@@ -474,7 +598,7 @@ export class EvidenceManager {
   }
 
   /** After the returned results were archived: bind each delivered version to
-   * its archive record, remember receipts and result sizes. */
+   * its archive record and remember receipts. */
   recordReturnedReads(screening: ReadScreening) {
     for (const item of screening.pending) {
       const result = { toolCallId: item.toolCallId, content: item.content ?? undefined };
@@ -486,17 +610,23 @@ export class EvidenceManager {
         this.ledger.attachArchiveRef(item.facts, locator);
         this.handleCache.set(locator.evidenceId, locator.readHandle);
       }
-      const content = original?.content;
-      const bytes = Buffer.byteLength(typeof content === "string" ? content : JSON.stringify(content ?? ""));
-      if (item.facts.complete || item.request.name !== "read_file") this.ledger.rememberResultSize(
-        repeatRequestKey(item.request.name, item.request.arguments || {}), bytes);
     }
   }
 
-  /** Bytes the same request returned before, while its version is unchanged. */
+  /** Only immutable archive responses have an exact repeat size. Mutable source
+   * reads use the provider/project scoped sizeHint estimate, never old bytes. */
   knownResultBytes = (name: string, args: Record<string, unknown>): number | undefined =>
     name === "evidence_first_read_context" ? this.store?.archiveResponseBytes?.(args)
-      : this.ledger.knownResultBytes(repeatRequestKey(name, args));
+      : undefined;
+
+  estimatedResultBytes = (name: string, args: Record<string, unknown>, tool: RemoteToolLike): number | undefined => {
+    if (!["read_file", "read_file_range"].includes(name) || tool.name !== name
+      || capabilityFor(tool, { name, arguments: args })?.resultKind !== "source_body" || typeof args.path !== "string") return undefined;
+    const provider = tool.pluginIdentifier || "local";
+    const key = identity.fileSourceKey({ path: args.path,
+      canonicalProject: args.project ?? this.defaultEstimateProjects.get(provider), provider });
+    return estimateReadResponseBytes(this.ledger.sizeHint(key), args);
+  };
 
   /** Accepted packet claims tied to observed source ranges. Acceptance and
    * source coverage do not independently verify the assistant's statement. */

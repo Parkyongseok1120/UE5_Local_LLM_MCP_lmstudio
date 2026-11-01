@@ -1,0 +1,282 @@
+{
+  "mode": "codegen",
+  "existing": [
+    "protocol classifier/renderer/durable boundary",
+    "objective continuity/capability registry/guard",
+    "BudgetBroker.retryFloors",
+    "ReadLedger/ReviewEvidenceIndex/ReviewRegister",
+    "existing report supplement/trace adapter",
+    "delete proposal/fileSnapshots/BuildChangeLedger",
+    "write-locks/transaction journal/recovery"
+  ],
+  "proposed": [
+    "출력·저장 protocol 식별, continuation 목적, provider 공통 review 및 retry floor 인계를 기존 owner에서 통일한다.",
+    "source version·검색 provenance·검토 적용성 및 포함 범위를 기존 ledger/index에 보존한다.",
+    "보고 범위와 과거 지적의 처리 상태를 기존 bounded supplement로 보완하고 host 진단 origin을 분리한다.",
+    "삭제 proposal version과 commit 통지를 결합하고 live/busy transaction을 recovery가 변경하지 않는다."
+  ],
+  "doNotDuplicate": [
+    "새 전역 manager/cache/retry loop/factual validator를 추가하지 않는다.",
+    "기존 provider operation manifest, source identity, exact gate, bounded report review, PID/start lock을 재사용한다."
+  ],
+  "invariants": [
+    "실제 게임 프로젝트·원본 대화/window·권한 설정을 수정하지 않는다.",
+    "CAS/physical identity/token scope/expiry/one-use/ABA manual recovery를 보존한다.",
+    "generation/report completion과 semantic task completion을 구분한다.",
+    "unknown observation과 historical judgment를 current fact/authority로 승격하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "plugin input/output/history/tool profile/reservation",
+    "source/quote/review view",
+    "report supplement/trace",
+    "Unreal delete/edit bundle/startup recovery",
+    "portable inventory/status/version metadata"
+  ],
+  "validationPlan": [
+    "plugin build and full regression",
+    "agent/Unity full regression",
+    "Python full including trace/package",
+    "generator checks4/diff",
+    "synthetic lifecycle/approval controls"
+  ],
+  "claims": [
+    {
+      "id": "C21",
+      "claim": "출력·저장 protocol 식별, continuation 목적, provider 공통 review 및 retry floor 인계를 기존 owner에서 통일한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "observation": "기존 계약 소유자의 분기와 인계를 수정했다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/lifetime-contract-followup.test.cjs",
+          "observation": "새 반례 및 정상 대조군을 기존 테스트와 실행했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "symbol": "기존 공개 경계"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
+          "symbol": "기존 owner의 bounded 판정"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/lifetime-contract-followup.test.cjs",
+          "symbol": "경계 결과 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/lifetime-contract-followup.test.cjs",
+          "observation": "정상 literal/명시적 작업 전환/소스 version/CAS/lock 대조군은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델의 의미 정확도·성능과 기존 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C22",
+      "claim": "source version·검색 provenance·검토 적용성 및 포함 범위를 기존 ledger/index에 보존한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-evidence.ts",
+          "observation": "기존 계약 소유자의 분기와 인계를 수정했다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/source-lifetime-followup.test.cjs",
+          "observation": "새 반례 및 정상 대조군을 기존 테스트와 실행했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-evidence.ts",
+          "symbol": "기존 공개 경계"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-evidence.ts",
+          "symbol": "기존 owner의 bounded 판정"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/source-lifetime-followup.test.cjs",
+          "symbol": "경계 결과 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/source-lifetime-followup.test.cjs",
+          "observation": "정상 literal/명시적 작업 전환/소스 version/CAS/lock 대조군은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델의 의미 정확도·성능과 기존 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C23",
+      "claim": "보고 범위와 과거 지적의 처리 상태를 기존 bounded supplement로 보완하고 host 진단 origin을 분리한다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/report-scope.ts",
+          "observation": "기존 계약 소유자의 분기와 인계를 수정했다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/report-scope-followup.test.cjs",
+          "observation": "새 반례 및 정상 대조군을 기존 테스트와 실행했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/report-scope.ts",
+          "symbol": "기존 공개 경계"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/report-scope.ts",
+          "symbol": "기존 owner의 bounded 판정"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/report-scope-followup.test.cjs",
+          "symbol": "경계 결과 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/report-scope-followup.test.cjs",
+          "observation": "정상 literal/명시적 작업 전환/소스 version/CAS/lock 대조군은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델의 의미 정확도·성능과 기존 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    },
+    {
+      "id": "C24",
+      "claim": "삭제 proposal version과 commit 통지를 결합하고 live/busy transaction을 recovery가 변경하지 않는다.",
+      "claimType": "codegen",
+      "verdict": "ByDesign",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
+          "observation": "기존 계약 소유자의 분기와 인계를 수정했다."
+        },
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/provider-lifetime-contract.test.js",
+          "observation": "새 반례 및 정상 대조군을 기존 테스트와 실행했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
+          "symbol": "기존 공개 경계"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-delete-capabilities.js",
+          "symbol": "기존 owner의 bounded 판정"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/test/provider-lifetime-contract.test.js",
+          "symbol": "경계 결과 assertion"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-unreal-agent-mcp/test/provider-lifetime-contract.test.js",
+          "observation": "정상 literal/명시적 작업 전환/소스 version/CAS/lock 대조군은 유지한다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실모델의 의미 정확도·성능과 기존 대화의 실제 다음 턴은 아직 관찰하지 않았다."
+      ]
+    }
+  ],
+  "validationResults": {
+    "plugin": {
+      "passed": 1208,
+      "failed": 0,
+      "skipped": 0
+    },
+    "agent": {
+      "passed": 375,
+      "failed": 0,
+      "skipped": 2
+    },
+    "unity": {
+      "passed": 132,
+      "failed": 0,
+      "skipped": 5
+    },
+    "python": {
+      "passed": 1492,
+      "failed": 0,
+      "skipped": 41,
+      "durationSeconds": 246.3
+    },
+    "realModelReplay": "not_performed",
+    "sourceBase": "fe98e8d",
+    "versions": {
+      "compactor": "0.4.86",
+      "revision": 133,
+      "unrealAgent": "0.3.32"
+    },
+    "packetScope": "structure_and_record_consistency_only",
+    "generatedChecks": 4,
+    "runtimeBuildId": "ef-build-v2-9361cb91a346529bc5a766520e96a800b85cd1e0259d19e700f71172d97b1cdb",
+    "independentReview": "source/profile/retry/protocol plus provider ownership paths reviewed; four edge counterexamples corrected and rechecked",
+    "finalPackage": {
+      "passed": 2,
+      "failed": 0
+    }
+  }
+}

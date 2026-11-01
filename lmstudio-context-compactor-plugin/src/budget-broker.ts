@@ -4,6 +4,7 @@ import {
   UNKNOWN_SIZE_MARGIN_TOKENS, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
 import type { RemoteToolLike } from "./tool-capability-registry";
+import { RUNTIME_DATA_SHARE } from "./execution-contracts";
 import { localObservationTools, capabilityFor, needsReadReservation } from "./tool-capability-registry";
 import { operationCapabilities } from "./tool-capability-core.js";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
@@ -15,6 +16,10 @@ function retryScope(tool: RemoteToolLike, args: Record<string, unknown>) {
   const { maxChars, byteBudget, maxBytes, repeatReceipt, ...scope } = args;
   return telemetryFingerprint({ provider: tool.pluginIdentifier, tool: tool.name, scope });
 }
+// A provider's source readers share one metadata shape; paths only lengthen it.
+const metadataScope = (tool: RemoteToolLike) => String(tool.pluginIdentifier || "");
+/** The reserve a direct provider keeps beyond rendered metadata before a body fits. */
+const PROVIDER_RESPONSE_RESERVE_BYTES = 256;
 
 export type Watermarks = {
   contextLength: number; configuredTargetTokens: number; configuredTriggerTokens: number;
@@ -35,13 +40,62 @@ export class BudgetBroker {
   // Execution-local, request-scope-specific retry floors. Never carried to the
   // next user turn or borrowed across tools, projects, queries or operations.
   private readonly retryFloors = new Map<string, RetryMinimum>();
-  observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
-    const key = retryScope(tool, args);
-    if (envelope.ok) this.retryFloors.delete(key);
-    else if ("minimum" in envelope.retry && envelope.retry.minimum) this.retryFloors.set(key, { ...envelope.retry.minimum });
-    while (this.retryFloors.size > 256) this.retryFloors.delete(this.retryFloors.keys().next().value!);
+  private readonly retryAliases = new Map<string, Set<string>>();
+  // Execution-local size floor, not request authority: the largest response
+  // metadata (result without its body, plus the provider's 256-byte reserve)
+  // a provider's byteBudget reader returned. A window clamped below it returns
+  // no body, so the read is denied before dispatch (2026-11-01 run, R6).
+  private readonly metadataFloors = new Map<string, number>();
+  private observeMetadataFloor(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
+    if (readResultContract(tool, args).field !== "byteBudget") return;
+    const value = envelope.value as Record<string, unknown> | undefined;
+    const minimum = "minimum" in envelope.retry ? envelope.retry.minimum : undefined;
+    const bytes = envelope.ok && typeof value?.content === "string"
+      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES
+      : envelope.errorCode === "OUTPUT_LIMIT_EXCEEDED" && minimum?.field === "byteBudget" ? Number(minimum.value) : 0;
+    const key = metadataScope(tool);
+    if (bytes > (this.metadataFloors.get(key) || 0)) this.metadataFloors.set(key, bytes);
   }
-  retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>) => this.retryFloors.get(retryScope(tool, args));
+  observeResult(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>, tools: readonly RemoteToolLike[] = []) {
+    this.observeMetadataFloor(tool, args, envelope);
+    const key = retryScope(tool, args);
+    const clear = (scope: string) => {
+      for (const alias of this.retryAliases.get(scope) || [scope]) { this.retryFloors.delete(alias); this.retryAliases.delete(alias); }
+    };
+    if (envelope.ok) clear(key);
+    else if ("minimum" in envelope.retry && envelope.retry.minimum) {
+      const minimum = envelope.retry.minimum;
+      clear(key); this.retryFloors.set(key, { ...minimum });
+      // Only the provider's registered source-read continuation may inherit
+      // this floor. A suggestion cannot lend authority to another provider,
+      // project, path, query or operation. It is still subject to the guard.
+      const advice = envelope.value?.suggestion;
+      const target = tools.filter(t => t.name === advice?.tool && t.pluginIdentifier === tool.pluginIdentifier);
+      const next = advice?.args;
+      if (["read_file", "read_file_range"].includes(tool.name) && target.length === 1
+        && ["read_file", "read_file_range"].includes(target[0].name)
+        && next && typeof next === "object" && !Array.isArray(next) && typeof args.path === "string"
+        && next.path === args.path && (next.project ?? args.project) === args.project
+        && Object.keys(args).every(k => ["byteBudget", "repeatReceipt", "lineNumbers"].includes(k)
+          || next[k] === args[k])
+        && Object.keys(next).every(k => ["path", "project", "byteBudget", "startLine", "endLine", "lineNumbers"].includes(k))
+        && capabilityFor(target[0], { name: target[0].name, arguments: next })?.effect === "read") {
+        const contract = readResultContract(target[0], next);
+        if (contract.field === minimum.field && minimum.value >= contract.minimum && minimum.value <= contract.maximum) {
+          const alias = retryScope(target[0], next), group = new Set([key, alias]);
+          this.retryFloors.set(alias, { ...minimum });
+          for (const member of group) this.retryAliases.set(member, group);
+        }
+      }
+    }
+    while (this.retryFloors.size > 256) clear(this.retryFloors.keys().next().value!);
+  }
+  retryMinimum = (tool: RemoteToolLike, args: Record<string, unknown>): RetryMinimum | undefined => {
+    const scoped = this.retryFloors.get(retryScope(tool, args));
+    const observed = this.metadataFloors.get(metadataScope(tool));
+    if (!observed || readResultContract(tool, args).field !== "byteBudget" || (scoped && scoped.value >= observed)) return scoped;
+    return { field: "byteBudget", value: observed };
+  };
   constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
     & Partial<Pick<DirectConfig, "workingInputScaling">>) { }
   watermarks(measured: ContextMeasurement, mandatoryFloorTokens = 0, hasReadTools = true, minimumReadTokens = 2048): Watermarks {
@@ -94,6 +148,9 @@ export class BudgetBroker {
   beginBatch(measured: ContextMeasurement, hasReadTools = true, reserveFloor = 0) {
     const budget = this.watermarks(measured, 0, hasReadTools);
     return new BatchReservation(Math.max(0, budget.hardInputCeiling - measured.inputTokens - budget.requiredPostToolOverhead), reserveFloor);
+  }
+  runtimeDataAllowanceChars(water: Pick<Watermarks, "effectiveLowWaterTokens">): number {
+    return Math.floor(tokens(water.effectiveLowWaterTokens) * RUNTIME_DATA_SHARE * UTF8_BYTES_PER_TOKEN_ESTIMATE);
   }
 }
 
@@ -205,7 +262,9 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
     const c = readResultContract(tool);
     return c.field ? Math.ceil(c.minimum * c.multiplier) + UNKNOWN_SIZE_MARGIN_TOKENS : 3072 + UNKNOWN_SIZE_MARGIN_TOKENS;
   };
-  const sourceMinimum = actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
+  const floorTools = tools.filter(tool => operationCapabilities(tool).some(op => op.roles?.includes("budget_floor")));
+  const sourceMinimum = floorTools.length ? Math.max(...floorTools.map(minimumFor))
+    : actionable.length ? Math.min(...actionable.map(minimumFor)) : 0;
   // Once returned evidence is archived, acquisition and rehydration are both
   // required lifecycle operations. A cheap source read cannot certify that
   // the archive is usable. This reserves either operation, not their sum:
@@ -218,8 +277,24 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
 
+/** Conservative response estimate, never source availability or authority. */
+export function estimateReadResponseBytes(hint: { sizeBytes: number | null; totalLines: number | null } | null,
+  selector: Record<string, unknown> = {}): number | undefined {
+  if (!hint || !Number.isSafeInteger(hint.sizeBytes) || hint.sizeBytes! < 0
+    || ["offsetBytes", "nextOffsetBytes", "offset", "startOffset", "maxBytes"].some(key => selector[key] !== undefined)) return undefined;
+  let bodyBytes = hint.sizeBytes!, lines = hint.totalLines ?? Math.ceil(bodyBytes / 32);
+  if (selector.startLine !== undefined || selector.endLine !== undefined) {
+    const start = Number(selector.startLine), end = Number(selector.endLine);
+    if (!Number.isSafeInteger(hint.totalLines) || hint.totalLines! <= 0
+      || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start) return undefined;
+    lines = end - start + 1; bodyBytes = Math.ceil(bodyBytes * lines / hint.totalLines!);
+  }
+  const bytes = Math.ceil(bodyBytes * 1.15) + lines * 8 + 2560;
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
+}
+
 export function reserveReadResult(batch: BatchReservation, id: string, tool: RemoteToolLike,
-  args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum) {
+  args: Record<string, unknown>, knownResultBytes?: number, retryMinimum?: RetryMinimum, estimatedBytes?: number) {
   const capability = capabilityFor(tool, { name: tool.name, arguments: args });
   if (capability && !needsReadReservation(tool, { name: tool.name, arguments: args })) {
     batch.accountFixed(id);
@@ -256,9 +331,11 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const adaptive = field !== null && contract.adaptiveDefault && args[field] === undefined
     && contract.defaultValue > DEFAULT_READ_FLOOR_BYTES;
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
-  const requested = field ? tokens(args[field] === undefined
+  const ceilingFromHint = Number.isSafeInteger(estimatedBytes) && estimatedBytes! > 0
+    ? Math.max(contract.minimum, Math.ceil(estimatedBytes! * 1.25)) : Infinity;
+  const requested = field ? Math.min(tokens(args[field] === undefined
     ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : Number(args[field])) : 3072;
+    : Number(args[field])), ceilingFromHint) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;

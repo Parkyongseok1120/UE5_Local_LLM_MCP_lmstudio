@@ -115,6 +115,7 @@ export function createToolGuard(options: {
   /** Bytes the same request returned before while its source was unchanged. */
   knownResultBytes?: (name: string, args: Record<string, unknown>) => number | undefined;
   retryMinimum?: (tool: RemoteToolLike, args: Record<string, unknown>) => RetryMinimum | undefined;
+  estimatedResultBytes?: (name: string, args: Record<string, unknown>, tool: RemoteToolLike) => number | undefined;
 }): RoundToolGuard {
   const { ctl, emitter, roundTools, config, scope, toolPlanningRetryRound, toolPlanningRetryBlockedFingerprints,
     batchReservation, reservationIds, toolGeneration, traceCall } = options;
@@ -124,8 +125,8 @@ export function createToolGuard(options: {
     // The SDK does not invoke onToolCallRequestFinalized for denied
     // calls, so register the stable call ID at the confirmation edge.
     emitter.registerRequest(callId, request);
-    const deny = (reason: string) => {
-      toolGeneration.denied(callId, reason);
+    const deny = (reason: string, deferred = false) => {
+      toolGeneration.denied(callId, reason, deferred);
       controller.deny(reason);
     };
     const allowedTool = roundTools.find((tool) => tool.name === request.name);
@@ -166,7 +167,8 @@ export function createToolGuard(options: {
       // The same read is still verbatim in this input: let the server confirm it unchanged.
       const reservation = batchReservation
         ? reserveReadResult(batchReservation, reservationId, allowedTool, proposedArguments,
-          options.knownResultBytes?.(request.name, proposedArguments), options.retryMinimum?.(allowedTool, proposedArguments))
+          options.knownResultBytes?.(request.name, proposedArguments), options.retryMinimum?.(allowedTool, proposedArguments),
+          options.estimatedResultBytes?.(request.name, proposedArguments, allowedTool))
         : { allowed: true, arguments: proposedArguments, reservedTokens: 0, bounded: false, denialReason: undefined, limit: undefined };
       if (!reservation.allowed) {
         traceCall(callId, { validationState: "denied_batch_budget", executionState: "not_executed",
@@ -174,7 +176,8 @@ export function createToolGuard(options: {
           ...("allowance" in reservation ? { budgetAllowance: reservation.allowance } : {}) });
         const minimum = "requiredMinimum" in reservation ? reservation.requiredMinimum : undefined;
         deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined)
-          + (minimum ? ` Required minimum: ${minimum.field}=${minimum.value}.` : ""));
+          + (minimum ? ` Required minimum: ${minimum.field}=${minimum.value}.` : ""),
+          ["held_reservations_insufficient", "remaining_capacity_insufficient"].includes(String(reservation.denialReason)));
         return;
       }
       const present = reservation.arguments.repeatReceipt === undefined

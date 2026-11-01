@@ -100,6 +100,8 @@ def build(args: argparse.Namespace) -> None:
         total_chunks=writer.total_chunks,
         engine_evidence_chunks=writer.engine_evidence_chunks,
         project_evidence_chunks=writer.project_evidence_chunks,
+        architecture_patterns={"schemaVersion": 1, "count": len(writer.architecture_inventory.patterns),
+                               **({"catalogHash": writer.architecture_inventory.catalog_hash()} if writer.architecture_inventory.patterns else {})},
     )
     promote_outputs(paths, replace=os.replace)
 

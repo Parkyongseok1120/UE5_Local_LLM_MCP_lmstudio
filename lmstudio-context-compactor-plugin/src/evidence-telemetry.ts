@@ -1,15 +1,25 @@
 import {
-  ChatMessage
+  ChatMessage, type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import crypto from "node:crypto";
 import { toolMemory } from "./context-ports";
-import { type ContinuityNote, type DirectConfig } from "./execution-contracts";
+import { type ContinuityNote, type DirectConfig, type InputAvailabilityProjection, type ContextMeasurement, type RewriteCause } from "./execution-contracts";
 import type { RecoveryProgress, ReadScreening } from "./evidence-manager";
+import {runtimeInstallationIdentity} from "./runtime-identity";
+import type {RemoteToolLike} from "./tool-capability-registry";
 
 export const VOLATILE_OBSERVATION_KEYS = new Set([
   "observedAt", "lastObservedAt", "snapshotCapturedAt", "snapshotId", "nextCursor", "compactionGeneration",
   "gitTiming",
 ]);
+export function runtimeExecutionTelemetry(config:DirectConfig,objective:{kind:string;mutationState:string},executionId:string,modelIdentifier:string,
+  registered:RemoteToolLike[],selected:RemoteToolLike[],readOnlyReview:boolean) {
+  return {event:"direct_runtime_identity",objectiveKind:objective.kind,mutationState:objective.mutationState,executionId,
+    ...runtimeInstallationIdentity(),modelIdentifier,
+    toolRegistryFingerprint:telemetryFingerprint(registered.map(tool=>({name:tool.name,pluginIdentifier:tool.pluginIdentifier||null,schema:tool.parametersJsonSchema||null}))),
+    fullToolCount:selected.length,toolProfile:config.auditCompletionMode==="bounded"?"bounded_audit":readOnlyReview?"read_only_review":"full",
+    ...runtimeConfigTelemetry(config)};
+}
 
 export function runtimeConfigTelemetry(config: DirectConfig) {
   return {
@@ -31,10 +41,35 @@ export function readLedgerTelemetry(screening: ReadScreening) {
     restoredReads: screening.restoreRequiredReads, repeatRestores: screening.measuredRepeatRestores || 0,
     failedReads: screening.failedReads, bodiesReplaced: screening.replaced, replacedCallIds: screening.suppressedCallIds };
 }
+export function inputAvailabilityTelemetry(input: { projection: InputAvailabilityProjection | null;
+  metadataChars: number; availabilityMetadataTokens: number | null }, mode: DirectConfig["inputAvailabilityMode"]) {
+  const projection = input.projection;
+  return projection ? { mode, verificationBoundary: projection.verificationBoundary,
+    hostInputVerification: projection.hostInputVerification, entries: projection.entries,
+    omittedEntryCount: projection.omittedEntryCount, entryListComplete: projection.entryListComplete,
+    metrics: projection.metrics, metadataChars: input.metadataChars, availabilityMetadataTokens: input.availabilityMetadataTokens,
+    metadataTokenMeasurement: input.availabilityMetadataTokens === null ? "unknown" : "prompt_delta" } : { mode: "off" };
+}
 
-/** Measurement only. Owned by one execution; no prompt text or cache policy. */
+/** Execution-local measurement. Only lengths/hashes escape; no cache policy. */
 export class SystemPrefixTelemetry {
   private previous: string | null = null;
+  private previousPrompt: string | undefined;
+  record(ctl: Pick<PredictionLoopHandlerController, "debug">,
+    context: { executionId: string; modelInputId: string; roundIndex: number },
+    messages: ChatMessage[], measurement: ContextMeasurement, rewriteCauses: readonly RewriteCause[]) {
+    const system = this.observe(messages);
+    ctl.debug({ event: "system_prefix_fingerprint", ...context, ...system });
+    const current = measurement.exact ? measurement.templatedPrompt : undefined, previous = this.previousPrompt;
+    let commonPrefixChars = 0;
+    if (current !== undefined && previous !== undefined)
+      while (commonPrefixChars < Math.min(current.length, previous.length)
+        && current[commonPrefixChars] === previous[commonPrefixChars]) commonPrefixChars++;
+    ctl.debug({ event: "prefix_reuse", ...context, commonPrefixChars: current === undefined ? null : commonPrefixChars,
+      previousInputChars: previous?.length ?? null, currentInputChars: current?.length ?? null,
+      systemChanged: system.changed, rewriteCauses });
+    this.previousPrompt = current;
+  }
   observe(messages: ChatMessage[]) {
     const systemHash = telemetryFingerprint(messages.filter(message => message.getRole() === "system").map(message => message.getText()));
     const event = { systemHash, previousSystemHash: this.previous, changed: this.previous !== null && this.previous !== systemHash };

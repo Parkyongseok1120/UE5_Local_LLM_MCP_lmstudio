@@ -1,0 +1,592 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-10-28",
+    "root": ".",
+    "baselineCommit": "2b13b38c5644b9072e04c488e642205b46cbc804",
+    "includesUncommittedArchitectureChanges": true,
+    "implementation": false,
+    "liveRuntimeModified": false,
+    "userGameModified": false,
+    "conversationId": "1793194960145",
+    "conversationSha256": "9b594fd202e318bdb34d55b3049a0489b20eed702c65173c285fcc73193571ef",
+    "report": "docs/Harness_Run_1793194960145_Audit_Fix_Plan_20261028.md"
+  },
+  "claims": [
+    {
+      "id": "F1",
+      "claim": "새 architecture 내부 프로토콜은 현재 출력 필터의 식별 계약에 연결되지 않아 정확한 출력과 변형 출력을 모두 사용자 본문으로 통과시킨다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-input.ts:25",
+          "observation": "새 header와 안내문/JSON 출력."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:59",
+          "observation": "constructor 및 line 분기에는 기존 Derived만 등록."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:360",
+          "observation": "private part 시작 문자열 판별에 독립 architecture 없음."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step166",
+          "observation": "실제 출력 뒤 visible_report 복구가 예약됨."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/text-blocks.json#step162,step173",
+          "observation": "11,960/21,230자의 architecture 형식 반복 표시."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+          "observation": "기존 Derived 165→0, architecture exact 1634→1634, modified 1635→1635, 결합된 입력도 architecture 잔존."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-input.ts:25",
+          "symbol": "renderArchitectureContext"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:434",
+          "symbol": "referenceData 문자열 결합"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-output.ts:198",
+          "symbol": "알려진 Derived만 분류; architecture 식별 누락"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:198",
+          "symbol": "필터 결과를 표시"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+          "observation": "기존 Derived는 제거되므로 모든 필터가 고장난 것은 아니다."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#direct_runtime_identity",
+          "observation": "loadedBuildId와 installedBuildId 일치; 오래된 설치본만의 문제로 설명 불가."
+        }
+      ],
+      "unknowns": [
+        "모델이 최초 반복을 시작한 확률적 원인은 이 소스 재현으로 확정할 수 없다.",
+        "표시된 modelInputId/handle은 변형되어 입력 전체를 정확히 복사했다고 단정하지 않는다."
+      ]
+    },
+    {
+      "id": "F2",
+      "claim": "내부 형식의 출력을 보고 prefix로 취급하여 이어쓰기 입력에 재주입한다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:332",
+          "observation": "비어 있지 않은 visible text를 visible_report로 분류."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1545",
+          "observation": "복구 자격 후 prefix 보존/append."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step166",
+          "observation": "continue_report, partialReportIncludedInInput=true."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step177,step180",
+          "observation": "추가 8192 tokens 뒤 truncated; reportPresent/reportDelivered=true, completed=false."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+          "observation": "실제 출력으로 classifier/recovery와 DeliveryController 결과를 재현."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:159",
+          "symbol": "정제 capture 전달"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:337",
+          "symbol": "canRecoverOutputLimit"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1549",
+          "symbol": "retainReportPrefix 및 history append"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1554",
+          "symbol": "OUTPUT_RECOVERY 전환"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:43",
+          "symbol": "이전 prefix 포함 결과"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step180",
+          "observation": "reportCompleted와 taskCompleted는 false로 유지."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step181",
+          "observation": "복구 1회 후 종료; 무한 복구는 발생하지 않음."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:49",
+          "observation": "정상 완료 보고서 보존이라는 기존 보호 목적."
+        }
+      ],
+      "unknowns": [
+        "필터 개선 후 실제 모델의 정상 보고 완료율은 새 실행으로 측정해야 한다."
+      ]
+    },
+    {
+      "id": "F2-restore",
+      "claim": "현재 과거 assistant 정리 경로도 architecture 반복을 제거하지 못하여 보존 후보로 통과시킨다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js:88",
+          "observation": "legacy sanitizer는 DERIVED_HEADER만 처리."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:558",
+          "observation": "persistable에서 같은 sanitizer 호출."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js:20",
+          "observation": "retainVisibleResponse에서 같은 sanitizer 호출."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+          "observation": "실제 두 표시 블록 모두 sanitizer에서 문자 수 변화 없음; retainVisibleResponse에 헤더 5/9개 보존."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:558",
+          "symbol": "persistable"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js:88",
+          "symbol": "architecture 분류 없음"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/continuity-assistant-evidence.js:53",
+          "symbol": "visible response record 생성"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/internal-data-contract.js:73",
+          "observation": "기존 Derived의 지속 저장 보호는 존재."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step179",
+          "observation": "seal/release 성공과 원문 정제 성공은 다른 사실."
+        }
+      ],
+      "unknowns": [
+        "이 실행 다음 실제 사용자 턴의 복원을 수행하지 않았으므로 실제 다음 턴 오염은 미확인."
+      ]
+    },
+    {
+      "id": "F3",
+      "claim": "현재 최대 2000자 반복 검사는 관찰된 2392자 내부 프레임 반복을 놓친다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:104",
+          "observation": "maximumBlock 최대 2000."
+        },
+        {
+          "kind": "test",
+          "location": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+          "observation": "실제 step162/173을 16자 fragment로 공급: 2392자 간격 5/9개 header, detector(3)=false."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:718",
+          "symbol": "abortAfterPredictionFragment"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:104",
+          "symbol": "최대 블록 제한 반복 검사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:719",
+          "symbol": "false로 반복 미신고"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:721",
+          "observation": "recover에서도 visible 반복은 의도적으로 warn; 감지 확대만으로 중단 정책은 수정되지 않음."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:85",
+          "observation": "기존 반복 감지기는 존재."
+        }
+      ],
+      "unknowns": [
+        "모든 다른 반복 길이/모델 변형의 검출율과 오탐은 추가 테스트가 필요하다."
+      ]
+    },
+    {
+      "id": "F4",
+      "claim": "기존 후보의 잔여 슬롯만 사용하는 경로에서 카드가 0개이고, view가 입장하면 카드별 탈락 사유가 계측되지 않는다. 카드 0개 자체는 optional 계약 위반이 아니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:435",
+          "observation": "6-candidate.ids.length로 카드 제한."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:561",
+          "observation": "architectureInputRefs 존재만으로 omittedReasons=[] 처리."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#architecture_context",
+          "observation": "7개 모두 requested patterns 존재, admittedPatternIds=[], 일부 omittedReasons=[]."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#design_guidance_input",
+          "observation": "round3부터 selectedIds 6개 유지."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-policy.ts:5",
+          "symbol": "selectArchitectureContext"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:435",
+          "symbol": "기존 지침 잔여 슬롯"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:474",
+          "symbol": "공유 optional admission"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:561",
+          "symbol": "카드 0개 및 일부 생략 원인 없음"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:438",
+          "observation": "baseline 추가와 architecture view 후보는 존재."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:195",
+          "observation": "필수 closure와 기존 상한 유지 필요."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/design-guidance.ts:265",
+          "observation": "supplement도 minimum에 포함된다. 최소 후보의 모든 절을 필수 안전 계약과 동일시해서는 안 된다."
+        }
+      ],
+      "unknowns": [
+        "필수 계약을 유지한 채 각 실측 라운드에 몇 개 카드가 token budget까지 충족할지는 새 후보를 실제 측정해야 한다.",
+        "카드 전달만으로 모델 구조 판단이 개선된다는 보장은 없다."
+      ]
+    },
+    {
+      "id": "F5",
+      "claim": "현재 입력 본문에서만 구조 단서를 재구성하여 압축 후 단서 선택이 달라진다. 이것이 최종 품질 실패에 기여한 정도는 미확정이다.",
+      "claimType": "architecture",
+      "verdict": "Ambiguous",
+      "severity": "P2",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:124",
+          "observation": "현재 history의 trusted source body에서 architectureSources 생성."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-observation.ts:4",
+          "observation": "현재 body를 다시 분석해 facets 생성."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#step106,step122,step126",
+          "observation": "압축 전 facet12/definition-asset, projection 뒤 facet2/component-event."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:124",
+          "symbol": "architectureSources"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-observation.ts:4",
+          "symbol": "현재 본문에서 양성 단서 계산"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/architecture-policy.ts:17",
+          "symbol": "카드 우선순위"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/round-input.ts:561",
+          "symbol": "관찰 단서 수와 선택 패턴"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-manager.ts:147",
+          "observation": "source version 관찰은 별도 ledger에 유지됨; 전체 버전 SSOT 유실은 아님."
+        },
+        {
+          "kind": "runtime",
+          "location": "<local-diagnostics>/harness-run-1793194960145/events.json#direct_round_observation",
+          "observation": "11회 note absent; 저장할 모델 판단이 만들어지지 않음."
+        }
+      ],
+      "unknowns": [
+        "production compaction 전후 동일 버전 단서 재현이 필요하다.",
+        "optional note 미생성과 최종 모델 지식 부족을 저장 버그로 등치할 수 없다."
+      ]
+    },
+    {
+      "id": "F6",
+      "claim": "architecture 통합 테스트는 정상/변경/취소/note 호환을 다루지만 새 프로토콜 echo와 이번 6절 경쟁을 검증하지 않는다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/../test/prediction-loop.test.cjs:101",
+          "observation": "7개 production replay 시나리오."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/../test/prediction-loop.test.cjs:6815",
+          "observation": "transformed reference 회귀는 기존 Derived 사용."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/../test/architecture-lifecycle.test.cjs:1",
+          "observation": "판단 수명과 invalidation의 단위 테스트가 있음."
+        }
+      ],
+      "unknowns": [
+        "기존 전체 테스트 통과는 이번 실제 모델 출력 문제를 방지한다는 증거가 아니다."
+      ]
+    }
+  ],
+  "existing": [
+    "internal-data-contract/internal-data-output의 기존 Derived 분류와 sanitizer",
+    "PredictionStreamRenderer의 presentation과 정제 출력 경로",
+    "DeliveryController/ExecutionState의 복구 상한 및 정상 보고서 보존",
+    "ContextManager/BudgetBroker의 공유 allowance와 최소 읽기 예약",
+    "ReadLedger sourceObservations와 EvidenceManager의 직접 반환 projection",
+    "ArchitectureState 모델 판단과 NotePersistence 단일 저장 경로"
+  ],
+  "proposed": [
+    {
+      "id": "S0",
+      "proofLevel": "Proposed",
+      "change": "실제 renderer의 합성 echo/변형/반복/혼합/절 경쟁을 productionHandler 실패 fixture로 고정."
+    },
+    {
+      "id": "S1",
+      "proofLevel": "Proposed",
+      "change": "typed host reference parts와 공유 parser; current output와 legacy restore 공통 분류; note 설명의 소유권 통합."
+    },
+    {
+      "id": "S2",
+      "proofLevel": "Proposed",
+      "change": "presentation disposition을 recovery/delivery SSOT로 사용; protocol-only 무복구/비보고 처리; 알려진 내부 반복의 중단을 기존 loop에 연결."
+    },
+    {
+      "id": "S3",
+      "proofLevel": "Proposed",
+      "change": "mandatory closure 보호 후 패턴과 optional 절을 하나의 후보 정책에서 배분; 카드별 생략 원인 기록."
+    },
+    {
+      "id": "S4",
+      "proofLevel": "Proposed",
+      "change": "압축 전후 재현 후 기존 source observation에 bounded 파생 단서 metadata 결합; 가용성/버전/모델 판단 수명 분리."
+    }
+  ],
+  "doNotDuplicate": [
+    "새 도구 실행/숨은 RAG/모델 preflight 루프",
+    "별도 retry budget/phase state/취소 소유자",
+    "소스 버전 SSOT나 편집 권한 저장소",
+    "구조 판단/노트 영속 저장소",
+    "각 소비자의 독립 문자열 정규식 계약",
+    "별도 architecture token allowance"
+  ],
+  "invariants": [
+    "내부 데이터는 사용자 보고나 직접 근거/권한이 아니다.",
+    "최종 입장 입력과 발급 참조는 같은 modelInputId에 속한다.",
+    "GUI/history/recovery/persistence가 동일 분류 결과를 사용한다.",
+    "취소/미완성 판단은 commit하지 않고 반환 근거는 보존한다.",
+    "필수 엔진 계약/최소 읽기 예약/전체 allowance를 유지한다.",
+    "저장/표시/보고 완료/목표 달성 상태를 구별한다.",
+    "본문 가용성 감소와 관찰 버전 무효화를 구별한다.",
+    "불명 쓰기·복원·archive 재전달은 최신 권한을 부활시키지 않는다.",
+    "유효한 기존 보고서 뒤 internal-only supplement는 원 보고서를 지우지 않는다.",
+    "검증된 parentLineage 복원은 historical; 검증되지 않은 lineage 변경과 구별한다.",
+    "파생 단서는 sourceObservations→ReadLedger.toJSON→WorkingContext 한 경로로 저장하고 note에 복제하지 않는다.",
+    "observeOnly/반복 off를 우회해 조기 중단하지 않는다; warn/pause/recover의 정책 차이를 명시한다.",
+    "검증된 transcript라는 사실만으로 legacy assistant prose에 host-origin을 부여하지 않는다."
+  ],
+  "impactedSurfaces": [
+    "internal-data-contract, architecture-input, reference-rendering, design-guidance, round-input, context-manager",
+    "internal-data-output, prediction-stream, execution-contracts, delivery-controller, prediction-loop",
+    "continuity-model-notes, continuity-assistant-evidence, working-context",
+    "read-ledger, evidence-manager, architecture-observation/round/state 및 기존 persistence adapter",
+    "plugin contract/output/lifecycle/admission tests 및 guidance/runtime identity 생성 검사",
+    "기존 저장 창의 비파괴 legacy compatibility, packaged runtime과 실제 loaded identity 검증"
+  ],
+  "validationPlan": [
+    "실제 데이터 대신 최소 합성 renderer fixture로 현재 실패를 먼저 확인.",
+    "stream on/off와 exact/변형/절단/혼합/사용자 리터럴의 출력-history-capture-restore 일치.",
+    "internal-only recovery0, 정상 잘린 보고 recovery<=1, 완료 prefix 보존, cancel/late callback no commit.",
+    "2392자 내부 프레임 반복 감지와 visible 전용 중단 정책; 일반 코드/표는 정상 유지.",
+    "6절 경쟁/mandatory 초과/저예산/sticky scope/실제 발급 refs 확인.",
+    "압축/복원/source version 변경/unknown write/archive 재전달/축출의 권한 보존 테스트.",
+    "영향 plugin build와 관련전체 tests, Python/Agent/RAG 영향검사; 제품 변경 없는 이번 작업에는 전체 CI를 재실행하지 않음.",
+    "구현 후 같은 모델/설정의 원본-변경본 각3회; 결과 품질·완료·표시/저장 오염·재조회·토큰/시간 편차 측정.",
+    "패키지 설치는 별도 구현 후 기존 설정/인덱스 보존, rollback 가능하게 수행.",
+    "JSON validator는 필수 항목 형식 검사이며 factual verification이 아님.",
+    "정상 보고 뒤 internal-only supplement, 사용자 요청 프로토콜 예시, 검증된 parentLineage historical 복원, 반복 설정별 동작을 필수 대조군으로 둔다."
+  ],
+  "independentReview": {
+    "reviewer": "/root/run_1793194960145_independent_audit",
+    "mode": "read_only",
+    "replay": "<local-diagnostics>/harness-run-1793194960145/independent-replay.cjs",
+    "results": "<local-diagnostics>/harness-run-1793194960145/independent-replay-results.json",
+    "limits": [
+      "최신 모델 생성 미실행",
+      "다음 실제 턴 복원 미실행",
+      "compiled modules 재현과 소스 추적; 전체 CI 미실행"
+    ],
+    "incorporated": [
+      "architecture_context 7개로 집계 정정",
+      "exact copy가 아닌 변형 protocol 출력",
+      "visible repetition warn 정책 확인",
+      "absent note를 저장 실패로 오인하지 않음",
+      "완료 false 보호와 report prefix 오류 구별",
+      "카드0 자체는 optional 계약상 가능; 확정 계측 결함과 배분 개선 구별",
+      "internal-only 이전 유효 보고서 보존 예외",
+      "검증된 parentLineage historical 복원 유지",
+      "파생 관찰 저장 경로를 ledger/window로 한정",
+      "legacy verified transcript와 host-origin 구별",
+      "off/warn/pause/recover/observeOnly별 반복 중단 계약",
+      "S0 최소 카드 fixture의 optional 여지/실제 예산 조건"
+    ]
+  },
+  "validation": {
+    "scope": "packet_structure_and_record_consistency",
+    "factualEvidenceVerifiedByValidator": false,
+    "wholeTaskVerifiedByValidator": false,
+    "structureStatus": "structure_valid",
+    "frameworkEvidenceAdvisories": "P1 두 주장에 일반 framework 출처 권고가 있다. 두 주장은 자체 필터/분류/복구 함수와 관찰된 출력 경로에 한정하며 외부 SDK scheduling이나 Unreal semantics를 원인으로 주장하지 않는다."
+  }
+}
