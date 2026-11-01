@@ -40,26 +40,57 @@ export type StreamedAssistant = {
 
 const FOOTER_MARKER = "\n<!-- direct-continuity-note-v";
 
+// A long report echo may fix a typo while repeating it (conversation
+// 1793526507401: "해armless"→"harmless" at 14% showed the report twice). Only
+// long prefixes tolerate edits; each edit must resynchronize on this many chars.
+const ECHO_EDIT_MIN_PREFIX = 200, ECHO_EDIT_SHARE = 0.02, ECHO_EDIT_WINDOW = 8, ECHO_ANCHOR = 8;
+
+/** Greedy alignment of normalized echo text against the delivered prefix.
+ * `i` is consumed echo, `j` covered prefix; "pending" needs more echo text. */
+function alignEcho(prefix: string, current: string, maxEdits: number, final: boolean) {
+  let i = 0, j = 0, edits = 0;
+  while (i < current.length && j < prefix.length) {
+    if (current[i] === prefix[j]) { i++; j++; continue; }
+    // The end of the prefix is where a real delta starts; do not edit across it.
+    if (prefix.length - j <= ECHO_ANCHOR) return { i, j, state: "diverged" as const };
+    let pending = false, step: [number, number, number] | null = null;
+    for (let k = 1; k <= ECHO_EDIT_WINDOW && edits + k <= maxEdits && !step; k++) {
+      for (const [di, dj] of [[k, k], [k, 0], [0, k]]) {
+        if (i + di + ECHO_ANCHOR > current.length) { pending ||= !final; continue; }
+        if (current.slice(i + di, i + di + ECHO_ANCHOR) === prefix.slice(j + dj, j + dj + ECHO_ANCHOR)) { step = [di, dj, k]; break; }
+      }
+    }
+    if (!step) return { i, j, state: pending ? "pending" as const : "diverged" as const };
+    i += step[0]; j += step[1]; edits += step[2];
+  }
+  return { i, j, state: j >= prefix.length ? "complete" as const : "consistent" as const };
+}
+
 /** A supplement may echo a delivered answer before producing its actual delta.
  * Hold only a possible prefix; unrelated replies and short partial matches pass. */
 export class DeliveredPrefixEchoFilter {
   private buffer = "";
   private passthrough = false;
   private readonly prefix: string;
+  private readonly maxEdits: number;
   duplicateSuppressed = false;
   suppressedChars = 0;
-  constructor(deliveredPrefix = "") { this.prefix = this.normalize(deliveredPrefix); }
+  constructor(deliveredPrefix = "") {
+    this.prefix = this.normalize(deliveredPrefix);
+    this.maxEdits = this.prefix.length >= ECHO_EDIT_MIN_PREFIX ? Math.floor(this.prefix.length * ECHO_EDIT_SHARE) : 0;
+  }
   private normalize(value: string) { return value.replace(/\s+/gu, " ").trim(); }
   push(text: string): string {
-    if (this.passthrough || !this.prefix) return text;
+    if (this.passthrough || !this.prefix) return this.release(text);
     this.buffer += text;
-    const current = this.normalize(this.buffer);
-    if (this.prefix.startsWith(current)) return "";
-    let matched = 0;
-    while (matched < current.length && matched < this.prefix.length && current[matched] === this.prefix[matched]) matched++;
+    const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, false);
+    if (aligned.state === "pending" || aligned.state === "consistent") return "";
     this.passthrough = true;
-    if (matched < this.prefix.length * 0.9) return this.drain();
-    // Map the normalized mismatch back to the original text, preserving the delta.
+    if (aligned.j < this.prefix.length * 0.9) return this.drain();
+    return this.cutEcho(aligned.i);
+  }
+  /** Map a normalized echo length back to the original text, preserving the delta. */
+  private cutEcho(matched: number): string {
     let normalized = 0, cut = this.buffer.length, started = false;
     for (const match of this.buffer.matchAll(/\s+|\S+/gu)) {
       const whitespace = /^\s/u.test(match[0]);
@@ -71,16 +102,25 @@ export class DeliveredPrefixEchoFilter {
     if (cut > 0 && /[\uDC00-\uDFFF]/u.test(this.buffer[cut] || "") && /[\uD800-\uDBFF]/u.test(this.buffer[cut - 1])) cut--;
     this.duplicateSuppressed = true; this.suppressedChars += cut;
     this.buffer = this.buffer.slice(cut);
+    this.heldSpace = true;
     return this.drain();
+  }
+  // Whitespace right after a suppressed echo is shown only with the delta it
+  // precedes; alone it would deliver an empty supplement.
+  private heldSpace = false;
+  private space = "";
+  private release(text: string): string {
+    if (!this.heldSpace) return text;
+    if (/^\s*$/u.test(text)) { this.space += text; return ""; }
+    this.heldSpace = false; const out = this.space + text; this.space = ""; return out;
   }
   finish(): string {
-    if (!this.passthrough && this.prefix && this.normalize(this.buffer).length >= this.prefix.length * 0.9) {
-      this.duplicateSuppressed = true; this.suppressedChars += this.buffer.length; this.buffer = "";
-    }
+    if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain()); }
     this.passthrough = true;
-    return this.drain();
+    const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, true);
+    return aligned.j >= this.prefix.length * 0.9 ? this.cutEcho(aligned.i) : this.drain();
   }
-  private drain() { const text = this.buffer; this.buffer = ""; return text; }
+  private drain() { const text = this.buffer; this.buffer = ""; return this.release(text); }
 }
 
 export class GenerationRepetitionDetector {
