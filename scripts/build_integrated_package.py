@@ -632,6 +632,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/runtime-fact-store.ts",
     "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts",
     "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
+    "lmstudio-context-compactor-plugin/src/read-budget-denial.ts",
     "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",
     "lmstudio-context-compactor-plugin/src/recovery-coordinator.ts",
     "lmstudio-context-compactor-plugin/src/round-input.ts",

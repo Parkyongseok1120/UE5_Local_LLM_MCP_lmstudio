@@ -384,7 +384,7 @@ test("recovery re-entry never reuses a model input identity after the episode co
       const name = n === 3 ? "git_diff_file" : "git_changed_files";
       const request = { type: "function", id: "round" + n, name, arguments: { path: "a.txt", comparison: "range", base: "a", head: "b", limit: 1 } };
       assert.ok(roundTools.some(t => t.name === name));
-      const value = n === 1 ? { error: "Shared read-result budget exhausted." }
+      const value = n === 1 ? { error: "Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance." }
         : { ok: true, kind: "git_observation", status: "complete", action: n === 3 ? "diff_file" : "changed_files",
           path: "a.txt", comparison: "range", base: "a", head: "b", pageStart: n, pageEnd: n,
           returnedCount: 1, hasMore: false, text: "observed fact " + n };

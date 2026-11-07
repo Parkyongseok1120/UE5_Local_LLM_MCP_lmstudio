@@ -64,7 +64,7 @@ test('timeout fallback preserves successful file ranges and body excerpts beside
     text:'public void StartDay() { BeginPartOne(); }'});
   append('B',{ok:true,kind:'workspace_file_observation',path:'Assets/B.cs',startLine:1,endLine:200,totalLines:370,
     text:'public void CompleteBar() { LeaveBar(); }'});
-  append('C',{error:'Shared read-result budget exhausted.'});
+  append('C',{error:'Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance.'});
   const result=new delivery.DeliveryController().evaluate(history,{messages:[],finishReason:'userStopped'},true,'research_recovery_exhausted',0);
   assert.equal(result.delivery.rejectionReason,'final_timeout');
   assert.equal(result.partial.evidenceCount,2);

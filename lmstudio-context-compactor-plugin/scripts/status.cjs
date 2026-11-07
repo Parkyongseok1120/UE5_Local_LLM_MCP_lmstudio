@@ -51,6 +51,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/runtime-fact-store.ts",
   "src/write-api-anchoring.ts",
   "src/raw-tool-intent.ts",
+  "src/read-budget-denial.ts",
   "src/recovery-coordinator.ts",
   "src/reasoning-recovery.ts",
   "src/runtime-identity.ts",

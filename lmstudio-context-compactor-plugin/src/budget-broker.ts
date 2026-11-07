@@ -10,6 +10,7 @@ import { operationCapabilities } from "./tool-capability-core.js";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { decodeEnvelope } from "./tool-result-semantics.js";
+import type { ReadBudgetDenialCode } from "./read-budget-denial";
 const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 export type RetryMinimum = { field: string; value: number };
 function retryScope(tool: RemoteToolLike, args: Record<string, unknown>) {
@@ -49,10 +50,13 @@ export class BudgetBroker {
   private observeMetadataFloor(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
     if (readResultContract(tool, args).field !== "byteBudget") return;
     const value = envelope.value as Record<string, unknown> | undefined;
-    const minimum = "minimum" in envelope.retry ? envelope.retry.minimum : undefined;
+    // Only a successful response separates metadata from body. A failure's
+    // retry minimum can include a long first line of that one file; it stays
+    // a request-scoped retry floor (observeResult) and never becomes the
+    // provider-wide metadata cost (revised plan §E: one 10,414 B line made
+    // every small file of the provider unreadable).
     const bytes = envelope.ok && typeof value?.content === "string"
-      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES
-      : envelope.errorCode === "OUTPUT_LIMIT_EXCEEDED" && minimum?.field === "byteBudget" ? Number(minimum.value) : 0;
+      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES : 0;
     const key = metadataScope(tool);
     if (bytes > (this.metadataFloors.get(key) || 0)) this.metadataFloors.set(key, bytes);
   }
@@ -164,7 +168,7 @@ export class BatchReservation {
   get used() { return [...this.entries.values()].reduce((n, e) => n + (e.state === 'released' ? 0 : e.tokens), 0); }
   get available() { return Math.max(0, this.capacity - this.used); }
   get exceeded() { return this.used > this.capacity || [...this.entries.values()].some(e => e.overrun); }
-  denialReason(id: string, minimum: number): string | null {
+  denialReason(id: string, minimum: number): ReadBudgetDenialCode | null {
     if (this.closed) return "batch_closed";
     if (this.entries.has(id)) return "duplicate_reservation";
     if (this.exceeded) return "returned_result_overrun";
@@ -276,6 +280,8 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
+/** A read with any of these selects part of a file, so it is not a whole-file read. */
+const WHOLE_FILE_SELECTORS = ["startLine", "endLine", "cursor", "offset", "offsetBytes", "startOffset", "nextOffset", "maxBytes"];
 
 /** Conservative response estimate, never source availability or authority. */
 export function estimateReadResponseBytes(hint: { sizeBytes: number | null; totalLines: number | null } | null,
@@ -306,7 +312,7 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const requestedWindow = Number(args[field ?? ""] ?? contract.defaultValue);
   const requiredMinimum = field ? { field, value: contract.minimum } : undefined;
   if (contract.minimum > contract.maximum) return { allowed: false, arguments: args, reservedTokens: 0,
-    bounded: field !== null, denialReason: "minimum_exceeds_published_limit", requiredMinimum,
+    bounded: field !== null, denialReason: "minimum_exceeds_published_limit" as const, requiredMinimum,
     limit: { field, requested: requestedWindow, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" } };
   // Known responses use the same allowance as receive(). Preserve the published
   // request window; the actual returned size, not that ceiling, is reserved.
@@ -333,9 +339,18 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
   const ceilingFromHint = Number.isSafeInteger(estimatedBytes) && estimatedBytes! > 0
     ? Math.max(contract.minimum, Math.ceil(estimatedBytes! * 1.25)) : Infinity;
+  // An explicit budget below the estimated whole response of a whole-file
+  // read is raised to that estimate when it fits this batch's share and the
+  // published maximum; otherwise the request stands. A budget is a floor when
+  // the whole file fits (revised plan §E: 18 files were cut and re-read).
+  const modelRequested = field !== null && args[field] !== undefined ? tokens(Number(args[field])) : undefined;
+  const wholeFile = field === "byteBudget" && tool.name === "read_file" && modelRequested !== undefined
+    && Number.isSafeInteger(estimatedBytes) && estimatedBytes! > modelRequested
+    && !WHOLE_FILE_SELECTORS.some(key => args[key] !== undefined)
+    && estimatedBytes! <= contract.maximum && estimatedBytes! <= share;
   const requested = field ? Math.min(tokens(args[field] === undefined
     ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : Number(args[field])), ceilingFromHint) : 3072;
+    : wholeFile ? estimatedBytes! : Number(args[field])), ceilingFromHint) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;
@@ -348,7 +363,8 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   return {
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,
     reservedTokens: reserved, bounded: field !== null,
-    limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" }
+    limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes",
+      ...(wholeFile ? { modelRequested, raisedTo: "whole_file_estimate" } : {}) }
 };
 }
 
@@ -360,7 +376,7 @@ export function readBudgetFeedback(trace: Array<Record<string, unknown>>): strin
       denial: call.budgetDenialReason || null, delivered: call.readResultSize || null }];
   }).slice(0, 4);
   return limits.length ? "Runtime read-result budget facts: " + JSON.stringify(limits)
-    + ". Limits bound the full response, not source body length. Keep the requested page budget stable while advancing the returned cursor; do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
+    + ". Limits bound the full response, not source body length. For a whole-file read, omit byteBudget: the host sizes it from a listed file size when it has one, otherwise from its adaptive default. Keep a page budget only while paging one file by its returned cursor, and do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
 }
 
 /** A round shows the read budget no longer constrains reads: a bounded read
@@ -410,23 +426,4 @@ export function resolveGenerationBudget(options: {
   };
 }
 
-/** What a denied read tells the model: why, that delivered results are kept,
- * and the one next step. A denial means even the contract minimum does not
- * fit this batch, so no smaller limit is offered for the same batch. The
- * numbers are byte-derived allowances, not exact model tokens. */
-export function readBudgetDenialMessage(reason: string,
-  allowance?: { availableTokens: number; minimumTokens: number; capacityTokens: number }) {
-  const head = `Shared read-result budget unavailable (${reason}).`;
-  const kept = "Results already returned in this round are kept.";
-  const room = allowance ? ` About ${allowance.availableTokens} of ${allowance.capacityTokens} estimated tokens remain; this read needs at least ${allowance.minimumTokens}.` : "";
-  if (reason === "held_reservations_insufficient") {
-    return `${head} Parallel reads in this batch hold the allowance.${room} ${kept} Request this read again by itself in the next round.`;
-  }
-  if (reason === "remaining_capacity_insufficient") {
-    return `${head} The model input has no room for another result.${room} ${kept} Use them first; request this read alone in a later round.`;
-  }
-  if (reason === "returned_result_overrun") {
-    return `${head} A returned result exceeded its reservation, so the input is remeasured before more reads. ${kept} Use them first.`;
-  }
-  return `${head} ${kept} Split the read batch; use delivered results before requesting more.`;
-}
+export { readBudgetDenialMessage } from "./read-budget-denial";

@@ -60,10 +60,10 @@ test("partial delivery accepts paired native Unreal byte/line envelopes and reje
 test("partial delivery preserves a guard's reported error instead of replacing it with unknown_error", () => {
   const { evidenceBackedPartialReport } = require("../dist/delivery-controller");
   const result = ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: "denied",
-    content: JSON.stringify({ error: "Shared read-result budget exhausted." }) }] });
+    content: JSON.stringify({ error: "Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance." }) }] });
   const report = evidenceBackedPartialReport(Chat.empty(), [result], "research_no_progress");
   assert.equal(report.errorCount, 1);
-  assert.match(report.text, /Shared read-result budget exhausted/);
+  assert.match(report.text, /Shared read-result budget unavailable \(held_reservations_insufficient\)/);
   assert.doesNotMatch(report.text, /unknown_error/);
 });
 
