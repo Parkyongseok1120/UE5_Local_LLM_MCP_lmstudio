@@ -63,6 +63,7 @@ type RoundInputOptions = {
   getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Data blocks this execution already sent (owned by the prediction loop). */
   shownDataBlocks?: ShownDataBlocks;
+  retiredFacts?: () => readonly string[];
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -119,7 +120,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
     getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
-    shownDataBlocks: options.shownDataBlocks, consolidateDataBlocks: () => rewritingInput || compacted,
+    shownDataBlocks: options.shownDataBlocks, retiredFacts: options.retiredFacts, consolidateDataBlocks: () => rewritingInput || compacted,
     deferReferenceData: () => referenceSelectionPending,
     runtimeDataAllowanceChars: contextManager.broker.runtimeDataAllowanceChars(contextManager.broker.watermarks(before,
       0, roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) });

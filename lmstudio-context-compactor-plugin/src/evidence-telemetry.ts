@@ -268,6 +268,20 @@ export function assistantNoteTelemetry(note: ContinuityNote | null, enabled: boo
   };
 }
 
+/** The model-facing observation of a repeated identical failure. Advisory only. */
+export function repeatedFailureFact(failure: { toolName: string; errorCode: string; count: number }) {
+  return `Runtime evidence observation: ${failure.toolName} failed with `
+    + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
+    + "change the path, scope or budget the error names, or report the item as unverified.";
+}
+
+/** The model-facing observation of a read cycle with no new coverage. */
+export function stagnationFact(stagnation: { cycleLength: number; reacquisition: boolean }) {
+  return `Runtime evidence observation: a ${stagnation.cycleLength}-round read cycle repeated with no new source/archive range. `
+    + (stagnation.reacquisition ? "Some ranges restored evidence absent from the input; repeated restoration is not new source coverage. " : "The returned observations repeat previously seen evidence. ")
+    + "Use the returned evidence; request only a missing range or a necessary fresh version. This observation does not prove review completion.";
+}
+
 export class ToolRoundStagnationDetector {
   private previous = "";
   private count = 0;

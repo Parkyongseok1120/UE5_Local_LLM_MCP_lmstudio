@@ -18,6 +18,7 @@ import { hasReadCapability, type RemoteToolLike } from "./tool-capability-regist
 import { renderTaskProgress } from "./continuity-memory.js";
 import { REVIEW_REGISTER_HEADER } from "./review-patterns.js";
 import { inputComposition } from "./input-composition";
+import { isRetiredFact } from "./runtime-fact-store";
 
 type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
   tokenCountCalls: number; contextLengthCalls: number; cacheHits: number };
@@ -254,6 +255,7 @@ export function composeModelHistory(
   consolidateShown = false,
   allowanceChars = Infinity,
   deferReferenceData = false,
+  retiredFacts: readonly string[] = [],
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
@@ -319,7 +321,7 @@ export function composeModelHistory(
   const slotAnchor = anchors.get(slot);
   const blocks = new Map<number, readonly string[]>();
   let dataBlock: { anchor: string; parts: string[]; replacesShown?: boolean } | undefined;
-  let forcedRewrite: "data_consolidation" | undefined;
+  let forcedRewrite: "data_consolidation" | "fact_retired" | undefined;
   if (shownBlocks && slotAnchor) {
     for (const [index, anchor] of anchors) { const shown = shownBlocks.get(anchor); if (shown) blocks.set(index, shown); }
     const chars = (parts: ReadonlyArray<string>) => parts.reduce((sum, part) => sum + part.length, 0);
@@ -330,8 +332,12 @@ export function composeModelHistory(
     const budgetParts = (parts: readonly string[]) => deferReferenceData
       ? parts.filter(part => !part.startsWith("[Derived reference data")) : parts;
     const supersededChars = Math.max(0, chars(budgetParts([...blocks.values()].flat())) - chars(budgetParts(runtimeParts)));
-    if (supersededChars > allowanceChars || consolidateShown && shownChars > chars(runtimeParts)) {
-      if (supersededChars > allowanceChars) forcedRewrite = "data_consolidation";
+    // A fact that was cleared or replaced must leave the input now, not when
+    // superseded copies next outgrow the allowance (revised plan §H1).
+    const factRetired = retiredFacts.length > 0 && [...blocks.values()].flat().some(part => isRetiredFact(part, retiredFacts));
+    if (factRetired || supersededChars > allowanceChars || consolidateShown && shownChars > chars(runtimeParts)) {
+      if (factRetired) forcedRewrite = "fact_retired";
+      else if (supersededChars > allowanceChars) forcedRewrite = "data_consolidation";
       // Earlier blocks now hold more superseded copies than current data
       // (2026-10-25 run: 33K chars of data slots for about 12K of current
       // facts). One rewrite replaces them with the current data at the newest
@@ -477,6 +483,8 @@ export type InputAssemblyOptions = {
   /** True while this round rewrites its input anyway: earlier data blocks are
    * consolidated in the same rewrite instead of outliving it. */
   consolidateDataBlocks?: () => boolean;
+  /** Fact texts cleared or replaced since the shown blocks were last rewritten. */
+  retiredFacts?: () => readonly string[];
   runtimeDataAllowanceChars?: number;
   deferReferenceData?: () => boolean;
 };
@@ -517,7 +525,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     const measureProfileInput = (history: Chat) => measure(history, profileTools, profileOutputReserve);
     const runtimeFacts = options.getRuntimeFacts?.(sourceHistory) || [];
     const baseComposition = composeModelHistory(
-      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
+      sourceHistory, noteEnabled ? getNote() : null, config, profileInstructions, noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined, options.retiredFacts?.(),
     );
     const baseMeasurement = await measureProfileInput(baseComposition.history);
     // Per-stage measurements are telemetry only. They are taken lazily for the
@@ -574,7 +582,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
     let metadata = inputAvailability.renderInputAvailabilityMetadata(projection);
     let composition = composeModelHistory(
       sourceHistory, noteEnabled ? getNote() : null, config,
-      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
+      [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined, options.retiredFacts?.(),
     );
     let measurement = await measureProfileInput(composition.history);
     const finalProjection = inputAvailability.projectInputAvailability(
@@ -587,7 +595,7 @@ export function createInputAssembler(options: InputAssemblyOptions) {
       metadata = finalMetadata;
       composition = composeModelHistory(
         sourceHistory, noteEnabled ? getNote() : null, config,
-        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined,
+        [...profileInstructions, metadata], noteEnabled, profile.referenceData, runtimeFacts, options.shownDataBlocks, profile.rewrite || options.consolidateDataBlocks?.() === true, options.runtimeDataAllowanceChars, options.deferReferenceData?.() && profile.referenceData === undefined, options.retiredFacts?.(),
       );
       measurement = await measureProfileInput(composition.history);
     }

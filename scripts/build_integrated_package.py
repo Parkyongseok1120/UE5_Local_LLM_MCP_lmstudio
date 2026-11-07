@@ -629,6 +629,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/review-register.ts",
     "lmstudio-context-compactor-plugin/src/review-evidence.ts",
     "lmstudio-context-compactor-plugin/src/review-patterns.js",
+    "lmstudio-context-compactor-plugin/src/runtime-fact-store.ts",
     "lmstudio-context-compactor-plugin/src/write-api-anchoring.ts",
     "lmstudio-context-compactor-plugin/src/raw-tool-intent.ts",
     "lmstudio-context-compactor-plugin/src/reasoning-recovery.ts",

@@ -363,6 +363,18 @@ export function readBudgetFeedback(trace: Array<Record<string, unknown>>): strin
     + ". Limits bound the full response, not source body length. Keep the requested page budget stable while advancing the returned cursor; do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
 }
 
+/** A round shows the read budget no longer constrains reads: a bounded read
+ * ran at its requested size and no read in the round was denied or lowered.
+ * One success beside a denied peer is not a resolution. */
+export function readBudgetResolved(trace: Array<Record<string, unknown>>): boolean {
+  const limited = (call: Record<string, unknown>) => {
+    const limit = call.readResultLimit as { field?: string; requested?: number; effective?: number } | undefined;
+    return Boolean(call.budgetDenialReason) || call.validationState === "denied_batch_budget"
+      || Boolean(limit?.field) && limit!.requested !== limit!.effective;
+  };
+  return !trace.some(limited) && trace.some(call => Boolean((call.readResultLimit as { field?: string } | undefined)?.field));
+}
+
 export type GenerationBudget = {
   desiredMaxTokens: number;
   appliedMaxTokens: number;

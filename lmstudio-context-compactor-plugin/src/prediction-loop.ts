@@ -8,7 +8,7 @@ import {
 import crypto from "node:crypto";
 import { attachmentBoundary } from "./attachment-boundary";
 import { createAttachmentContext } from "./attachment-tools";
-import { BudgetBroker, minimumReadResultTokens, readBudgetFeedback } from "./budget-broker";
+import { BudgetBroker, minimumReadResultTokens, readBudgetFeedback, readBudgetResolved } from "./budget-broker";
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput, type GuidanceRetention } from "./round-input";
@@ -16,11 +16,12 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, finalDeliveryStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
-import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactKey, type RuntimeFactEntry } from "./execution-contracts";
+import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
+import { RuntimeFactStore } from "./runtime-fact-store";
 import { NotePersistence } from "./note-persistence";
 import { reportReviewObligations } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
@@ -256,7 +257,6 @@ export function createPredictionLoopHandler(
     let activeActivity: ReturnType<typeof createRoundActivityTracker> | null = null;
     const toolStagnation = new ToolRoundStagnationDetector();
     let stagnationWarnings = 0;
-    let lastBudgetFeedback = "";
     let reportContinuation = "";
     let reportReviewAttempted = false;
     let reportReviewBlocked = false;
@@ -266,7 +266,7 @@ export function createPredictionLoopHandler(
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
-    const runtimeFacts = new Map<RuntimeFactKey, string>();
+    const runtimeFacts = new RuntimeFactStore();
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -325,7 +325,7 @@ export function createPredictionLoopHandler(
           continue;
         }
         if (boundary.notice) runtimeFacts.set("round_limit", boundary.notice);
-        if (execution.finalizing) runtimeFacts.delete("round_limit");
+        if (execution.finalizing) runtimeFacts.onEvent("final_delivery");
         const finalizing = execution.finalizing;
         const reviewingReport = execution.finalizationTrigger === "report_review";
         const continuingReport = execution.finalizationTrigger === "output_recovery" || reviewingReport;
@@ -459,9 +459,9 @@ export function createPredictionLoopHandler(
             const ledger = config.observeOnly ? null : evidenceManager.readLedgerFact(history, runtimeFacts.has("report_now"));
             return [...(projection ? [{key: "partial_projection" as const, text: projection}] : []),
               ...(ledger ? [{key: "read_ledger" as const, text: ledger}] : []),
-              ...[...runtimeFacts].map(([key, text]) => ({key, text}))];
+              ...runtimeFacts.entries()];
           },
-          shownDataBlocks,
+          shownDataBlocks, retiredFacts: () => runtimeFacts.retiredTexts,
           finalizationTrigger: execution.finalizationTrigger,
           reportContinuation,
           projectionApplied, executionId, modelInputId, roundIndex,
@@ -521,7 +521,7 @@ export function createPredictionLoopHandler(
         // This input is final: its new data block, if any, is now part of what was sent.
         if (modelComposition && "dataBlock" in modelComposition && modelComposition.dataBlock) {
           // A consolidated block replaces every earlier one.
-          if (modelComposition.dataBlock.replacesShown) shownDataBlocks.clear();
+          if (modelComposition.dataBlock.replacesShown) { shownDataBlocks.clear(); runtimeFacts.acknowledgeRewrite(); }
           shownDataBlocks.set(modelComposition.dataBlock.anchor, modelComposition.dataBlock.parts);
         }
         const committedWindow = contextManager.commit(workingContext, visibleHistory, workingHistory, finalMeasurement,
@@ -923,9 +923,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const interruption = transaction.interruptionMessage(runtimeToolTrace.values());
         if (interruption) workingHistory.append(interruption);
         const budgetFeedback = readBudgetFeedback([...runtimeToolTrace.values()]);
-        if (budgetFeedback && budgetFeedback !== lastBudgetFeedback && !config.observeOnly) {
-          runtimeFacts.set("budget", budgetFeedback); lastBudgetFeedback = budgetFeedback;
-        }
+        if (budgetFeedback && !config.observeOnly) runtimeFacts.set("budget", budgetFeedback);
+        else if (readBudgetResolved([...runtimeToolTrace.values()])) runtimeFacts.onEvent("read_budget_resolved");
         evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
           !config.observeOnly && config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0);
         if(architectureState) {
@@ -1272,12 +1271,12 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           && recoveryProgress.verdict.budgetDenied.length === 0) {
           const stagnation = toolStagnation.observe(screening.messages, recoveryProgress);
           const failure = stagnation.repeatedFailure;
+          if (!failure && !stagnation.cycleDetected && recoveryProgress.newSourceUnits + recoveryProgress.newArchiveUnits > 0)
+            runtimeFacts.onEvent("research_progress");
           if (failure?.firstNotice) {
             // Advisory only: no pause, no added permissions. The model learns the
             // identical request already failed, and what would change the outcome.
-            runtimeFacts.set("repeated_failure", `Runtime evidence observation: ${failure.toolName} failed with `
-              + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
-              + "change the path, scope or budget the error names, or report the item as unverified.");
+            runtimeFacts.set("repeated_failure", repeatedFailureFact(failure));
             if (config.showDebugInfo) ctl.debug({ event: "tool_repeated_failure", roundIndex, toolName: failure.toolName,
               errorCode: failure.errorCode, count: failure.count });
           }
@@ -1296,10 +1295,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
               semanticFingerprint: stagnation.fingerprint,
               cycleLength: stagnation.cycleLength, reacquisition: stagnation.reacquisition,
             });
-            if (stagnation.cycleDetected) runtimeFacts.set("stagnation",
-              `Runtime evidence observation: a ${stagnation.cycleLength}-round read cycle repeated with no new source/archive range. `
-              + (stagnation.reacquisition ? "Some ranges restored evidence absent from the input; repeated restoration is not new source coverage. " : "The returned observations repeat previously seen evidence. ")
-              + "Use the returned evidence; request only a missing range or a necessary fresh version. This observation does not prove review completion.");
+            if (stagnation.cycleDetected) runtimeFacts.set("stagnation", stagnationFact(stagnation));
             // This detector supplies an observation only. Layer A owns continuation.
           }
         }
