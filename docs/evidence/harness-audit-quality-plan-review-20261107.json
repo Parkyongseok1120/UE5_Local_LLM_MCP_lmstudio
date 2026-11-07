@@ -1,0 +1,751 @@
+{
+  "mode": "architecture",
+  "scope": {
+    "date": "2026-11-07",
+    "baselineCommit": "0b089c6",
+    "workspaceHead": "7046762",
+    "implementation": false,
+    "report": "docs/Harness_Audit_Quality_Revised_Plan_20261107.md",
+    "conversations": [
+      {
+        "id": "1793532481549",
+        "sha256": "fea40d9712dbafe72c2b82473e262fc27252d60a4427620cd1187fbda4223df9"
+      },
+      {
+        "id": "1793984074550",
+        "sha256": "665da65c7280ede59436e0e88ddf02fc0ef740d58241a9b3bb12f985bd8ce237"
+      }
+    ]
+  },
+  "claims": [
+    {
+      "id": "R1",
+      "claim": "READ_RECOVERY의 계속 진행 경로는 일반 조사 끝의 maxResearchRounds 판정을 건너뜁니다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1494",
+          "observation": "복구 진전 판정 뒤 roundIndex 증가와 continue가 있습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1610",
+          "observation": "조사 한도 판정은 뒤의 일반 continuation 분기에 있습니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "observation": "한도3에서 성공 읽기5라운드, 도구 허용 prediction6회, 한도 이벤트0을 재현했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:392",
+          "symbol": "복구 상태 prediction"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1494",
+          "symbol": "recovery advance"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1521",
+          "symbol": "다음 복구 라운드 continue"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "symbol": "한도 이벤트 없이 성공 읽기5회"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-loop.test.cjs:6555",
+          "observation": "일반 조사 경로의 한도 테스트는 이미 존재하며 이 경로에서는 종료합니다."
+        }
+      ],
+      "unknowns": [
+        "합성 controller 재현은 실제 모델이 항상 이 경로를 택한다는 뜻이 아닙니다."
+      ]
+    },
+    {
+      "id": "R2",
+      "claim": "현재 runtime fact를 제거해도 shownDataBlocks에 남은 문장이 다음 assembled input에 전송됩니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:322",
+          "observation": "이전 anchor의 shown block을 복원한 뒤 신규 part를 추가합니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "observation": "현재0자, 전송51자, 이전 budget 문장이 다음 입력에 남음을 확인했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:252",
+          "symbol": "composeModelHistory에 빈 runtimeFacts 전달"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:323",
+          "symbol": "shownBlocks 복원 및 consolidation 조건"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:347",
+          "symbol": "이전 part를 포함한 history 조립"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "symbol": "staleFactStillSent=true"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:332",
+          "observation": "초과량이나 명시적 consolidation 조건에서는 이전 part를 제거하는 경로가 있습니다."
+        }
+      ],
+      "unknowns": [
+        "H1 구현 후 실제 해제 이벤트와 입력 구성 연결은 아직 구현하지 않았습니다."
+      ]
+    },
+    {
+      "id": "R3",
+      "claim": "강제 최종보고의 정상 EOS 경로는 일반 EOS의 review register 누락 검토를 수행하지 않습니다.",
+      "claimType": "wiring",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "observation": "finalizing 전달 분기에서 evaluate하고 종료합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1528",
+          "observation": "reportReviewObligations는 뒤의 일반 보고 분기에 있습니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "observation": "최종 입력에 found 후보가 있지만 No major issue 보고로 종료하고 reportReviewCalls=0이었습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:124",
+          "observation": "정상 최종 전달 평가를 observation에 저장하며 register 누락 판정은 수행하지 않습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1321",
+          "symbol": "강제 최종보고 반환"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1322",
+          "symbol": "DeliveryController.evaluate"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:124",
+          "symbol": "evaluate가 delivery와 objectiveSatisfied를 observation에 저장"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1419",
+          "symbol": "종료 분기"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "symbol": "reportCompleted=true, reportReviewCalls=0"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1528",
+          "observation": "일반 EOS에는 누락 검토가 이미 있습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:489",
+          "observation": "terminalReportNotices가 엔진 및 범위 안내 일부를 별도로 수행합니다. 후보를 무조건 검증된 결함으로 올리면 안 됩니다."
+        }
+      ],
+      "unknowns": [
+        "후보 자체의 사실성은 이 probe에서 검증하지 않았습니다. reportCompleted는 전달 완료이지 objective 만족의 증명이 아닙니다."
+      ]
+    },
+    {
+      "id": "R4",
+      "claim": "목록 body renderer만 이름 텍스트로 교체하는 원안을 모사하면 구 archive의 동일 버전 offset 계약이 바뀝니다.",
+      "claimType": "behavior",
+      "verdict": "Bug",
+      "severity": "P1",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:697",
+          "observation": "동일 body/callKey의 기존 레코드를 재사용합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:753",
+          "observation": "저장 envelope를 현재 evidenceBodyView로 다시 렌더링합니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "observation": "메모리 내 제안 변경에서 동일 hash/viewVersion 아래 1411자가176자로 변하고 offset500이 invalid_range가 됐습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:688",
+          "symbol": "구 envelope 레코드 put"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:753",
+          "symbol": "최신 body renderer 선택을 모사"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "symbol": "oldOffsetResult.invalid_range"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:748",
+          "observation": "현재 변경 전에는 같은 renderer와 archive hash 검사를 사용하므로 이 제안 회귀는 아직 배포된 결함이 아닙니다."
+        }
+      ],
+      "unknowns": [
+        "실제 구현은 하지 않았습니다. 새 저장 필드의 구버전 rollback 동작은 구현 후 확인해야 합니다."
+      ]
+    },
+    {
+      "id": "R5",
+      "claim": "본문 첫 줄을 포함하는 요청별 retry minimum이 provider metadata floor로 저장되어 다른 작은 파일 읽기를 거부하게 합니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js:144",
+          "observation": "minimumResponseBudget이 첫 줄 content를 포함할 수 있습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:49",
+          "observation": "OUTPUT_LIMIT_EXCEEDED의 minimum을 metadataFloors에 반영합니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "observation": "실제 provider 최소10414B 뒤 4096B로 완독되는 Tiny.h가 capacity4000토큰에서 거부됐습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-runtime-context.js:144",
+          "symbol": "긴 첫 줄의 OUTPUT_LIMIT_EXCEEDED"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:60",
+          "symbol": "observeMetadataFloor"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:57",
+          "symbol": "provider metadataFloors 갱신"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "symbol": "Tiny.h allowed true에서 false로 전이"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:60",
+          "observation": "동일 broker에는 요청별 retryFloors도 존재합니다. provider 성공 응답의 metadata 비용 학습 자체는 별도 유효한 경로입니다."
+        }
+      ],
+      "unknowns": [
+        "수정 후 실제 모델의 재읽기 감소량은 실측해야 합니다."
+      ]
+    },
+    {
+      "id": "R6",
+      "claim": "ReviewRegister는 경로 있는 발견 뒤 경로 없는 철회를 다른 행으로 보관하고 같은 줄의 뒤쪽 철회를 앞선 발견에 반영하지 않을 수 있습니다.",
+      "claimType": "state_transition",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:93",
+          "observation": "같은 subject가 이미 있으면 뒤 판정을 반영하지 않습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:123",
+          "observation": "claimKey는 identifier와 evidence 문장의 경로입니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "observation": "qualified found와 unqualified cleared 공존 및 같은 줄 found 잔류를 재현했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:110",
+          "symbol": "observe에 발견과 철회 전달"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:93",
+          "symbol": "judgments 첫 상태 선택"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:123",
+          "symbol": "서로 다른 claimKey 저장"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/finalization-probe-results.json",
+          "symbol": "pendingCount=1"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:104",
+          "observation": "register는 proof가 아닌 작업 메모라고 명시합니다. 다른 파일의 동명 symbol을 무조건 병합해서도 안 됩니다."
+        }
+      ],
+      "unknowns": [
+        "자연어의 동일 주장 식별은 모호할 수 있습니다. 무조건 symbol 단위 clear가 해법은 아닙니다."
+      ]
+    },
+    {
+      "id": "R7",
+      "claim": "목록의 offset, nextOffset, totalEntries는 현재 archive semantic facts에 남지 않으며 마지막 부분 페이지도 truncated=false일 수 있습니다.",
+      "claimType": "data_flow",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:71",
+          "observation": "semantic facts의 보존 필드에 목록 pagination 필드가 없습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:124",
+          "observation": "offset을 사용한 마지막 페이지에서도 truncated=false가 됩니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "observation": "pagination 필드3개 소실과 마지막 페이지의 비영 offset을 확인했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-unreal-agent-mcp/src/direct-read-capabilities.js:124",
+          "symbol": "목록 페이지 생성"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:71",
+          "symbol": "evidenceSemanticFacts 필드 선택"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/budget-probe-results.json",
+          "symbol": "pagination metadata 미보존"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/evidence-archive.js:688",
+          "observation": "원본 envelope는 archive에 남아 있으므로 원자료가 완전히 삭제됐다는 주장은 아닙니다."
+        }
+      ],
+      "unknowns": [
+        "특정 실측 목록 재호출 중 이 pagination 소실에 기인한 비율은 확정하지 않았습니다."
+      ]
+    },
+    {
+      "id": "R8",
+      "claim": "returnedSources의 bodyReturned와 completeText는 전체 파일 완독 상태가 아닙니다.",
+      "claimType": "data_flow",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:220",
+          "observation": "completeText는 반환 span을 텍스트 캐시가 포함하는지를 계산합니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/scope-results.json",
+          "observation": "100줄 중1줄 반환에서 bodyReturned=true와 completeText=true를 확인했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:160",
+          "symbol": "한 줄 source_body 반환 기록"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:243",
+          "symbol": "반환 span 텍스트 완전성 계산"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/scope-results.json",
+          "symbol": "완독과 다른 두 boolean"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/read-ledger.js:55",
+          "observation": "별도 readFacts는 range와 total 또는 EOF로 complete를 계산합니다. 이를 재사용할 수 있습니다."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "R9",
+      "claim": "설명 요청은 현재 review 분류 계약이며 원안의 explain 기대값과 충돌합니다.",
+      "claimType": "behavior",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:97",
+          "observation": "설명과 explain이 REVIEW_REQUEST에 포함됩니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/test/task-objective.test.cjs:10",
+          "observation": "Explain how respawn works를 review로 기대합니다."
+        },
+        {
+          "kind": "test",
+          "location": "artifacts/audit-plan-review-20261107/scope-results.json",
+          "observation": "한국어 설명 요청=review, 찾아서 수정=mutate, 두 번째 감사 원문=explain을 확인했습니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:108",
+          "symbol": "classifyObjective"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:110",
+          "symbol": "CHANGE_REQUEST 우선 및 REVIEW_REQUEST"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "artifacts/audit-plan-review-20261107/scope-results.json",
+          "symbol": "kinds 배열 확인"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts:112",
+          "observation": "명시 review 표현이 없는 요청은 explain으로 분류하는 fallback도 있습니다."
+        }
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "R10",
+      "claim": "mandatory floor는 floorCandidate history가 아니라 실제 조립된 floorInput과 before 중 선택된 입력입니다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:740",
+          "observation": "floorCandidate를 만들고 assemble 결과와 before를 비교합니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:744",
+          "observation": "floorInput이 exact이고 작을 때만 floor로 선택합니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:740",
+          "symbol": "floorCandidate"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:744",
+          "symbol": "exact 및 입력 크기 비교"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:744",
+          "symbol": "선택된 floor"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:742",
+          "observation": "후보가 history와 같으면 before를 그대로 사용하므로 두 대상이 같은 경우도 있습니다."
+        }
+      ],
+      "unknowns": [
+        "문자 비중은 exact 토큰 기여도를 증명하지 않습니다. 신규 측정 구현은 아직 하지 않았습니다."
+      ]
+    },
+    {
+      "id": "R11",
+      "claim": "설치된 UE5.7.4와5.8.2의 기본 수신 RPC 경로는 서버에서 net owner 여부를 확인합니다.",
+      "claimType": "framework_semantics",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
+          "observation": "Actor connection과 channel connection 비교로 bNetOwner를 설정합니다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
+          "observation": "ReceivedRPC에서 ShouldCallRemoteFunction 결과로 실행을 분기합니다."
+        },
+        {
+          "kind": "framework_source",
+          "location": "C:/Program Files/Epic Games/UE_5.8/Engine/Source/Runtime/Engine/Private/NetDriver.cpp:8452",
+          "observation": "기본 ShouldCallRemoteFunction 구현이 서버에서 bNetOwner를 요구합니다."
+        },
+        {
+          "kind": "official_docs",
+          "location": "https://dev.epicgames.com/documentation/unreal-engine/remote-procedure-calls-in-unreal-engine",
+          "observation": "Server RPC 실행 표가 invoking client의 소유 연결과 다른 연결을 구분합니다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
+          "symbol": "수신 연결"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
+          "symbol": "ShouldCallRemoteFunction"
+        },
+        {
+          "stage": "dispatch",
+          "stageStatus": "present",
+          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1447",
+          "symbol": "허용된 RPC 실행"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "official_docs",
+          "location": "https://dev.epicgames.com/documentation/unreal-engine/remote-procedure-calls-in-unreal-engine",
+          "observation": "서버에서 직접 호출한 Server RPC와 gameplay validation은 클라이언트 소유 검사와 구분됩니다."
+        }
+      ],
+      "unknowns": [
+        "Iris나 커스텀 NetDriver의 전체 경로 및 PIE 네트워크 실측까지 검증한 결과는 아닙니다."
+      ]
+    }
+  ],
+  "existing": [
+    "ExecutionState와 RecoveryCoordinator가 phase 전이를 소유합니다.",
+    "ReadLedger가 본문 범위와 source identity를 소유합니다.",
+    "ContextManager가 runtime block을 조립합니다.",
+    "ReviewRegister와report-scope가 미검증 후보·누락을 관리하고 DeliveryController가 보고를 전달합니다."
+  ],
+  "proposed": [
+    "기존 한도 판정을 모든 도구 허용 phase의 공통 경계로 옮깁니다.",
+    "fact 삭제와 shownDataBlocks의 제거를 연결합니다.",
+    "archive 레코드별 body view 버전과 inventory 완료·생략 상태를 저장합니다.",
+    "retry minimum의 요청별 격리와 조건부 전체 읽기 확대를 구현합니다.",
+    "register 상태 정합성과 강제 최종보고 누락 검토를 기존 전달 경로에 연결합니다.",
+    "C/G/D/H는 수정 실행 계획의 계약과 회귀 목록을 따릅니다."
+  ],
+  "doNotDuplicate": [
+    "새 감사 게이트나 runtime data 주입 경로를 만들지 않습니다.",
+    "새 source identity나 두 번째 읽음 장부를 만들지 않습니다.",
+    "최종 안내와 후보 렌더링의 별도 UI 전달 경로를 만들지 않습니다."
+  ],
+  "invariants": [
+    "기존 archive readHandle/hash/offset의 의미는 유지합니다.",
+    "범위 반환과 의미 검토 완료를 구분합니다.",
+    "한도 이후 새로운 provider 조사 호출을 하지 않습니다.",
+    "철회된 후보를 검증된 결함으로 다시 올리지 않습니다."
+  ],
+  "impactedSurfaces": [
+    "prediction-loop.ts",
+    "execution-state.ts",
+    "recovery-coordinator.ts",
+    "delivery-controller.ts",
+    "review-register.ts",
+    "context-manager.ts",
+    "execution-contracts.ts",
+    "budget-broker.ts",
+    "tool-boundary.ts",
+    "evidence-archive.js",
+    "working-context.js",
+    "evidence-manager.ts",
+    "read-ledger.js",
+    "context-ports.ts",
+    "report-scope.ts",
+    "tool-capability-registry.ts",
+    "direct-read-capabilities.js",
+    "config/unreal_contracts.json",
+    "generated guidance and eval fixtures"
+  ],
+  "validationPlan": [
+    "문서 6장의 단위·통합·archive 호환·실측 수용 기준을 사용합니다.",
+    "현재 재현 probe는 수정 후 기대 결과를 뒤집어 regression test에 편입합니다.",
+    "로컬 대화와 게임 소스는 공개 fixture에 넣지 않습니다."
+  ],
+  "rejectedHypotheses": [
+    {
+      "claim": "압축 때문에 현재 production implementation_scope 검사가 사라진다.",
+      "reason": "projected history를 넣은 helper probe는 gap을 잃지만 production caller는 visibleTranscript.snapshot()의 원본 표시 결과를 전달합니다.",
+      "evidence": [
+        "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1528",
+        "lmstudio-context-compactor-plugin/src/prediction-ui.ts:99",
+        "artifacts/audit-plan-review-20261107/scope-results.json"
+      ]
+    },
+    {
+      "claim": "sizeHint에는 프로젝트 identity가 없다.",
+      "reason": "evidence-identity.js의 fileSourceKey 및 기존 프로젝트 격리 테스트가 반증합니다."
+    },
+    {
+      "claim": "35,789자는 pinned working set의 고정 상한이다.",
+      "reason": "budget-broker.ts:146의 계산은 effective low water에 비례합니다."
+    }
+  ],
+  "verification": {
+    "isolatedTypeScriptBuild": true,
+    "compiledFilesMatchingExistingDist": 85,
+    "existingFocusedTestsPassed": 45,
+    "finalizationProbes": 5,
+    "scopeBoundaryProbes": 3,
+    "budgetArchiveDiagnostics": 4,
+    "generatedChecks": 4,
+    "existingEngineRevision": 7,
+    "existingEngineReferencesCompared": 47,
+    "newEngineContractImplemented": false,
+    "realModelRerun": false,
+    "allPluginTestsRun": false
+  },
+  "validationDisclaimer": "근거 패킷 검사는 구조와 기록 일관성만 확인하며 사실 검증이나 수정 완료를 뜻하지 않습니다.",
+  "packetStructureCheck": {
+    "groups": 4,
+    "errors": 0,
+    "warnings": 4,
+    "warningDisposition": "R1-R4의 P1 판단은 외부 framework 의미가 아니라 프로젝트 소유의 제어 흐름, 입력 composition, archive renderer 교체 모사에 근거합니다. 이 일반 경고는 사실 검증 인증이 아닙니다.",
+    "results": "artifacts/audit-plan-review-20261107/evidence-structure-results.json"
+  }
+}
