@@ -13,6 +13,19 @@ import { finalizationCause } from "./execution-instructions";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.";
 export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
+/** The status line of a final attempt that did not complete, most specific cause first. */
+export function finalDeliveryStatusText(state: { partialDelivered: boolean; reportState: string; deliveryState: string;
+  timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean }): string {
+  if (state.partialDelivered) return "조사 복구가 완료되지 않아 근거가 있는 부분 보고만 전달했습니다. 전체 완료로 처리하지 않았습니다.";
+  if (state.reportState === "unresolved_tool_intent") return "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다.";
+  if (state.deliveryState === "truncated") return "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다.";
+  if (state.timedOut) return "최종 보고가 제한 시간 안에 완료되지 않았습니다. 부분 출력으로 기록했습니다.";
+  if (state.aborted) return "생성이 중지되었습니다. 지금까지 작성한 답변을 보존했습니다.";
+  if (state.failed) return "생성 중 오류가 발생했습니다. 지금까지 작성한 답변을 보존했습니다.";
+  return state.continuing ? "이어 쓸 본문이 생성되지 않았습니다. 앞서 작성한 답변을 보존했습니다."
+    : "최종 보고가 생성되지 않았습니다. 완료로 처리하지 않았습니다.";
+}
+
 export function outputLimitStatusText(stage:OutputLimitStage|undefined):string {
   return stage==="tool_arguments" ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
     : stage==="reasoning" ? "생각 단계에서 생성 한도에 도달했습니다. 자동 복구가 꺼져 있거나 허용 조건을 충족하지 않아 중단했습니다."
@@ -102,11 +115,25 @@ export class DeliveryController {
     };
   }
   begin(bounded: boolean, replanAttempts: number) {
-    const limit = bounded ? 1 : replanAttempts > 0 ? 2 : 1;
+    const limit = (bounded ? 1 : replanAttempts > 0 ? 2 : 1) + this.corrections;
     const allowed = this.attempts < limit;
     if (allowed) this.attempts++;
+    this.attemptLimit = limit;
     return { allowed, limit };
   }
+  attemptLimit = 1;
+  private corrections = 0;
+  private correction: "raw_tool_intent" | null = null;
+  /** A final report that printed tool syntax instead of a report gets one more
+   * tool-free attempt, owned here rather than borrowed from the replan count.
+   * The research budget is not reopened; at most one correction per execution. */
+  grantCorrection(reason: "raw_tool_intent") {
+    if (this.corrections >= 1) return false;
+    this.corrections++; this.correction = reason;
+    return true;
+  }
+  /** The correction the next final attempt is for, if any. */
+  get pendingCorrection() { return this.correction; }
   evaluate(history: Chat, captured: Parameters<typeof classifyFinalDelivery>[1] & { messages: Array<ChatMessage> },
     timedOut: boolean, trigger: FinalizationTrigger | null, noProgressRounds: number,
     objectiveSatisfied: boolean | null = null) {
