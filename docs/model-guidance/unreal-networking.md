@@ -9,12 +9,13 @@
 엔진이 이미 제공하는 동작을 프로젝트에 없는 기능으로 보고하지 않는다. 프로젝트가 같은 동작을 다시 구현했는지, 엔진 동작에 의존하는지 구분한다.
 
 <!-- contract-summary: engine-defaults -->
-엔진 계약 unreal_contracts@7 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@8 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.net.cmc-prediction` (엔진 사실) UCharacterMovementComponent already performs owning-client movement prediction: the client moves locally and sends moves with ReplicateMoveToServer, and the server corrects significant errors with ClientAdjustPosition. A project without its own prediction layer still has engine movement prediction. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h:2394 외 1
 - `ue.render.owner-visibility` (엔진 사실) bOnlyOwnerSee and bOwnerNoSee are rendering visibility flags on UPrimitiveComponent. They do not control replication, relevancy or whether the component exists on a machine. 근거: Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h:497 외 1
 - `ue.net.netmode` (엔진 사실) ENetMode is NM_Standalone, NM_DedicatedServer, NM_ListenServer or NM_Client; every value below NM_Client is some kind of server. A NetMode != NM_DedicatedServer branch runs on standalone, listen servers and clients, not only on remote clients. 근거: Engine/Source/Runtime/Engine/Classes/Engine/EngineBaseTypes.h:981 외 2
 - `ue.net.replication-conditions` (엔진 사실) Replication conditions choose which connections receive a replicated property: COND_InitialOnly sends only in the initial bunch, COND_OwnerOnly only to the owning connection, COND_SkipOwner to every connection except the owner. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/CoreNetTypes.h:19 외 2
 - `ue.net.client-rpc-callspace` (엔진 사실) A Client RPC called on the server through its generated function goes through AActor::GetFunctionCallspace. If the actor replicates and has a remote owning connection (for example a pawn possessed by a remote PlayerController), the call is sent to and runs on that owning client. With no owning connection and no owning player (for example a server-spawned actor without a player Owner) it runs locally on the server; with a local player owner (listen-server host) it runs locally; a non-replicating actor (RemoteRole None) absorbs it. 근거: Engine/Source/Runtime/Engine/Private/Actor.cpp:5606 외 2
+- `ue.net.server-rpc-owning-connection` (엔진 사실) On a server, a Server RPC that arrives from a client executes only when it came on the connection that owns the target actor (the actor's net connection or a child connection of it): UNetDriver::ShouldCallRemoteFunction requires RepFlags.bNetOwner on a server. An actor component's RPC uses its owner actor's callspace. A client therefore cannot get a Server RPC executed on an actor owned by another connection or with no owning connection; 'any client can call this Server RPC' is false for actor and component RPCs on the legacy replication path. Ownership says who may call, not whether the arguments or the game state make the call valid. 근거: Engine/Source/Runtime/Engine/Private/NetDriver.cpp:8452 외 3
 <!-- /contract-summary: engine-defaults -->
 <!-- /guidance-section: engine-defaults -->
 
@@ -22,6 +23,7 @@
 - HasAuthority, IsLocallyControlled, Actor Owner/owning connection은 다른 질문에 답한다. Owner 설정으로 서버 판정이나 참조 수명이 완성되지 않으며 클라이언트의 Multicast 호출을 서버 방송으로 해석하지 않는다.
 - Server/Client/NetMulticast RPC 실행 조건·소유 연결·복제 전제와 프로퍼티의 선언·등록·수신 조건을 구별한다. 계약 위반 판정에는 적용 엔진의 선언/구현을 조회하고 버전·본문이 미확인이면 추정으로 확정하지 않는다.
 - 원격 플레이어의 요청이 권한 측 실행까지 도달하는지 본다. HasAuthority 가드만 추가해 원격 요청을 버리면 기능은 연결되지 않는다.
+- 소유 연결 검사는 누가 Server RPC를 부를 수 있는지만 정한다. RPC 인자와 클라이언트가 보고한 결과·통계·시각은 서버 상태에 쓰기 전에 검증한다. OnRep에서 무관한 설정을 기본값 구조체로 새로 만들어 덮어쓰지 않는다.
 - bReplicates와 SetReplicateMovement는 전투 규칙 구현의 증거가 아니다. 로컬 예측 쓰기는 서버 수락·거부·보정·표시로 판단하며, 쓰기 자체를 결함으로 보거나 다음 복제로 무조건 수렴한다고 가정하지 않는다.
 - 지속 상태와 순간 효과를 구분한다. 늦게 참가하거나 다시 relevant해진 연결의 표시를 복원할 상태를 둔다.
 - 서로 다른 Actor의 RPC나 서로 다른 변수의 OnRep 순서를 전제로 하지 않는다. 함께 해석해야 하는 값에는 일관성·준비 조건을 둔다.

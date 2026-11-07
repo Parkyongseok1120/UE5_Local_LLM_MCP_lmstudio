@@ -65,7 +65,7 @@
 - 객체 생존(GC), 게임플레이 활성(BeginPlay~EndPlay), 스레드 접근 가능성은 각각 따로 판단한다.
 
 <!-- contract-summary: lifetime -->
-엔진 계약 unreal_contracts@7 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@8 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.uobject.lifecycle` (엔진 사실) PostInitProperties, PostLoad and BeginDestroy are UObject virtuals, so they are valid overrides on every UObject-derived type, including actors, components and subsystems. BeginDestroy runs as part of garbage-collection teardown; it is not a gameplay end-of-play hook. 근거: Engine/Source/Runtime/CoreUObject/Public/UObject/Object.h:226 외 2
 - `ue.actor.lifecycle` (엔진 사실) AActor gameplay lifetime runs PostInitializeComponents, then BeginPlay, and ends with EndPlay. AActor::Destroyed calls RouteEndPlay(EEndPlayReason::Destroyed) first, so cleanup that must run on every end of play belongs in EndPlay. 근거: Engine/Source/Runtime/Engine/Classes/GameFramework/Actor.h:2125 외 4
 - `ue.component.lifecycle` (엔진 사실) UActorComponent registration (OnRegister/OnUnregister) is separate from initialization (InitializeComponent/UninitializeComponent) and from play (BeginPlay/EndPlay). TickComponent is the component tick override; Tick is an actor hook. 근거: Engine/Source/Runtime/Engine/Classes/Components/ActorComponent.h:830 외 5
@@ -83,7 +83,7 @@
 - Initialize·OnWorldBeginPlay에서 등록한 delegate·ticker·타이머는 Deinitialize·OnWorldEndPlay에서 해제한다.
 
 <!-- contract-summary: subsystems -->
-엔진 계약 unreal_contracts@7 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
+엔진 계약 unreal_contracts@8 (UE 5.7, 5.8 소스 기준, 다른 버전은 해당 엔진 소스로 재확인):
 - `ue.subsystem.lifecycle` (엔진 사실) A subsystem lives as long as its outer: Engine, GameInstance, World or LocalPlayer. ShouldCreateSubsystem gates creation, Initialize(FSubsystemCollectionBase&) and Deinitialize bracket its life. World subsystems also receive PostInitialize, OnWorldBeginPlay, OnWorldEndPlay and PreDeinitialize, and DoesSupportWorldType filters world types. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/Subsystem.h:56 외 5
 - `ue.subsystem.initialize-dependency` (엔진 사실) FSubsystemCollectionBase::InitializeDependency forces another subsystem of the same collection to initialize first. It only orders subsystems within one collection. 근거: Engine/Source/Runtime/Engine/Public/Subsystems/SubsystemCollection.h:35
 <!-- /contract-summary: subsystems -->
@@ -98,7 +98,7 @@
 - 자세한 패턴은 RAG 문서 34_Threading_And_Async_Contract.md에 있다.
 
 <!-- contract-summary: threads -->
-프로젝트 정책 unreal_contracts@7:
+프로젝트 정책 unreal_contracts@8:
 - `ue.thread.uobject-game-thread` (프로젝트 정책) Create, destroy, spawn and mutate UObjects, actors, components, worlds and timers on the game thread. Work on another thread uses copied plain data, and returns results with AsyncTask(ENamedThreads::GameThread, ...) after checking a TWeakObjectPtr is still valid. 근거: Engine/Source/Runtime/Engine/Private/TimerManager.cpp:660
 - `policy.render.game-objects` (프로젝트 정책) A render command runs later on the rendering thread. Pass copied values or a render proxy into it; do not capture this or other gameplay UObjects and read or mutate them there.
 <!-- /contract-summary: threads -->
@@ -109,6 +109,7 @@
 
 - 실제로 읽은 범위를 보고한다. 일부만 읽은 파일을 전량 확인했다고 쓰지 않고, 전량 확인했다고 쓴 파일을 미확인으로 다시 분류하지 않는다.
 - 확인한 사실, 추론, 미확인을 구분해 적는다.
+- 상태를 바꾸는 함수의 bool 반환을 호출부가 무시하면 실패가 성공처럼 이어진다. 송신→수신→상태 변경→원격 관찰, 시작→종료→복구 경로를 끝까지 대응시킨다.
 - NOT_FOUND는 그 경로에 파일이 없다는 뜻일 뿐이다. 엔진 소스 설치 여부로 확대하지 않고, 응답의 suggestion이나 상위 `engine://` 디렉터리 검색으로 실제 위치를 찾는다.
 - 엔진 절대 경로가 거부되면 `engine://Engine/Source/...`로 다시 읽는다. 작업 루트나 접근 범위를 넓히려 하지 않는다.
 - BlueprintNativeEvent와 RPC는 헤더에 `X`로 선언되고 .cpp에는 `Owner::X_Implementation`(검증 함수는 `X_Validate`)으로 정의된다.
@@ -117,7 +118,7 @@
 - `hasMore`이거나 `omissionReason:"byte_budget"`이고 필요한 줄이 반환 범위 밖에 있을 때만 `nextOffsetBytes`·`nextStartLine`부터 이어 읽는다. engine_local 후보가 `excerptTruncated`이거나 `evidenceExcerpt`가 partial/omitted면 그 후보의 `rangeSuggestion` 범위만 읽는다. byteBudget은 메타데이터를 포함한 응답 전체 크기다.
 
 <!-- contract-summary: verification -->
-프로젝트 정책 unreal_contracts@7:
+프로젝트 정책 unreal_contracts@8:
 - `policy.claims.build-evidence` (프로젝트 정책) A compile, link or UHT outcome is a claim about the build. Report it as confirmed only with build_unreal_project or static_validate_project evidence; otherwise state it as an unverified risk and name the evidence that would confirm it.
 - `policy.claims.engine-default-vs-project` (프로젝트 정책) Separate what the engine already does from what the project adds. Before saying a capability is missing, check the engine base class with unreal_symbol_lookup(sourceMode=engine_local); before saying a setting is unreadable, read the file (Config/*.ini files are text). For an engine function's parameters or return type, its declaration is the evidence (unreal_symbol_lookup view=signature, or read_symbol view=declaration). Read the implementation range only when the claim depends on what the body does: sourceMode=engine_local lists .cpp definition candidates, and read_file_range reads just those engine://Engine/Source/... lines.
 - `policy.claims.severity` (프로젝트 정책) Severity is impact: a functional defect a user can hit outranks a redundant check, dead branch or style issue. Classify a redundant but harmless check as a cleanup suggestion, not a confirmed error. Call a finding confirmed only after reading the defect site and checking the counter-case (the code path that would make it correct); until then label it suspected.
