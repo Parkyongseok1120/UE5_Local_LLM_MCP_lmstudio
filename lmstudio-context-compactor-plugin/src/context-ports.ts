@@ -66,6 +66,8 @@ export const workingContextModule = require("./working-context.js") as {
     project(history: Chat, observation: (request: ToolCallRequest) => boolean,
       metadata?: Record<string, unknown>, maxChars?: number): {
         history: Chat; changed: boolean; archiveFailed?: boolean; reason: string;
+        /** Telemetry only: what this call projected and why the rest stayed raw. */
+        stats?: import("./input-composition").ProjectionStats;
       };
     tool(): Tool;
     restore(history: Chat): { history: Chat; reason: string; detail?: Record<string, unknown>;

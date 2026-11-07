@@ -17,6 +17,7 @@ import { visibleAssistantOutput } from "./raw-tool-intent";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
 import { REVIEW_REGISTER_HEADER } from "./review-patterns.js";
+import { inputComposition } from "./input-composition";
 
 type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
   tokenCountCalls: number; contextLengthCalls: number; cacheHits: number };
@@ -839,7 +840,11 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         runtimeDataChars: selected.assembled.composition.runtimeDataChars,
         runtimeDataCurrentChars: selected.assembled.composition.runtimeDataCurrentChars,
         runtimeDataSupersededChars: selected.assembled.composition.runtimeDataSupersededChars,
-        reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0
+        reclaimRatio: before.measurement.inputTokens ? (before.measurement.inputTokens - final.inputTokens) / before.measurement.inputTokens : 0,
+        // The input that set mandatoryFloorTokens: the floor candidate only when it measured smaller.
+        ...(this.config.showDebugInfo ? { floorComposition: { selectedFrom: floor === before ? "current_input" : "mandatory_floor_candidate",
+          exact: floor.measurement.exact, inputTokens: floor.measurement.inputTokens, toolSchemaTokens: floor.measurement.toolSchemaTokens,
+          chars: inputComposition(floor.history, { runtimeDataChars: floor.composition.runtimeDataChars }) } } : {})
 }
     };
   }

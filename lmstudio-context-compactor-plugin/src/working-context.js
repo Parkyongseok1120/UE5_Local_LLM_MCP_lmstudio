@@ -734,6 +734,14 @@ class WorkingContext {
     if (index.ambiguous) return { history, changed: false, reason: "pending_or_ambiguous_exchange" };
     const projected = Chat.empty();
     let changed = false, archiveFailed = false, preservedFirstConsumer = false;
+    // Telemetry only: each result is counted once per call, by why it was kept
+    // or what its projection saved. Already projected results are not recounted.
+    const stats = { projectedCount: 0, originalChars: 0, projectedChars: 0,
+      skipped: { pinned: 0, pending: 0, small: 0, archiveFailed: 0, preservedRaw: 0, noSavings: 0 } };
+    const projectedResult = (result, original, content) => {
+      stats.projectedCount++; stats.originalChars += original.length; stats.projectedChars += content.length;
+      changed = true; return { ...result, content };
+    };
     const messages = history.getMessagesArray();
     const pinned = pinnedWorkingSet(messages, index, { readUse: key => this.readUse(key), ...metadata });
     const citations = citedLineRanges(messages);
@@ -744,27 +752,27 @@ class WorkingContext {
       const copies = results.map((result, resultIndex) => {
         const request = index.matches.get(`${messageIndex}:${resultIndex}`);
         if (!request || !isObservation(request)) return result;
-        if (pinned.has(`${messageIndex}:${resultIndex}`)) return result;
+        if (pinned.has(`${messageIndex}:${resultIndex}`)) { stats.skipped.pinned++; return result; }
         const originalEnvelope = serializedResultContent(result.content);
         const decoded = decodeToolResultRecord(originalEnvelope), parsed = decoded.value;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
           || ["archived_tool_result_projection", "historical_evidence_range", "historical_evidence_index",
             "redundant_source_read"].includes(parsed.kind)) return result;
         // The caller's known observation classification alone is not execution proof.
-        if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) return result;
+        if (parsed.pending === true || ["pending", "running", "unknown", "ambiguous"].includes(parsed.status)) { stats.skipped.pending++; return result; }
         // A projection has fixed identity/range metadata. Avoid archiving and
         // replacing tiny observations that cannot become cheaper overall.
-        if (originalEnvelope.length <= Math.max(maxChars, 1024)) return result;
+        if (originalEnvelope.length <= Math.max(maxChars, 1024)) { stats.skipped.small++; return result; }
         const identity = sourceIdentity(parsed), facts = semanticFacts(parsed);
         const saved = this.archiveObservation(request, result, parsed, metadata);
-        if (!saved.ok) { archiveFailed = true; return result; }
+        if (!saved.ok) { archiveFailed = true; stats.skipped.archiveFailed++; return result; }
         const record = saved.record;
         this.refs.set(record.evidenceId, record.archivedBodyHash);
         const preserveLimit = Number(metadata.preserveUnconsumedRawMaxChars ?? metadata.preserveUnconsumedRawGitMaxChars ?? 0);
         if ((metadata.preserveUnconsumedRaw === true
           || (preserveLimit > 0 && originalEnvelope.length <= preserveLimit))
           && !this.consumedRawResults.has(rawExposureKey(request, result, originalEnvelope))) {
-          preservedFirstConsumer = true;
+          preservedFirstConsumer = true; stats.skipped.preservedRaw++;
           return result;
         }
         const bodyView = gitBodyView(parsed);
@@ -836,7 +844,7 @@ class WorkingContext {
               projectionCoverage: "partial",
               notice: `CITED LINES ${cited.lines}: ${cited.shown} of ${boundedBody.length} chars shown; page the rest with evidence_first_read_context readHandle=${projection.archiveRef.readHandle}` });
             const citedContent = JSON.stringify(projection);
-            if (citedContent.length < originalEnvelope.length) { changed = true; return { ...result, content: citedContent }; }
+            if (citedContent.length < originalEnvelope.length) return projectedResult(result, originalEnvelope, citedContent);
           }
         }
         const fixedCost = JSON.stringify(projection).length;
@@ -883,13 +891,12 @@ class WorkingContext {
           announcePartialBody();
           projectedContent = JSON.stringify(projection);
         }
-        if (projectedContent.length >= originalEnvelope.length) return result;
-        changed = true;
-        return { ...result, content: projectedContent };
+        if (projectedContent.length >= originalEnvelope.length) { stats.skipped.noSavings++; return result; }
+        return projectedResult(result, originalEnvelope, projectedContent);
       });
       projected.append(ChatMessage.from({ role: "tool", content: copies.map(r => ({ type: "toolCallResult", ...r })) }));
     }
-    return { history: changed ? projected : history, changed, archiveFailed,
+    return { history: changed ? projected : history, changed, archiveFailed, stats,
       reason: archiveFailed ? "partial_archive_failure"
         : preservedFirstConsumer ? "first_consumer_raw_git_preserved" : "verified" };
   }

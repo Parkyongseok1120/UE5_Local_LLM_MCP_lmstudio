@@ -690,6 +690,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/tool-capability-core.js",
     "lmstudio-context-compactor-plugin/src/generated-tool-capability-data.js",
     "lmstudio-context-compactor-plugin/src/input-availability.js",
+    "lmstudio-context-compactor-plugin/src/input-composition.ts",
     "lmstudio-context-compactor-plugin/src/internal-data-output.ts",
     "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
     "lmstudio-context-compactor-plugin/src/report-scope.ts",
