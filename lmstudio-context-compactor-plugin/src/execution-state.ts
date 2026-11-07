@@ -80,6 +80,13 @@ from: this.current, to, reason,
     this.trigger = trigger;
     if (RESEARCH_CLOSING_TRIGGERS.has(trigger)) this.closedBy ??= trigger;
   }
+  /** A delivered report gets its tool-free review round. From research this
+   * ends research; a final report (a forced one included) is already past it
+   * and only changes what the next final round is for. */
+  enterReportReview() {
+    if (this.current !== "FINAL_DELIVERY") return this.finishResearch("report_review");
+    this.trigger = "report_review";
+  }
   startRecovery(reason: string, plan?: Omit<RecoveryPlan, "reason">) {
     this.transition("READ_RECOVERY", reason); this.trigger = null;
     if (plan) this.recovery.begin({ ...plan, reason });

@@ -14,7 +14,8 @@ test("v3 transition authority is closed over the C2 A/B allowlist", () => {
     'finishResearch:boundary.trigger', 'finishResearch:"context_budget"',
     'finishResearch:"research_timeout"', 'finishResearch:"research_repetition"',
     'finishResearch:decision.trigger', 'finishResearch:decision.trigger',
-    'finishResearch:"research_output_limit"', 'finishResearch:"report_review"',
+    // A report review starts through execution.enterReportReview(), from research or after a forced final report.
+    'finishResearch:"research_output_limit"',
     'finishResearch:"output_recovery"', 'finishResearch:"research_recovery_exhausted"',
     'startRecovery:"context_budget"', 'startReasoningRecovery:"reasoning_repetition"',
     'startReasoningRecovery:', 'startReplan:{',

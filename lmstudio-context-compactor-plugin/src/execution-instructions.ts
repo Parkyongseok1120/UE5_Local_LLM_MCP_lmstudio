@@ -36,6 +36,7 @@ export const REPORT_REVIEW_INSTRUCTION = [
   "For every missing working-note item, include only what the returned evidence confirms; otherwise state its exclusion reason.",
   "Correct each engine-contract conflict or explicitly downgrade that named claim to unverified. Name the identifier or contract id in each correction.",
   "Cleared rows are rejected working judgments: do not re-verify or revive them. No tool calls.",
+  "If a scope item says a no-defect conclusion exceeds what was read, limit that conclusion to the files actually read and list the named files and directories under 미확인 범위.",
 ].join(" ");
 
 export const REPETITION_RECOVERY_INSTRUCTION = [

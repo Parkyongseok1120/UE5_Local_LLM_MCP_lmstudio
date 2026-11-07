@@ -4,6 +4,8 @@ import { verificationScopeNotice } from "./delivery-controller";
 import { fileCoverageNotice } from "./quote-anchoring";
 import { returnedEngineEvidence, unresolvedReportEngineClaimGaps } from "./engine-claim-anchoring";
 import { deliveredReportFact, reportReviewFact, type ReviewRegister } from "./review-register";
+import { cleanVerdictScopeGap, REPORT_REVIEW_OBJECTIVES } from "./report-coverage";
+import type { ObjectiveKind } from "./execution-contracts";
 const { exchangeIndex } = require("./working-context.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 type Gap = { kind: string; target?: string; message: string };
@@ -11,10 +13,12 @@ type Gap = { kind: string; target?: string; message: string };
 export function reportReviewObligations(history:Chat,answer:string,source:ReturnedSources,engine:string,objective:string,register:ReviewRegister) {
   const gaps=unresolvedReportEngineClaimGaps(answer,returnedEngineEvidence(source),engine);
   const missing=register.missing(answer),scopeGaps=reportScopeGaps(history,answer,source);
+  const reviewed=REPORT_REVIEW_OBJECTIVES.has(objective as ObjectiveKind),coverage=reviewed?cleanVerdictScopeGap(answer,source):null;
+  if(coverage)scopeGaps.push(coverage);
   // A delivered report is data rather than the final assistant message. Keeping
   // that message last makes EOS look like an answer that needs no continuation.
   // Report supplements instead begin after the last tool results.
-  return {missing,needed:Boolean(answer.trim() && (scopeGaps.length || ["review","explain"].includes(objective) && (missing.length || gaps.length))),
+  return {missing,needed:Boolean(answer.trim() && (scopeGaps.length || reviewed && (missing.length || gaps.length))),
     reviewFact:reportReviewFact(missing,gaps)+"\n"+reportScopeReviewFact(scopeGaps),deliveredFact:deliveredReportFact(answer),
     telemetry:{missing:missing.map(row=>row.identifier),contracts:gaps.map(g=>g.factId),scopeGaps:scopeGaps.map(g=>g.kind),toolCount:0}};
 }

@@ -36,7 +36,7 @@ import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause, finalPhaseInstruct
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { continuationStatusText, createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
-import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
+import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, rawIntentTelemetry, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile, researchLimitTrigger, researchRoundLimit } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
 import { beginArchitectureRound, finishArchitectureRound, mergeActiveNote, reconcileArchitectureRound, type ArchitectureState } from "./architecture-round";
@@ -62,7 +62,7 @@ export function createPredictionLoopHandler(
 ): PredictionLoopHandler {
   return async (ctl) => {
     const executionId = crypto.randomUUID();
-    let terminalOwner = new DeliveryController();
+    const terminalOwner = new DeliveryController();
     let objective: TaskObjective | undefined;
     let finalExecution: ExecutionState | null = null;
     let finalModelInputId: string | null = null;
@@ -242,7 +242,8 @@ export function createPredictionLoopHandler(
       reviewRegisterItems: () => reviewRegister.rows.length ? reviewRegister.lines() : null },
       history => workingContext?.pendingResultIndexes(history) || [],
       (history, maxChars, metadata) => workingContext?.pinnedResultIndexes(history, maxChars, metadata) || []);
-    const deliveryController = terminalOwner = new DeliveryController(allModelTools, objective);
+    const deliveryController = terminalOwner;
+    deliveryController.bindExecution(allModelTools, objective, () => reviewRegister.candidates());
     const recoveryCoordinator = execution.recovery;
     let mutationTools: RemoteToolLike[] = [];
 
@@ -1062,12 +1063,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             eligibilityReason: retryDecision.reason,
             streamRawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate,
             finalRawToolIntent,
-            rawToolIntentNames: rawIntent.names,
+            ...rawIntentTelemetry(rawIntent),
             knownReadOnlyRawToolNames: rawIntent.knownReadOnlyNames,
             archiveOnlyRecoveryAllowed,
-            unknownRawToolNames: rawIntent.unknownNames,
-            registeredButWithheldRawToolNames: rawIntent.registeredButWithheldNames,
-            registeredUnsafeRawToolNames: rawIntent.registeredUnsafeNames,
             recoveryToolNames: retryTools.map(tool => tool.name),
             actualDispatchCount: null,
             guardAllowedCount,
@@ -1155,10 +1153,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             finalRawToolIntent,
             rawToolIntentFirstFragment: captured.predictionUsage.rawToolIntentFirstFragment,
             rawToolIntentFirstVisibleChar: captured.predictionUsage.rawToolIntentFirstVisibleChar,
-            rawToolIntentNames: rawIntent.names,
-            unknownRawToolNames: rawIntent.unknownNames,
-            registeredButWithheldRawToolNames: rawIntent.registeredButWithheldNames,
-            registeredUnsafeRawToolNames: rawIntent.registeredUnsafeNames,
+            ...rawIntentTelemetry(rawIntent),
             retryCandidate: retryCandidate ? {
               exact: retryCandidate.assembled.measurement.exact,
               inputTokens: retryCandidate.assembled.measurement.inputTokens,
@@ -1319,6 +1314,28 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             returnedPeerResults: actualResultCount, rawContentChars: captured.toolRequestFailure.rawContentChars });
           break;
         }
+        // A delivered report, research-ended or forced, gets the same review of
+        // open candidates; a forced one spends the delivery owner's one review attempt.
+        const reviewable = !config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted, objectiveKind = objective.kind;
+        const scheduleReportReview = () => {
+          const answer = visibleTranscript.lastAnswerText;
+          const review=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objectiveKind,reviewRegister);
+          reviewMissing=review.missing;
+          if (!review.needed) return false;
+          if (finalizing && !deliveryController.grantCorrection("report_review")) { reportReviewBlocked = true; return false; }
+          reportReviewAttempted = true;
+          runtimeFacts.set("report_review",review.reviewFact);
+          runtimeFacts.set("delivered_report",review.deliveredFact);
+          reportContinuation = answer;
+          deliveryController.retainReportPrefix(answer);
+          deliveryController.beginSupplement("report_review", true);
+          workingHistory = historyBeforeRound;
+          execution.enterReportReview();
+          if (config.showDebugInfo) ctl.debug({ event: "report_review_scheduled", executionId, modelInputId, afterFinalReport: finalizing,
+            ...review.telemetry });
+          roundIndex++;
+          return true;
+        };
         if (finalizing) {
           const evaluated = deliveryController.evaluate(workingHistory, visibleCaptured, phaseTimedOut,
             execution.finalizationTrigger, recoveryCoordinator.noProgressRounds);
@@ -1407,6 +1424,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             continue;
           }
           if (reviewingReport && !visibleTextFromMessages(visibleCaptured.messages).trim()) reportReviewEmpty = true;
+          if (deliveryState === "complete" && !continuingReport && reviewable && scheduleReportReview()) continue;
           if (deliveryState !== "complete") ctl.createStatus({ status: deliveryState === "no_answer" ? "error" : "canceled",
             text: finalDeliveryStatusText({ partialDelivered: Boolean(safePartialReport), reportState: finalDelivery.reportState,
               deliveryState, timedOut: phaseTimedOut, aborted: ctl.abortSignal.aborted, failed: captured.failure !== undefined,
@@ -1516,27 +1534,8 @@ event: decision.trigger === "research_recovery_exhausted"
           roundIndex += 1;
           continue;
         }
-        if (!config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted
-          && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
-          && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent) {
-          const answer = visibleTranscript.lastAnswerText;
-          const review=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objective.kind,reviewRegister);
-          reviewMissing=review.missing;
-          if (review.needed) {
-            reportReviewAttempted = true;
-            runtimeFacts.set("report_review",review.reviewFact);
-            runtimeFacts.set("delivered_report",review.deliveredFact);
-            reportContinuation = answer;
-            deliveryController.retainReportPrefix(answer);
-            deliveryController.beginSupplement("report_review", true);
-            workingHistory = historyBeforeRound;
-            execution.finishResearch("report_review");
-            if (config.showDebugInfo) ctl.debug({ event: "report_review_scheduled", executionId, modelInputId,
-              ...review.telemetry });
-            roundIndex++;
-            continue;
-          }
-        }
+        if (reviewable && !captured.continueAfterTools && captured.finishReason === "eosFound" && captured.predictionCompleted
+          && structuredToolRequestCount === 0 && actualResultCount === 0 && !finalRawToolIntent && scheduleReportReview()) continue;
         if (!boundedAudit && config.outputRecoveryMode === "on"
           && rawIntentText.trim() && canRecoverOutputLimit(visibleCaptured, generationAtRoundEnd)) {
           // Assistant-authored prose is continuation context, never committed
@@ -1639,7 +1638,7 @@ event: decision.trigger === "research_recovery_exhausted"
       const notices = terminalReportNotices(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText, {
         packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
         reviewedReport: reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty,
-        reportReviewBlocked, reportReviewEmpty, reviewMissing });
+        reportReviewBlocked, reportReviewEmpty, reviewMissing, objectiveKind: objective.kind });
       for (const notice of notices) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(notice.text);
         if (config.showDebugInfo) ctl.debug({ event: notice.event, executionId, ...notice.details });
