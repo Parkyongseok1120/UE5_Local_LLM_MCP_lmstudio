@@ -697,6 +697,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/internal-data-contract.js",
     "lmstudio-context-compactor-plugin/src/report-scope.ts",
     "lmstudio-context-compactor-plugin/src/evidence-archive.js",
+    "lmstudio-context-compactor-plugin/src/directory-listing.js",
     "lmstudio-context-compactor-plugin/src/source-outline.js",
     "lmstudio-context-compactor-plugin/src/read-ledger.js",
     "lmstudio-context-compactor-plugin/src/working-context.js",

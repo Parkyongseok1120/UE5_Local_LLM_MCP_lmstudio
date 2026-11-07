@@ -124,6 +124,8 @@ export type ReadLedgerLike = {
   recordReturnedSource(value: Record<string, unknown>, resultKind: string, executionId?: string, authority?: {contractLookup?:boolean}): void;
   returnedSource(sourceKey: string, span: [number,number], executionId?: string): {returned:boolean;via:"body"|"search_hit"|"archive_page";scope:"execution"|"conversation"};
   returnedSources(executionId?: string): ReturnedSources;
+  recordListing(executionId: string, directoryKey: string, facts: unknown, fileKey: (name: string) => string): void;
+  inventory(executionId: string): ListingInventory | null;
   readonly size: number;
   get(path: string, sourceVersion: string, sourceKey?: string): LedgerEntry | null;
   latestFor(path: string, sourceKey?: string): LedgerEntry | null;
@@ -144,7 +146,13 @@ export type ReadLedgerLike = {
 export type SizeHint = { sizeBytes: number | null; totalLines: number | null; sha256: string | null };
 export type ReturnedSources = {files:Array<{path:string;sourceKey:string;lines:Map<number,string>;scope:"execution"|"conversation";bodyReturned:boolean;completeText?:boolean;
   knownVersion?:string|null;versionUncertain?:boolean;sourceInvalidated?:boolean;uncertainLines?:number[];unversionedSnippets?:Array<{lines:Array<[number,string]>;via:string;executionId:string}>}>;
-  contractIds:Set<string>;scope:"execution"|"conversation";complete?:boolean};
+  contractIds:Set<string>;scope:"execution"|"conversation";complete?:boolean;
+  /** This execution's listing inventory and each listed file's read coverage; null without one. */
+  listed?:ListingInventory|null};
+export type ListingCoverage = "complete" | "partial" | "unread" | "unknown";
+export type ListingInventory = { overflow: boolean;
+  directories: Array<{ path: string; complete: boolean; subdirectories: string[]; files: number }>;
+  files: Array<{ path: string; sourceKey: string; coverage: ListingCoverage; basis?: string; lines?: Array<[number, number]>; totalLines?: number | null }> };
 export const readLedgerModule = require("./read-ledger.js") as {
   ReadLedger: new () => ReadLedgerLike;
   verifiedReadFacts(value: unknown): ReadFacts | null;

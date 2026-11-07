@@ -1,7 +1,7 @@
 "use strict";
 
 const { Chat, ChatMessage, rawFunctionTool } = require("@lmstudio/sdk");
-const { EvidenceArchive, evidenceBodyView, evidenceSemanticFacts: semanticFacts, hash, redact, atomicWrite, readFile } = require("./evidence-archive.js");
+const { EvidenceArchive, evidenceBodyView, recordBodyView, evidenceSemanticFacts: semanticFacts, hash, redact, atomicWrite, readFile } = require("./evidence-archive.js");
 const path = require("node:path");
 const modelNotes = require("./continuity-model-notes.js");
 const { SUMMARY_POLICY } = require("./semantic-handoff-policy.js");
@@ -624,7 +624,7 @@ class WorkingContext {
     }
     const locator = { evidenceId: ref.evidenceId, version: ref.version, readHandle: this.archive.readHandleFor(loaded.record) };
     if (withOutline) {
-      const body = value && evidenceBodyView(value);
+      const body = value && recordBodyView(loaded.record, value);
       const outline = body && sourceOutline(body.body, { path: value.path, startLine: value.startLine,
         offsetBytes: value.offsetBytes, lineNumbers: value.lineNumbers === true });
       if (outline) locator.outline = outline.entries.slice(0, 16);
@@ -652,7 +652,7 @@ class WorkingContext {
     if (record.archivedBodyHash !== value.archiveRef.version || record.metadata?.providerRequestId !== request.id
       || record.metadata?.toolName !== request.name || !record.metadata?.sourceKey) return null;
     const source = decodeToolResultRecord(record.body).value;
-    const selected = source && evidenceBodyView(source);
+    const selected = source && recordBodyView(record, source);
     const verifiedRanges = (ranges, body) => {
       if (!Array.isArray(ranges) || typeof value.excerpt !== "string" || typeof body !== "string") return [];
       let chars = 0;
@@ -775,7 +775,9 @@ class WorkingContext {
           preservedFirstConsumer = true; stats.skipped.preservedRaw++;
           return result;
         }
-        const bodyView = gitBodyView(parsed);
+        // The stored record's body view version, not the current one: put() returns
+        // an existing record unchanged, and its offsets belong to its own version.
+        const bodyView = recordBodyView(record, redact(parsed));
         const semanticBody = JSON.stringify(redact(parsed));
         const boundedBody = bodyView?.body || semanticBody;
         const bodyFirst = Boolean(bodyView);

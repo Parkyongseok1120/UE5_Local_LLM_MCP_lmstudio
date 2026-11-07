@@ -11,6 +11,7 @@ export { repeatRequestKey };
 import { capabilityFor, isObservationOnlyToolCall, localObservationTools, ToolCapabilityRegistry, type RemoteToolLike } from "./tool-capability-registry";
 import type { RoundVerdict } from "./execution-contracts";
 import { estimateReadResponseBytes } from "./budget-broker";
+const { listingFacts } = require("./directory-listing.js");
 import { auditChecksFromPacket, emptyReferenceState, ingestReferenceObservations, referenceSnapshot, seedPriorEngineIdentity } from "./reference-context";
 import type { ToolScope } from "./tool-scope";
 import { resultSemantics, decodeEnvelope } from "./tool-result-semantics.js";
@@ -89,14 +90,13 @@ export class EvidenceManager {
       if (decodeEnvelope(record.content).ok) {
         if (record.request.arguments?.project === undefined && typeof observedProject === "string")
           this.defaultEstimateProjects.set(record.tool.pluginIdentifier || "local", observedProject);
-        if (record.request.name === "list_directory" && typeof value.path === "string" && Array.isArray(value.entries)) {
-          for (const entry of value.entries as Array<Record<string, unknown>>) {
-            if (entry?.type !== "file" || typeof entry.name !== "string" || !entry.name
-              || /[\\/]/u.test(entry.name) || [".", ".."].includes(entry.name)
-              || !Number.isSafeInteger(entry.size) || Number(entry.size) < 0) continue;
-            this.ledger.recordSizeHint(identity.fileSourceKey({ ...value, path: String(value.path).replace(/[\\/]$/u, "") + "/" + entry.name }),
-              { sizeBytes: Number(entry.size), modifiedAt: entry.modifiedAt ?? null, totalLines: null, sha256: null, origin: "list_directory" });
-          }
+        const listing = record.request.name === "list_directory" ? listingFacts(value) : null;
+        if (listing) {
+          // One reading of the listing feeds size hints and this execution's inventory.
+          const fileKey = (name: string) => identity.fileSourceKey({ ...value, path: `${listing.path}/${name}` });
+          for (const file of listing.files) if (file.size !== null)
+            this.ledger.recordSizeHint(fileKey(file.name), { sizeBytes: file.size, modifiedAt: file.modifiedAt, totalLines: null, sha256: null, origin: "list_directory" });
+          this.ledger.recordListing(executionId, identity.fileSourceKey({ ...value, path: listing.path }), listing, fileKey);
         } else if (kind === "source_body" && ["read_file", "read_file_range", "read_symbol"].includes(record.request.name)
           && typeof value.path === "string" && !value.duplicate && !value.bodyOmitted) {
           const facts = readLedgerModule.verifiedReadFacts(value);
