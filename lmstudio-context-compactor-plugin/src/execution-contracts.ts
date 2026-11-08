@@ -11,14 +11,21 @@ export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
 export const RUNTIME_DATA_SHARE = 0.10;
 export type RuntimeFactKey = "budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
   | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger";
-export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, { priority: 0 | 1 | 2; maxChars: number; lifetime: "until_cleared" | "round" }>> = {
+  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger" | "round_limit";
+/** Events that end an until_cleared fact. A key with no event lives for the
+ * execution (the runtime fact store is created per execution). */
+export type RuntimeFactEvent = "read_budget_resolved" | "research_progress" | "final_delivery";
+type RuntimeFactRule = { priority: 0 | 1 | 2; maxChars: number; lifetime: "until_cleared" | "round"; clearOn?: readonly RuntimeFactEvent[] };
+export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, RuntimeFactRule>> = {
   mutation_focus: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
   report_now: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
-  budget: { priority: 0, maxChars: 2000, lifetime: "until_cleared" },
+  // A round whose reads returned without a limit, denial or cut.
+  budget: { priority: 0, maxChars: 2000, lifetime: "until_cleared", clearOn: ["read_budget_resolved"] },
+  // Needed until the review generation itself, the last round of the execution.
   report_review: { priority: 0, maxChars: 4000, lifetime: "until_cleared" },
   delivered_report: { priority: 0, maxChars: Infinity, lifetime: "until_cleared" },
   prior_turn: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
+  round_limit: { priority: 0, maxChars: 400, lifetime: "until_cleared", clearOn: ["final_delivery"] },
   tool_retry: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
   review_register: { priority: 1, maxChars: 6000, lifetime: "until_cleared" },
   engine_claim_check: { priority: 1, maxChars: 3000, lifetime: "until_cleared" },
@@ -27,12 +34,13 @@ export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, { priority: 0 | 1 | 
   repetition_check: { priority: 1, maxChars: 3000, lifetime: "until_cleared" },
   read_ledger: { priority: 2, maxChars: 6000, lifetime: "round" },
   partial_projection: { priority: 2, maxChars: 3000, lifetime: "round" },
-  stagnation: { priority: 2, maxChars: 1500, lifetime: "until_cleared" },
-  repeated_failure: { priority: 2, maxChars: 1500, lifetime: "until_cleared" },
+  // The stagnation detector saw new evidence again.
+  stagnation: { priority: 2, maxChars: 1500, lifetime: "until_cleared", clearOn: ["research_progress"] },
+  repeated_failure: { priority: 2, maxChars: 1500, lifetime: "until_cleared", clearOn: ["research_progress"] },
 };
 export type RuntimeFactEntry = Readonly<{ key: RuntimeFactKey; text: string }>;
 export type RewriteCause = "turn_start" | "projection" | "low_water_compaction" | "reasoning_bound"
-  | "data_consolidation" | "guidance_rescope" | "guidance_finalization_drop"
+  | "data_consolidation" | "fact_retired" | "guidance_rescope" | "guidance_finalization_drop"
   | "phase_transition" | "guidance_applicability_invalidated" | "guidance_budget_drop";
 export type MutationState = "none" | "attempted" | "applied" | "blocked";
 export interface TaskObjective {

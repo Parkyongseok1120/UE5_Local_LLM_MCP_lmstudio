@@ -1,18 +1,32 @@
 import { fileCoverageNotice, quoteAnchoringNotice, type QuoteMismatch } from "./quote-anchoring";
 import { confirmedProgressStatements, engineClaimNotice, reportEngineClaimNotice, returnedEngineEvidence,
   textEngineClaimGaps, unresolvedEngineClaimGaps, unresolvedReportEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
-import { reportReviewNotice, type ReviewRow } from "./review-register";
+import { reportReviewNotice, reviewCandidateLines, type ReviewRow } from "./review-register";
+import { cleanVerdictScopeGap, REPORT_REVIEW_OBJECTIVES } from "./report-coverage";
 import { suggestedCodeNotice } from "./write-api-anchoring";
 import { ENGINE_PROFILES, ENGINE_PROVIDERS } from "./engine-profiles.js";
 import {
   Chat,
   ChatMessage
 } from "@lmstudio/sdk";
-import type { DirectConfig, ExecutionOutcome, FinalizationTrigger, TaskObjective } from "./execution-contracts";
+import type { DirectConfig, ExecutionOutcome, FinalizationTrigger, ObjectiveKind, TaskObjective } from "./execution-contracts";
 import { finalizationCause } from "./execution-instructions";
 import { type FinalDeliveryState, type FinalReportState, type OutputLimitStage } from "./execution-contracts";
 export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시도에서도 structured 도구 요청이 생성되지 않아 중단했습니다.";
 export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
+/** The status line of a final attempt that did not complete, most specific cause first. */
+export function finalDeliveryStatusText(state: { partialDelivered: boolean; reportState: string; deliveryState: string;
+  timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean }): string {
+  if (state.partialDelivered) return "조사 복구가 완료되지 않아 근거가 있는 부분 보고만 전달했습니다. 전체 완료로 처리하지 않았습니다.";
+  if (state.reportState === "unresolved_tool_intent") return "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다.";
+  if (state.deliveryState === "truncated") return "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다.";
+  if (state.timedOut) return "최종 보고가 제한 시간 안에 완료되지 않았습니다. 부분 출력으로 기록했습니다.";
+  if (state.aborted) return "생성이 중지되었습니다. 지금까지 작성한 답변을 보존했습니다.";
+  if (state.failed) return "생성 중 오류가 발생했습니다. 지금까지 작성한 답변을 보존했습니다.";
+  return state.continuing ? "이어 쓸 본문이 생성되지 않았습니다. 앞서 작성한 답변을 보존했습니다."
+    : "최종 보고가 생성되지 않았습니다. 완료로 처리하지 않았습니다.";
+}
+
 export function outputLimitStatusText(stage:OutputLimitStage|undefined):string {
   return stage==="tool_arguments" ? "도구 호출 인수가 출력 한도에서 끝나 실행하지 않았습니다."
     : stage==="reasoning" ? "생각 단계에서 생성 한도에 도달했습니다. 자동 복구가 꺼져 있거나 허용 조건을 충족하지 않아 중단했습니다."
@@ -29,7 +43,14 @@ export class DeliveryController {
   private observation: ExecutionObservation = { reportText: "" };
   private outcome: ExecutionOutcome | null = null;
   private priorReportPresent = false;
-  constructor(private readonly tools: Array<RemoteToolLike> = [], private readonly objective?: TaskObjective) { }
+  constructor(private tools: Array<RemoteToolLike> = [], private objective?: TaskObjective) { }
+  private candidates: () => readonly ReviewRow[] = () => [];
+  /** The execution's facts, bound once after initialization. The owner exists
+   * from the first line of the execution, so an initialization failure is
+   * finished by the same owner, with no tools, objective or candidates yet. */
+  bindExecution(tools: Array<RemoteToolLike>, objective: TaskObjective, candidates: () => readonly ReviewRow[]) {
+    this.tools = tools; this.objective = objective; this.candidates = candidates;
+  }
   // Only this attempt's answer can become a final report. Prior progress text
   // and an interrupted earlier generation must never count as delivered work.
   beginRound() { this.observation = { reportText: "" }; }
@@ -71,7 +92,7 @@ export class DeliveryController {
   get hasPartialDelivery() { return this.observation.partialReportDelivered === true; }
   stop(reason: string) { this.observation = { ...this.observation, reason }; }
   partialReport(history: Chat, reason: string, messages: Array<ChatMessage> = [], trigger: string = reason) {
-    const report = evidenceBackedPartialReport(history, messages, reason, this.tools);
+    const report = evidenceBackedPartialReport(history, messages, reason, this.tools, this.candidates());
     return this.objective?.requiredEffects.has("mutation") && this.objective.mutationState !== "applied"
       ? { ...report, text: `요청한 변경은 적용되지 않았습니다: ${finalizationCause(trigger)}\n\n${report.text}` } : report;
   }
@@ -102,11 +123,27 @@ export class DeliveryController {
     };
   }
   begin(bounded: boolean, replanAttempts: number) {
-    const limit = bounded ? 1 : replanAttempts > 0 ? 2 : 1;
+    const limit = (bounded ? 1 : replanAttempts > 0 ? 2 : 1) + this.grants.size;
     const allowed = this.attempts < limit;
     if (allowed) this.attempts++;
+    this.attemptLimit = limit;
     return { allowed, limit };
   }
+  attemptLimit = 1;
+  private readonly grants = new Set<"raw_tool_intent" | "report_review">();
+  private correction: "raw_tool_intent" | null = null;
+  /** One more tool-free final attempt, owned here rather than borrowed from
+   * the replan count: once for a report that printed tool syntax instead of
+   * prose, once for the review of a report that omitted open candidates. The
+   * research budget is not reopened, and neither can repeat. */
+  grantCorrection(reason: "raw_tool_intent" | "report_review") {
+    if (this.grants.has(reason)) return false;
+    this.grants.add(reason);
+    this.correction = reason === "raw_tool_intent" ? reason : null;
+    return true;
+  }
+  /** The correction the next final attempt is for, if any. */
+  get pendingCorrection() { return this.correction; }
   evaluate(history: Chat, captured: Parameters<typeof classifyFinalDelivery>[1] & { messages: Array<ChatMessage> },
     timedOut: boolean, trigger: FinalizationTrigger | null, noProgressRounds: number,
     objectiveSatisfied: boolean | null = null) {
@@ -403,7 +440,7 @@ export function classifyFinalDelivery(
 }
 
 export function evidenceBackedPartialReport(history: Chat, currentMessages: Array<ChatMessage>, reason: string,
-  tools: Array<RemoteToolLike> = []): {
+  tools: Array<RemoteToolLike> = [], candidates: readonly ReviewRow[] = []): {
   text: string;
   evidenceCount: number;
   errorCount: number;
@@ -471,7 +508,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
     if (fact && !seen.has(fact)) { seen.add(fact); facts.push(fact); }
     if (facts.length >= 8) break;
   }
-  const lines = ["부분 조사 보고 (미완료)", "확인된 근거:"];
+  const lines = ["부분 조사 보고 (미완료)", ...reviewCandidateLines(candidates), "확인된 근거:"];
   if (facts.length) for (const fact of facts) lines.push(`- ${fact}`);
   else lines.push("- 현재 입력에서 구조화된 성공 결과를 확인하지 못했습니다.");
   if (excerpts.length) lines.push("", "반환된 파일 본문 발췌:", ...excerpts, "");
@@ -490,6 +527,7 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
   returnedSources?: import("./context-ports").ReturnedSources;
   packetQuoteGaps: QuoteMismatch[]; packetEngineGaps: EngineClaimGap[]; engine: string; observeOnly: boolean;
   reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reviewMissing: ReviewRow[];
+  objectiveKind?: ObjectiveKind;
 }) {
   const notices: Array<{event: string; text: string; details?: Record<string, unknown>}> = [];
   const add = (event: string, text: string | null, details?: Record<string, unknown>) => { if (text) notices.push({event,text,details}); };
@@ -507,6 +545,9 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
       unresolvedEngineClaimGaps(textEngineClaimGaps(confirmedProgressStatements(visible, answer), evidence, options.engine, "progress"), answer)), {gaps:gaps.length});
     add("suggested_code_scope_notice", suggestedCodeNotice(visible, answer, options.engine, source));
     add("file_coverage_notice", fileCoverageNotice(source, answer));
+    // The same gap the review was given; it stays when the supplement did not resolve it.
+    if (options.objectiveKind && REPORT_REVIEW_OBJECTIVES.has(options.objectiveKind))
+      add("coverage_scope_notice", cleanVerdictScopeGap(answer, source)?.notice ?? null);
     if (options.reportReviewBlocked || options.reportReviewEmpty)
       add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewEmpty ? "empty" : "budget"));
   }

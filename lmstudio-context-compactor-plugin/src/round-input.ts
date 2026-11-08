@@ -20,6 +20,7 @@ import { architectureEnabled, selectArchitectureContext, ARCHITECTURE_BASELINE }
 import { projectArchitectureEvidence } from "./architecture-observation";
 import { renderArchitectureContext } from "./architecture-input";
 import type {ArchitectureBinding,ArchitectureSnapshot,ArchitectureInputRefs,PatternCard} from "./architecture-contracts";
+import { sumProjectionStats } from "./input-composition";
 
 /** Older reasoning a projection round keeps, newest first, when no
  * pastReasoningTokens budget is configured. */
@@ -62,6 +63,7 @@ type RoundInputOptions = {
   getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Data blocks this execution already sent (owned by the prediction loop). */
   shownDataBlocks?: ShownDataBlocks;
+  retiredFacts?: () => readonly string[];
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -118,7 +120,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
     getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
-    shownDataBlocks: options.shownDataBlocks, consolidateDataBlocks: () => rewritingInput || compacted,
+    shownDataBlocks: options.shownDataBlocks, retiredFacts: options.retiredFacts, consolidateDataBlocks: () => rewritingInput || compacted,
     deferReferenceData: () => referenceSelectionPending,
     runtimeDataAllowanceChars: contextManager.broker.runtimeDataAllowanceChars(contextManager.broker.watermarks(before,
       0, roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) });
@@ -214,6 +216,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         ...pinMetadata,pinnedWorkingSetMaxChars: pinnedChars },
       config.toolResultProjectionChars);
     let projected = project(pinnedWorkingSetMaxChars);
+    const projectionPasses = [projected.stats];
     if (projected.changed) {
       workingHistory = projected.history; rewritingInput = true;
       assembledInput = await assembleModelInput(workingHistory);
@@ -224,6 +227,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     for (const pinBudget of [Math.floor(pinnedWorkingSetMaxChars / 2), Math.floor(pinnedWorkingSetMaxChars / 4), 0]) {
       if (!contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools, minimumReadBudget(roundTools))) break;
       const released = project(pinBudget);
+      projectionPasses.push(released.stats);
       pinnedWorkingSetFinalChars = pinBudget;
       pinsReleased = pinBudget === 0;
       if (released.changed) {
@@ -255,7 +259,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
       changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
       reasoningBounded, beforeInputTokens, inputTokens: assembledInput.measurement.inputTokens,
-      pinnedWorkingSetMaxChars, pinnedWorkingSetFinalChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact });
+      pinnedWorkingSetMaxChars, pinnedWorkingSetFinalChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact,
+      projectionStats: sumProjectionStats(projectionPasses) });
   }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const measurePressure = async () => {
@@ -305,7 +310,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         executionId, roundIndex, changed: projected.changed, reason: preserve ? projected.reason : "aggregate_prompt_budget_projection",
         archiveFailed: projected.archiveFailed === true, candidateInputTokens: assembledInput.measurement.inputTokens,
         candidateRemainingTokens: assembledInput.measurement.remainingTokens, candidateExact: assembledInput.measurement.exact,
-        fit: assembledInput.measurement.remainingTokens >= 0, rawThresholdChars: preserve, archive: workingContext.archive.stats });
+        fit: assembledInput.measurement.remainingTokens >= 0, rawThresholdChars: preserve, archive: workingContext.archive.stats,
+        projectionStats: sumProjectionStats([projected.stats]) });
       if (assembledInput.measurement.remainingTokens >= 0) break;
     }
   }

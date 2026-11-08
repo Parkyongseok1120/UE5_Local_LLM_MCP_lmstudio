@@ -82,7 +82,8 @@ function subjectAt(names: { spans: Named[]; bare: Named[] }, at: number): string
 
 /** Each judgment of a line as [subject, status]: one per finding keyword, its
  * sentence deciding the status. A line that only rejects clears its leading
- * subject ("**Issue 9: `TakeDamage` — ... not a bug"). */
+ * subject ("**Issue 9: `TakeDamage` — ... not a bug"). A later sentence about
+ * the same subject replaces an earlier one ("bug: ... Later verification: not a bug"). */
 function judgments(line: string): Array<[string, ReviewRow["status"]]> {
   const names = namesIn(line), out = new Map<string, ReviewRow["status"]>();
   if (!FINDING.test(line)) {
@@ -95,7 +96,7 @@ function judgments(line: string): Array<[string, ReviewRow["status"]]> {
     const rejected = REJECTED.test(sentence);
     for (const match of sentence.matchAll(FINDING_ALL)) {
       const subject = subjectAt(names, start + match.index!);
-      if (subject && !out.has(subject)) out.set(subject, rejected ? "cleared" : "found");
+      if (subject) { out.delete(subject); out.set(subject, rejected ? "cleared" : "found"); }
     }
   }
   return [...out];
@@ -126,6 +127,14 @@ export class ReviewRegister {
   }
 
   private record(row: ReviewRow) {
+    // A retraction that names no file reaches the file-qualified claims of the
+    // same subject: one such claim is that claim; several are ambiguous and
+    // need a recheck rather than staying confirmed or being cleared wholesale.
+    if (row.status !== "found" && this.claimKey(row).endsWith("\u0000unqualified")) {
+      const qualified = [...this.entries.values(), ...this.retired.values()].filter(other => other.identifier === row.identifier
+        && other.status !== "cleared" && !this.claimKey(other).endsWith("\u0000unqualified"));
+      for (const other of qualified) { other.status = qualified.length === 1 ? row.status : "needs_recheck"; other.round = row.round; }
+    }
     // Reinsertion keeps the bounded register ordered by latest observation.
     const key = this.claimKey(row);
     this.entries.delete(key); this.retired.delete(key);
@@ -174,6 +183,13 @@ export class ReviewRegister {
     return this.rows.filter(row => row.status === "found").map(row => ({ label: row.identifier,
       severity: /\bP[0-3]\b/u.exec(row.evidence)?.[0] || "unrated", text: row.evidence }));
   }
+  /** The open review candidates at their latest status: found or needing a
+   * recheck, including rows the bounded register pushed out of the model
+   * input. Read-only; a renderer does not judge them again or count them as
+   * confirmed defects. */
+  candidates(): ReviewRow[] {
+    return [...this.retired.values(), ...this.rows].filter(row => row.status !== "cleared");
+  }
   /** Found rows the answer does not name, including ones the bounded register
    * already pushed out of the model input. */
   missing(answer: string): ReviewRow[] {
@@ -209,4 +225,22 @@ export function reportReviewNotice(missing: readonly ReviewRow[], cause: "budget
   const where = (row: ReviewRow) => row.bundle?.lines ? ` (${row.bundle.path.split("/").pop()}:${row.bundle.lines[0]})` : "";
   return missing.length ? `\n\n[보고 검토 · 누락] ${why} 다음 작업 메모는 보고에서 다뤄지지 않았으며, 확인된 결함으로 간주할 수 없습니다.\n`
     + missing.map(row => `- ${row.identifier}${where(row)}: ${row.evidence}`).join("\n") : null;
+}
+
+/** Open review candidates at the head of a partial report: working notes,
+ * newest first, never counted or presented as confirmed defects. Bounded in
+ * rows and characters; what does not fit is counted, not dropped silently. */
+export function reviewCandidateLines(rows: readonly ReviewRow[], maxRows = 12, maxChars = 2400): string[] {
+  if (!rows.length) return [];
+  const shown: string[] = [];
+  let chars = 0;
+  for (const row of [...rows].reverse()) {
+    const where = row.bundle?.path ? ` (${row.bundle.path.split("/").pop()}${row.bundle.lines ? `:${row.bundle.lines[0]}` : ""}`
+      + `${row.bundle.sha ? ` @${row.bundle.sha.slice(0, 8)}` : ""})` : "";
+    const line = `- ${row.identifier}${where} [${row.status === "found" ? "미검증 발견" : "재확인 필요"}]: ${row.evidence.slice(0, 160)}`;
+    if (shown.length >= maxRows || chars + line.length > maxChars) break;
+    shown.push(line); chars += line.length;
+  }
+  const omitted = rows.length - shown.length;
+  return ["미검증 검토 후보 (작업 메모이며 확인된 결함이 아님):", ...shown, ...(omitted > 0 ? [`- 외 ${omitted}개는 길이 제한으로 생략`] : []), ""];
 }

@@ -7,18 +7,40 @@ const os = require("node:os");
 const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 const { sanitizeRawCapabilityText, isEphemeralCapabilityKey } = require("./durable-memory-sanitizer.js");
 const { sourceOutline } = require("./source-outline.js");
+const { listingFacts, listingBody } = require("./directory-listing.js");
 const hash = value => crypto.createHash("sha256").update(typeof value === "string" ? value : JSON.stringify(value)).digest("hex");
 const ID = /^ev_[a-f0-9]{64}$/u;
 const SECRET = /^(?:receipt|approval|approvaltoken|capability|authorization|password|secret|apikey|accesstoken|refreshtoken|nextcursor|cursor)$/iu;
 
+// Body view versions. A record's offsets, projected ranges and read handle
+// pages are all positions in one rendering, so the version is stored with the
+// record and every reader uses that version (revised plan 2026-11-07 §B).
+//   1: entries as JSON (records written before the version field existed).
+//   2: a directory listing is its names only; everything else as in 1.
+const CURRENT_BODY_VIEW_VERSION = 2;
+
 // Both projection and rehydration select the same sanitized representation.
-function evidenceBodyView(payload) {
+function evidenceBodyView(payload, version = CURRENT_BODY_VIEW_VERSION) {
   if (!payload || typeof payload !== "object") return null;
   for (const field of ["content", "text", "body", "code"])
     if (typeof payload[field] === "string") return { field, body: payload[field] };
+  if (version >= 2 && Array.isArray(payload.entries) && payload.entries.every(entry => typeof entry?.type === "string")) {
+    const facts = listingFacts(payload);
+    if (facts) return { field: "entries", body: listingBody(facts) };
+  }
   for (const field of ["items", "rows", "entries", "matches"])
     if (Array.isArray(payload[field])) return { field, body: JSON.stringify(payload[field]) };
   return null;
+}
+
+/** The body view a stored record was projected and is paged with. A record
+ * without the field predates versioning and keeps rendering 1. */
+function recordBodyViewVersion(record) {
+  return Number.isSafeInteger(record?.bodyViewVersion) ? record.bodyViewVersion : 1;
+}
+function recordBodyView(record, payload) {
+  const value = payload !== undefined ? payload : require("./compaction-tool-memory.js").decodeToolResultRecord(record.body).value;
+  return evidenceBodyView(value, recordBodyViewVersion(record));
 }
 
 // Line numbers are source-file lines: a body archived from a range read that
@@ -75,6 +97,8 @@ function evidenceSemanticFacts(payload) {
     "matchCount", "matchMetadataOmitted", "readBytes", "offsetBytes", "nextOffsetBytes", "size",
     "rangeUnit", "truncated", "requestedEndLine", "nextStartLine", "representation", "symbol",
     "rangeComplete", "requestedRangeComplete", "moreLinesInFile",
+    // A directory listing page: which page this is and whether more of the directory exists.
+    "offset", "nextOffset", "totalEntries", "omittedByPathPolicy",
     "candidateCount", "candidateLines", "selection", "ambiguity", "signatureVerification", "absenceProof",
     // Projection and later historical indexes must retain the validator's
     // proof boundary even after its raw excerpt has been discarded.
@@ -698,7 +722,7 @@ class EvidenceArchive {
       const existing = this.load(id);
       if (existing.ok) { this.setPins(new Set([...this.pins, ...(lifecycle.liveRefs || []), id])); return existing; }
       const record = { schemaVersion: 1, scope: this.scope, evidenceId: id,
-        lineage: this.lineage,
+        lineage: this.lineage, bodyViewVersion: CURRENT_BODY_VIEW_VERSION,
         createdAt: this.now(), sourceHash: hash(body), archivedBodyHash: hash(sanitized),
         redacted: sanitized !== body, sourceChars: body.length,
         archivedRanges: [[0, sanitized.length]], rangeUnit: "utf16_code_units",
@@ -752,7 +776,7 @@ class EvidenceArchive {
     if (view === "body") {
       const decoded = require("./compaction-tool-memory.js").decodeToolResultRecord(r.body);
       decodedValue = decoded.value;
-      selected = evidenceBodyView(decoded.value);
+      selected = recordBodyView(r, decoded.value);
       bodyFacts = evidenceSemanticFacts(decoded.value);
       if (!selected) return { ok: false, errorCode: "body_view_unavailable", retryView: "envelope", evidenceId: id, version };
     }
@@ -810,7 +834,7 @@ class EvidenceArchive {
       sourceTotal: sourceFacts.total,
       redacted: r.redacted, currentFile: false, grantsMutation: false,
       rangeUnit: r.rangeUnit, representation: selected ? "sanitized_body" : "sanitized_archived_tool_envelope",
-      ...(selected ? { viewVersion: 1, bodyField: selected.field, readHandle: this.readHandleFor(r), sourceFacts } : {}),
+      ...(selected ? { viewVersion: recordBodyViewVersion(r), bodyField: selected.field, readHandle: this.readHandleFor(r), sourceFacts } : {}),
       ...conversationOrigin(r, this.lineage),
       totalChars: body.length, availableRange: [0, body.length], responseBudgetChars: maxChars };
     const totalBudget = maxChars;
@@ -870,4 +894,4 @@ class EvidenceArchive {
   }
 }
 
-module.exports = { EvidenceArchive, evidenceBodyView, evidenceSemanticFacts, hash, redact, safeDirectory, readFile, atomicWrite };
+module.exports = { EvidenceArchive, evidenceBodyView, recordBodyView, recordBodyViewVersion, CURRENT_BODY_VIEW_VERSION, evidenceSemanticFacts, hash, redact, safeDirectory, readFile, atomicWrite };

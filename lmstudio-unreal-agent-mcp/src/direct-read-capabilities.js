@@ -72,10 +72,13 @@ function createReadCapabilities(context) {
       ...(cutByBudget ? { omissionReason: "byte_budget" } : {}) };
   }
 
-  // The same read, continued: identity and budget kept, receipt dropped.
-  function continuationArgs(args, position) {
-    const { repeatReceipt: _receipt, project: _project, ...same } = args;
-    return { ...same, ...position };
+  // The same read, continued: identity kept, receipt dropped. A successful
+  // page's hint leaves the budget to the caller: copying a budget that just
+  // cut the page told the next read to be cut the same way. A failed
+  // request keeps it beside its retry minimum, which states what must change.
+  function continuationArgs(args, position, { keepBudget = false } = {}) {
+    const { repeatReceipt: _receipt, project: _project, byteBudget, ...same } = args;
+    return { ...same, ...(keepBudget && byteBudget !== undefined ? { byteBudget } : {}), ...position };
   }
 
   async function listDirectory(args) {
@@ -268,7 +271,7 @@ function createReadCapabilities(context) {
       : fitCount(maximumEnd - start + 1, count => makePayload(start + Math.max(1, count) - 1), args.byteBudget)?.payload;
     if (!payload) {
       const budgetError = responseBudgetFailure(makePayload(start), args, { tool: "read_file_range",
-        args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: start, endLine: requestedEnd })) });
+        args: projectScopedSuggestionArgs(args, continuationArgs(args, { startLine: start, endLine: requestedEnd }, { keepBudget: true })) });
       if (budgetError) return budgetError;
       // Count original newline bytes, including CRLF, for the byte reader.
       const prefix = read.content.match(/[^\n]*\n/g)?.slice(0, start - 1).join("") || "";
