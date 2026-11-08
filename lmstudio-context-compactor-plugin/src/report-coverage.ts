@@ -8,7 +8,8 @@ export const REPORT_REVIEW_OBJECTIVES: ReadonlySet<ObjectiveKind> = new Set(["re
 const CONCLUSION_HEADING = /^\s{0,3}#{1,6}\s*.*(?:결론|요약|종합|총평|conclusion|summary)/iu;
 // A verdict that nothing (or nothing severe) is wrong. "P0/P1 없음" is a
 // severity-limited verdict and is named as such in the notice.
-const CLEAN_VERDICT = /(?:결함|문제|이상|이슈)\s*(?:은|이|가|는)?\s*(?:발견되지\s*않|없)|\bno\s+(?:defects?|issues?|problems?)\s+(?:were\s+)?found\b/iu;
+// "문제없이" (without trouble) describes how something ran, not a verdict.
+const CLEAN_VERDICT = /(?:결함|문제|이상|이슈)\s*(?:은|이|가|는)?\s*(?:발견되지\s*않|없(?!이))|\bno\s+(?:defects?|issues?|problems?)\s+(?:were\s+)?found\b/iu;
 const SEVERITY_LIMITED = /P0\s*\/\s*P1\s*(?:결함|문제)?\s*(?:은|이|가|는)?\s*없/iu;
 // The same sentence already limits the verdict to what was read.
 const SCOPED = /(?:확인한|읽은|검토한|반환된|열람한)\s*(?:범위|파일|구현)|미확인\s*범위|\bwithin\s+the\s+(?:read|reviewed|returned)\b|\bof\s+the\s+files\s+read\b/iu;
@@ -30,10 +31,13 @@ function conclusionLines(answer: string): string[] {
   return lines.length ? lines : tail.slice(-10);
 }
 
-/** Whether the answer already names the unread scope next to an unverified marker. */
+/** Whether the answer already states the unread scope: lines with an
+ * unverified marker that together name the unread files, or at least five of
+ * them when there are more. Naming one of many does not scope the verdict. */
 function namesUnreadScope(answer: string, unread: readonly string[]) {
-  return answer.split(/\r?\n/u).some(line => /미확인|미검증|unverified|not\s+read|읽지\s*않/iu.test(line)
-    && unread.some(path => line.includes(path.split("/").pop()!)));
+  const marked = answer.split(/\r?\n/u).filter(line => /미확인|미검증|unverified|not\s+read|읽지\s*않/iu.test(line)).join("\n");
+  const named = unread.filter(path => marked.includes(path.split("/").pop()!)).length;
+  return named > 0 && named >= Math.min(unread.length, 5);
 }
 
 /** Advisory: a clean verdict while this execution's listed sources were not

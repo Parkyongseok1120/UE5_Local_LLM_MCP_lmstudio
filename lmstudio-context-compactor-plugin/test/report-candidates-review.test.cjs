@@ -142,3 +142,19 @@ test("with the review switched off a forced final report is not reopened", async
   assert.equal(finals.length, 1);
   assert.equal(ctl.debugValues.filter(event => event.event === "report_review_scheduled").length, 0);
 });
+
+test("review fixes: wording, partial naming and bounded audits", async () => {
+  const listed = inventory([["A.cpp", "unread"], ["B.cpp", "unread"], ["C.cpp", "unread"], ["D.cpp", "unread"], ["E.cpp", "unread"], ["F.cpp", "unread"]]);
+  assert.equal(cleanVerdictScopeGap("## 결론\n빌드는 문제없이 통과했고 P1 두 건을 고쳐야 합니다.", listed), null,
+    "\"문제없이\" describes how something ran, not a verdict");
+  const report = "## 결론\n결함 없음.";
+  assert.ok(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp`, listed), "naming one of six unread files does not scope the verdict");
+  assert.equal(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp, B.cpp, C.cpp, D.cpp, E.cpp 외 1개`, listed), null);
+  // A bounded audit keeps its one final attempt; the omission goes to the terminal notice.
+  const { finals, model } = forcedModel(["No major issue was found."]);
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Review the damage implementation." }]), model,
+    { maxResearchRounds: 1, toolStagnationAction: "off", reportReviewMode: "on", auditCompletionMode: "bounded", auditResearchRounds: 1 }, [read]);
+  await handlePredictionLoop(ctl);
+  assert.equal(finals.length, 1);
+  assert.equal(ctl.debugValues.filter(event => event.event === "report_review_scheduled").length, 0);
+});

@@ -147,3 +147,24 @@ test("a listing page keeps its paging in the projection's source facts", () => {
   assert.equal(view.sourceFacts.nextOffset, 400);
   assert.equal(view.sourceFacts.totalEntries, 650);
 });
+
+test("through the evidence manager, a listed file read in full is complete and the rest unread", () => {
+  const { EvidenceManager } = require("../dist/evidence-manager");
+  const { tools, pair } = require("./helpers/v4.cjs");
+  const dir = { ok: true, path: "project://Source/Fixture/Public", project: "Fixture.uproject", canonicalProject: "Fixture.uproject",
+    entries: [{ name: "Character.h", type: "file", size: 40, modifiedAt: "2026-10-27T00:00:00Z" },
+      { name: "Weapon.h", type: "file", size: 40, modifiedAt: "2026-10-27T00:00:00Z" }],
+    offset: 0, nextOffset: null, totalEntries: 2, truncated: false };
+  const em = new EvidenceManager(null, tools);
+  em.recordReturnedSources(pair("list_directory", { path: dir.path, project: dir.project }, dir), "exec-A");
+  const path = `${dir.path}/Character.h`;
+  // The production order of one round: record returned sources, then screen reads into the ledger.
+  const read = pair("read_file", { path, project: dir.project }, { ok: true, path, canonicalProject: dir.project,
+    sha256: "a".repeat(64), startLine: 1, endLine: 2, totalLines: 2, content: "1\tclass A;\n2\tclass B;" });
+  em.recordReturnedSources(read, "exec-A");
+  em.screenReturnedReads(read, 1);
+  const listed = em.ledger.returnedSources("exec-A").listed;
+  const state = Object.fromEntries(listed.files.map(file => [file.path.split("/").pop(), file.coverage]));
+  assert.equal(state["Weapon.h"], "unread");
+  assert.equal(state["Character.h"], "complete", "the listing key and the read key are the same source key");
+});

@@ -1322,7 +1322,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           const review=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objectiveKind,reviewRegister);
           reviewMissing=review.missing;
           if (!review.needed) return false;
-          if (finalizing && !deliveryController.grantCorrection("report_review")) { reportReviewBlocked = true; return false; }
+          // A bounded audit keeps its single final attempt: the omissions go to the terminal notice instead.
+          if (finalizing && (boundedAudit || !deliveryController.grantCorrection("report_review"))) { reportReviewBlocked = true; return false; }
           reportReviewAttempted = true;
           runtimeFacts.set("report_review",review.reviewFact);
           runtimeFacts.set("delivered_report",review.deliveredFact);
