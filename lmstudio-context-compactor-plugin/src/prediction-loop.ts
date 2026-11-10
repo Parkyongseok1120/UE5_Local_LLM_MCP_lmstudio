@@ -16,7 +16,7 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, finalDeliveryStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, measurementTelemetry, targetTelemetry, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
@@ -561,28 +561,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           compactionAppliedCount,
           compactionAppliedModes,
           observeOnly: config.observeOnly,
-          exactMeasurement: before.exact,
-          contextLengthSource: before.contextLengthSource,
-          promptMeasurementSource: before.promptMeasurementSource,
-          templatedInputChars: before.templatedInputChars,
-          messageCount: before.messageCount,
-          inputTokens: before.inputTokens,
-          remainingTokens: before.remainingTokens,
-          toolSchemaChars: before.toolSchemaChars,
-          toolSchemaTokens: before.toolSchemaTokens,
-          toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
-          finalExactMeasurement: finalMeasurement.exact,
-          finalContextLengthSource: finalMeasurement.contextLengthSource,
-          finalPromptMeasurementSource: finalMeasurement.promptMeasurementSource,
-          finalTemplatedInputChars: finalMeasurement.templatedInputChars,
-          finalInputTokens: finalMeasurement.inputTokens,
-          finalToolSchemaChars: finalMeasurement.toolSchemaChars,
-          finalToolSchemaTokens: finalMeasurement.toolSchemaTokens,
-          finalToolSchemaTokenMeasurement: finalMeasurement.toolSchemaTokenMeasurement,
-          toolSchemaFingerprint: finalMeasurement.toolSchemaFingerprint,
-          actToolSurfaceFingerprint,
-          toolSurfaceMatchesMeasured: finalMeasurement.toolSchemaFingerprint === actToolSurfaceFingerprint,
-          templatedInputFingerprint: finalMeasurement.templatedInputFingerprint,
+          ...measurementTelemetry(before, finalMeasurement, actToolSurfaceFingerprint),
           outputReserve: roundOutputReserve,
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
@@ -604,11 +583,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           },
           workingContext: workingContext ? {
             mode: config.contextManagementMode,
-            inputTargetTokens: config.workingInputTargetTokens,
-            inputTriggerTokens: config.workingInputTriggerTokens,
+            ...targetTelemetry(config, finalMeasurement, lowWater.telemetry, compacted),
             runtimeDataChars: modelComposition?.runtimeDataChars ?? 0,
-            targetMet: finalMeasurement.exact
-              ? finalMeasurement.inputTokens <= config.workingInputTargetTokens : null,
             mandatoryFloorTokens: mandatoryFloorMeasurement?.exact
               ? mandatoryFloorMeasurement.inputTokens : null,
             mandatoryFloorExceedsTarget,

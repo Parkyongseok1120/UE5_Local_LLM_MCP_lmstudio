@@ -3715,8 +3715,10 @@ test("working input target reports the mandatory floor without deleting the curr
     options.onMessage(ChatMessage.create("assistant", "answer"));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
   });
+  // Fixed scaling makes 2048 the applied target; with auto it is only a minimum
+  // and the judgment follows the scaled target the round actually used.
   const ctl = fakeController(history, model, {
-    contextManagementMode: "deterministic", workingInputTargetTokens: 2048,
+    contextManagementMode: "deterministic", workingInputTargetTokens: 2048, workingInputScaling: "fixed",
     workingInputTriggerTokens: 2048, maxOutputReserve: 1024, safetyMarginTokens: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   });

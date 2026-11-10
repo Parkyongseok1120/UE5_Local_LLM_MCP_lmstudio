@@ -605,6 +605,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
     lowWater, rewriteCauses: [...rewriteCauses], projectionApplied, projectionExhausted, pressure, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
-    mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
-      && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };
+    // Against the target this round applied (see targetTelemetry), not the raw configured number.
+    // Without telemetry no exact floor was measured, so nothing exceeds anything.
+    mandatoryFloorExceedsTarget: lowWater.telemetry?.mandatoryFloorException === true };
 }

@@ -34,6 +34,58 @@ export function runtimeConfigTelemetry(config: DirectConfig) {
   };
 }
 
+/** The before/final measurement fields of a round's direct_context_measurement event. */
+export function measurementTelemetry(before: ContextMeasurement, final: ContextMeasurement, actToolSurfaceFingerprint: string) {
+  return {
+    exactMeasurement: before.exact,
+    contextLengthSource: before.contextLengthSource,
+    promptMeasurementSource: before.promptMeasurementSource,
+    templatedInputChars: before.templatedInputChars,
+    messageCount: before.messageCount,
+    inputTokens: before.inputTokens,
+    remainingTokens: before.remainingTokens,
+    toolSchemaChars: before.toolSchemaChars,
+    toolSchemaTokens: before.toolSchemaTokens,
+    toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
+    finalExactMeasurement: final.exact,
+    finalContextLengthSource: final.contextLengthSource,
+    finalPromptMeasurementSource: final.promptMeasurementSource,
+    finalTemplatedInputChars: final.templatedInputChars,
+    finalInputTokens: final.inputTokens,
+    finalToolSchemaChars: final.toolSchemaChars,
+    finalToolSchemaTokens: final.toolSchemaTokens,
+    finalToolSchemaTokenMeasurement: final.toolSchemaTokenMeasurement,
+    toolSchemaFingerprint: final.toolSchemaFingerprint,
+    actToolSurfaceFingerprint,
+    toolSurfaceMatchesMeasured: final.toolSchemaFingerprint === actToolSurfaceFingerprint,
+    templatedInputFingerprint: final.templatedInputFingerprint,
+  };
+}
+
+/** Whether the final input met the target the round actually applied: the
+ * configured or context-scaled target after the broker's limits, not the raw
+ * configured number (comparing against the raw setting reported a miss on
+ * every scaled run). A miss names its cause: the mandatory input is above the
+ * target, working space was kept above it, optional material was added after
+ * compaction had reached it, or compaction did not reach it. */
+export function targetTelemetry(config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens">,
+  final: ContextMeasurement, lowWater: { configuredLowWaterTokens?: number; effectiveLowWaterTokens?: number;
+    effectiveHighWaterTokens?: number; finalExactInputTokens?: number | null; mandatoryFloorException?: boolean } | null, compacted: boolean) {
+  const applied = lowWater?.configuredLowWaterTokens ?? config.workingInputTargetTokens;
+  const effectiveLow = lowWater?.effectiveLowWaterTokens ?? applied;
+  const targetMet = final.exact ? final.inputTokens <= applied : null;
+  const miss = lowWater?.mandatoryFloorException ? "mandatory_floor"
+    : !compacted ? null
+      : final.inputTokens <= effectiveLow ? "working_space_above_target"
+        : typeof lowWater?.finalExactInputTokens === "number" && lowWater.finalExactInputTokens <= effectiveLow
+          ? "optional_material_after_compaction" : "compaction_target_unmet";
+  return {
+    inputTargetTokens: config.workingInputTargetTokens, inputTriggerTokens: config.workingInputTriggerTokens,
+    appliedTargetTokens: applied, appliedTriggerTokens: lowWater?.effectiveHighWaterTokens ?? config.workingInputTriggerTokens,
+    targetMet, ...(targetMet === false && miss ? { targetMissReason: miss } : {}),
+  };
+}
+
 export function readLedgerTelemetry(screening: ReadScreening) {
   return { readResults: screening.readResults, newDeliveries: screening.newDeliveries,
     redundantRereads: screening.redundant, duplicatedChars: screening.duplicatedChars, archiveRepages: screening.repages,
