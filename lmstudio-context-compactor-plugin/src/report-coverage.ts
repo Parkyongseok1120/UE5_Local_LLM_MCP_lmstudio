@@ -9,8 +9,10 @@ const CONCLUSION_HEADING = /^\s{0,3}#{1,6}\s*.*(?:결론|요약|종합|총평|co
 // A verdict that nothing (or nothing severe) is wrong. "P0/P1 없음" is a
 // severity-limited verdict and is named as such in the notice.
 // "문제없이" (without trouble) describes how something ran, not a verdict.
-const CLEAN_VERDICT = /(?:결함|문제|이상|이슈)\s*(?:은|이|가|는)?\s*(?:발견되지\s*않|없(?!이))|\bno\s+(?:defects?|issues?|problems?)\s+(?:were\s+)?found\b/iu;
-const SEVERITY_LIMITED = /P0\s*\/\s*P1\s*(?:결함|문제)?\s*(?:은|이|가|는)?\s*없/iu;
+// A parenthesized note may sit between the noun and the verdict: "결함(P0/P1)은 발견되지 않았습니다"
+// (conversation 1794306949131).
+const CLEAN_VERDICT = /(?:결함|문제|이상|이슈)\s*(?:\([^)\n]{0,24}\)\s*)?(?:은|이|가|는)?\s*(?:발견되지\s*않|확인된\s*것\s*없|없(?!이))|\bno\s+(?:defects?|issues?|problems?)\s+(?:were\s+)?found\b/iu;
+const SEVERITY_LIMITED = /P0\s*\/\s*P1\s*\)?\s*(?:결함|문제)?\s*(?:은|이|가|는)?\s*(?:없|발견되지\s*않)/iu;
 // The same sentence already limits the verdict to what was read.
 const SCOPED = /(?:확인한|읽은|검토한|반환된|열람한)\s*(?:범위|파일|구현)|미확인\s*범위|\bwithin\s+the\s+(?:read|reviewed|returned)\b|\bof\s+the\s+files\s+read\b/iu;
 const RETRACTED = /철회|아니(?:다|었|라)|not\s+a\s+(?:bug|defect)|withdraw/iu;

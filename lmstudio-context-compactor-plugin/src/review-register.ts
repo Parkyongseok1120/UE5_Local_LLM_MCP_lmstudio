@@ -5,7 +5,7 @@ import { FINDING, REJECTED } from "./review-patterns.js";
 import { type EvidenceBundle, ReviewEvidenceIndex } from "./review-evidence";
 import { mentionsSubject } from "./review-subject";
 const { pathKey } = require("./read-ledger.js") as { pathKey(value: string): string };
-import { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
+import { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE, DELIVERED_REPORT_HEADER, DELIVERED_REPORT_END } from "./review-patterns.js";
 export { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
 export { ReviewEvidenceIndex } from "./review-evidence";
 const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text.js") as {
@@ -204,12 +204,12 @@ export class ReviewRegister {
 }
 
 /** Header of the delivered report a review supplement follows. */
-export const DELIVERED_REPORT_HEADER = "[Delivered report — already shown to the user; write only what follows it]";
+export { DELIVERED_REPORT_HEADER };
 
 export function deliveredReportFact(answer: string): string {
   return `${DELIVERED_REPORT_HEADER}
 ${answer.trim()}
-[End delivered report]`;
+${DELIVERED_REPORT_END}`;
 }
 
 export function reportReviewFact(missing: readonly ReviewRow[], contracts: readonly { factId: string; statement: string }[]): string {

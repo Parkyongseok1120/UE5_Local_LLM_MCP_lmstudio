@@ -148,6 +148,9 @@ test("review fixes: wording, partial naming and bounded audits", async () => {
   assert.equal(cleanVerdictScopeGap("## 결론\n빌드는 문제없이 통과했고 P1 두 건을 고쳐야 합니다.", listed), null,
     "\"문제없이\" describes how something ran, not a verdict");
   const report = "## 결론\n결함 없음.";
+  // Conversation 1794306949131's own wording, with the severity in parentheses.
+  const parenthesized = cleanVerdictScopeGap("**결론**: 코어 아키텍처는 잘 되어 있고 구조적 결함(P0/P1)은 발견되지 않았습니다.", listed);
+  assert.match(parenthesized.message, /P0\/P1 없음 결론/u);
   assert.ok(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp`, listed), "naming one of six unread files does not scope the verdict");
   assert.equal(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp, B.cpp, C.cpp, D.cpp, E.cpp 외 1개`, listed), null);
   // A bounded audit keeps its one final attempt; the omission goes to the terminal notice.
@@ -157,4 +160,37 @@ test("review fixes: wording, partial naming and bounded audits", async () => {
   await handlePredictionLoop(ctl);
   assert.equal(finals.length, 1);
   assert.equal(ctl.debugValues.filter(event => event.event === "report_review_scheduled").length, 0);
+});
+
+// Conversation 1794306949131, round 52: the review round printed tool-call text
+// instead of a supplement. The harness replanned, reopened 38 tools and the
+// model wrote the whole report a second time.
+test("a review round that asks for tools neither reopens research nor adds a partial report", async () => {
+  const surfaces = [];
+  const model = { identifier: "review-raw-intent", async getContextLength() { return 65536; }, applyPromptTemplate: prompt,
+    async countTokens() { return 1000; },
+    async act(chat, toolList, opts) {
+      surfaces.push(toolList.length);
+      if (surfaces.length === 1) return emitRead(opts, 1, "`TakeDamage` bug at Source/Test1.cpp:1; damage is never applied.");
+      opts.onPredictionCompleted({ stats: { stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.create("assistant", surfaces.length === 2
+        ? "## 결론\nThe weapon path is consistent within the files read."
+        : "마지막으로 무기 경로를 확인하겠습니다.\n<tool_call><function=read_file><parameter=path>project://Source/Weapon.cpp</parameter></function></tool_call>"));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Review the damage implementation." }]), model,
+    { toolStagnationAction: "off", reportReviewMode: "on" }, [read]);
+  await handlePredictionLoop(ctl);
+  const count = name => ctl.debugValues.filter(event => event.event === name).length;
+  assert.equal(count("report_review_scheduled"), 1);
+  assert.deepEqual(surfaces, [1, 1, 0], "one read, the report, one tool-free review; nothing after it");
+  assert.equal(count("fresh_tool_planning_retry_scheduled"), 0);
+  assert.equal(count("read_recovery_resumed_original"), 0);
+  assert.equal(count("partial_report_delivery"), 0);
+  assert.equal(ctl.blocks.some(block => /부분 조사 보고/u.test(block.text)), false);
+  const outcome = ctl.debugValues.filter(event => event.event === "execution_outcome").at(-1);
+  assert.equal(outcome.executionOutcome, "completed");
+  assert.equal(outcome.reportCompleted, true);
+  assert.ok(ctl.statuses.some(status => /검토 보완 단계에서는 도구를 쓸 수 없어/u.test(status.state?.text || "")));
+  // The omitted candidate still reaches the user through the terminal notice.
+  assert.ok(ctl.blocks.some(block => /\[보고 검토 · 누락\]/u.test(block.text) && /TakeDamage/u.test(block.text)));
 });

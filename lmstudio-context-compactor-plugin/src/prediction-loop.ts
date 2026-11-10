@@ -980,7 +980,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           if (result === "applied") objective.mutationState = "applied";
           else if (objective.mutationState !== "applied") objective.mutationState = "attempted";
         }
-        const planningAllowed = !reasoningRecoveryRound && !execution.toolsClosed && !(finalizing && execution.finalizationTrigger === "output_recovery");
+        // Report review and continuation are tool-free: raw tool text never reopens research.
+        const planningAllowed = !reasoningRecoveryRound && !execution.toolsClosed && !continuingReport;
         const shouldMeasureRetryCandidate = !boundedAudit && !config.observeOnly && planningAllowed
           && recoveryCoordinator.planningAttempts < 1 && captured.failure === undefined
           && !ctl.abortSignal.aborted && phaseTimeoutSignal?.aborted !== true
@@ -1424,12 +1425,12 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex += 1;
             continue;
           }
-          if (reviewingReport && !visibleTextFromMessages(visibleCaptured.messages).trim()) reportReviewEmpty = true;
+          if (reviewingReport && (rawIntentFinal || !visibleTextFromMessages(visibleCaptured.messages).trim())) reportReviewEmpty = true;
           if (deliveryState === "complete" && !continuingReport && reviewable && scheduleReportReview()) continue;
           if (deliveryState !== "complete") ctl.createStatus({ status: deliveryState === "no_answer" ? "error" : "canceled",
             text: finalDeliveryStatusText({ partialDelivered: Boolean(safePartialReport), reportState: finalDelivery.reportState,
               deliveryState, timedOut: phaseTimedOut, aborted: ctl.abortSignal.aborted, failed: captured.failure !== undefined,
-              continuing: continuingReport }) });
+              continuing: continuingReport, reviewing: reviewingReport }) });
           break;
         }
         if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
