@@ -74,3 +74,4 @@ AGENTS 본문을 상시 주입하지 않지만 새 도구의 스키마 자체에
 - JSON escape 때문에 한 줄이 최대 응답 예산보다 커지는 경우 Unicode code point 기준 조각 페이지를 반환한다. `contentFormat=line_fragment`, `nextStartLine`, `nextStartColumn`, `requestedEndLine`을 사용하며 각 페이지는 동일한 ruleId/version을 요구한다. 기존 줄 단위 응답은 유지한다.
 - 플러그인 전체 1,388개 통과, Unity 140개 통과·5개 제외, Unreal 376개 통과·2개 제외. 새 회귀는 재조회 실패 후 퇴역과 40,000개 따옴표·Unicode 긴 줄의 무손실 복원/전체 JSON 예산을 확인한다.
 - 위 본문의 설치 전 상태·스키마 문자 수는 최초 Stage 2 기록이다. 이번 감사 수정은 별도 로컬 배포 및 설치 기록으로 추적한다. 3단계 이후 기능을 완료했다고 의미하지 않는다.
+- 실제 portable 설치·컴파일 검사에서 config/tool_contract.json 누락을 발견하여 패키지 필수 파일에 포함했다. 기존 소스 빌드 검사로는 확인되지 않았던 배포 의존성이다.

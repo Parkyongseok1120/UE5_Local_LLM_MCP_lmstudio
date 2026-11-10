@@ -333,6 +333,7 @@ REQUIRED_RUNTIME_FILES = (
     "docs/Unity_Validation.md",
     "config/retrieval_profiles.json",
     "config/stable_tool_manifest.json",
+    "config/tool_contract.json",
     "config/unreal_contracts.json",
     "installer/bootstrap_python.ps1",
     "installer/bootstrap_python.sh",
