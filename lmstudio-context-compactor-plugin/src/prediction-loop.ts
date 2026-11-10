@@ -22,6 +22,7 @@ import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
 import { RuntimeFactStore } from "./runtime-fact-store";
+import { sessionBudgetConfig } from "./session-budget";
 import { NotePersistence } from "./note-persistence";
 import { reportReviewObligations } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
@@ -74,7 +75,7 @@ export function createPredictionLoopHandler(
     const cleanupFailures: string[] = [];
     try {
     ctl.guardAbort();
-    const config = readConfig(ctl);
+    let config = readConfig(ctl);
     showDebugInfo = config.showDebugInfo;
     const pulledHistory = await ctl.pullHistory();
     const attachments = config.observeOnly ? { modelHistory: pulledHistory, attachmentHistory: pulledHistory }
@@ -95,6 +96,8 @@ export function createPredictionLoopHandler(
     if (selectedSourceIsThisPlugin(tokenSource)) {
       throw new Error("Select the actual Qwen/LLM in LM Studio. The context compactor is middleware, not a chat model.");
     }
+    // The budget values of config are read only after this point.
+    config = await sessionBudgetConfig(config, tokenSource, value => ctl.debug(value));
 
     let workingDirectory = "";
     try { workingDirectory = ctl.getWorkingDirectory(); } catch { /* No stable chat workspace is available. */ }

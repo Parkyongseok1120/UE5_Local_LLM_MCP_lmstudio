@@ -724,7 +724,9 @@ function shouldCompact(measurement, options = {}) {
   const softRemaining = Math.max(0, Number(options.softRemainingTokens || 6000));
   const fallbackCount = Math.max(4, Number(options.compactAboveMessageCount || 24));
   if (measurement.exact === false && messageCount >= fallbackCount) return true;
-  if (Number.isFinite(remaining)) return remaining <= softRemaining;
+  // Percentage mode has one trigger, the high water share (and whether the
+  // next call fits): the remaining-token threshold is not a second one.
+  if (Number.isFinite(remaining)) return options.contextBudgetMode === "percentage" ? remaining <= 0 : remaining <= softRemaining;
   return messageCount >= fallbackCount;
 }
 

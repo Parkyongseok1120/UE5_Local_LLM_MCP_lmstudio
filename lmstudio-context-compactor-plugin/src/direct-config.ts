@@ -1,5 +1,9 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
-import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS, NUMERIC_FIELDS, REPORT_REVIEW_DEFAULT } from "./config-defaults";
+import { GUIDANCE_DEFAULTS, CONTEXT_DEFAULTS, NUMERIC_FIELDS, PERCENT_FIELDS, CONTEXT_BUDGET_DEFAULT, REPORT_REVIEW_DEFAULT, type PercentField } from "./config-defaults";
+
+const percentField = (key: PercentField, displayName: string, subtitle: string) =>
+  [key, "numeric", { displayName, subtitle, min: PERCENT_FIELDS[key].min, max: PERCENT_FIELDS[key].max, precision: 1 },
+    PERCENT_FIELDS[key].default] as const;
 
 export const directConfigSchematics = createConfigSchematics()
   .field(
@@ -78,6 +82,19 @@ export const directConfigSchematics = createConfigSchematics()
       { value: "fixed", displayName: "Fixed (absolute values)" },
     ],
   }, CONTEXT_DEFAULTS.scaling)
+  .field("contextBudgetMode", "select", {
+    displayName: "Context budget",
+    subtitle: "Legacy uses the token target/trigger and scaling above, and the output reserve and safety margin below. Percentage derives all four from the context length the model is loaded with, using the percentages below; the applied tokens and any adjustment are shown in the debug info (context_budget). Percentage is not combined with the Legacy working context.",
+    options: [
+      { value: "legacy", displayName: "Legacy (token settings)" },
+      { value: "percentage", displayName: "Percentage of loaded context" },
+    ],
+  }, CONTEXT_BUDGET_DEFAULT)
+  .field(...percentField("contextTargetPercent", "Target after compaction (%)", "Percentage mode: full input (system, tool definitions, request, history, results) as a share of the loaded context after a compaction. Mandatory input is never removed to meet it."))
+  .field(...percentField("contextTriggerPercent", "Compaction trigger (%)", "Percentage mode: start compaction above this share of the loaded context. Must be above the target; it is lowered when the next tool result would not fit."))
+  .field(...percentField("contextOutputPercent", "Response share (%)", "Percentage mode: the next response's token cap (reasoning, text and tool calls) as a share of the loaded context. Never below 4096 tokens or a quarter of a small context, never above the response maximum."))
+  .field(...percentField("contextSafetyPercent", "Safety margin (%)", "Percentage mode: tokens left unused as a share of the loaded context; at least 512."))
+  .field("contextOutputMaxTokens", "numeric", { displayName: "Response maximum", subtitle: "Percentage mode: upper limit of the response token cap, so a very large context does not produce an unbounded response." }, NUMERIC_FIELDS.contextOutputMaxTokens.default)
   .field("toolResultProjectionChars", "numeric", { displayName: "Archived result excerpt", subtitle: "Maximum archived observation excerpt exposed in a model-facing tool-result projection." }, NUMERIC_FIELDS.toolResultProjectionChars.default)
   .field("semanticHandoff", "boolean", { displayName: "Semantic handoff (experimental)", subtitle: "Hybrid only. After an accepted compaction, make one tool-free local summary call. Off by default: recorded runs never accepted a summary and each attempt blocked until its timeout. Deterministic checkpoints keep the prior answer and decisions without it." }, CONTEXT_DEFAULTS.semanticHandoff)
   .field("semanticSummaryMaxTokens", "numeric", { displayName: "Semantic handoff output", subtitle: "Maximum output tokens for the single tool-free local summary call per accepted compaction." }, NUMERIC_FIELDS.semanticSummaryMaxTokens.default)

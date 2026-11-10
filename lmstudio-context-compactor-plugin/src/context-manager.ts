@@ -187,9 +187,10 @@ export function targetRemainingForInput(measurement: ContextMeasurement, config:
 
 export function shouldCompactContext(measurement: ContextMeasurement, config: DirectConfig, hasReadTools = false): boolean {
   if (config.observeOnly) return false;
-  return core.shouldCompact(measurement, config)
-    || (config.contextManagementMode !== "legacy" && measurement.exact
-      && measurement.inputTokens > new BudgetBroker(config).watermarks(measurement, 0, hasReadTools).effectiveHighWaterTokens);
+  if (core.shouldCompact(measurement, config)) return true;
+  if (config.contextManagementMode === "legacy" || !measurement.exact) return false;
+  const water = new BudgetBroker(config).watermarks(measurement, 0, hasReadTools);
+  return measurement.inputTokens > water.effectiveHighWaterTokens || config.contextBudgetMode === "percentage" && !water.nextActionFit;
 }
 
 export async function selectSoftCompaction(

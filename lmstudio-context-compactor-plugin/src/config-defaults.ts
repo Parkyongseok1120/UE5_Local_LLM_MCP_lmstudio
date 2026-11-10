@@ -18,6 +18,7 @@ export const NUMERIC_FIELDS = Object.freeze({
   softRemainingTokens: field(6000, 0, 1_000_000),
   hardRemainingTokens: field(3000, 0, 1_000_000),
   maxOutputReserve: field(8192, 256, 131072),
+  contextOutputMaxTokens: field(16384, 256, 131072),
   outputRecoveryMaxTokens: field(0, 0, 131072),
   // Retained only for reading old saved configurations; report continuation
   // follows ordinary generation cancellation and does not use this value.
@@ -39,6 +40,20 @@ export const NUMERIC_FIELDS = Object.freeze({
   auditFinalMaxTokens: field(4096, 256, 32768),
 });
 export type NumericField = keyof typeof NUMERIC_FIELDS;
+/** Percentage budget: shares of the loaded context length C. One source for
+ * the schema defaults and the runtime bounds. Initial values are proposals to
+ * be tuned by measurement: at C=84,224 they land within about 1.4K tokens of
+ * what "auto" scaling applied in the recorded runs. */
+export const PERCENT_FIELDS = Object.freeze({
+  contextTargetPercent: field(55, 10, 90),
+  contextTriggerPercent: field(75, 20, 95),
+  contextOutputPercent: field(10, 1, 50),
+  contextSafetyPercent: field(2, 0.5, 20),
+});
+export type PercentField = keyof typeof PERCENT_FIELDS;
+/** "legacy" keeps the absolute target/trigger with their Auto/Fixed scaling, so
+ * installing a new build changes nothing until the user selects percentage. */
+export const CONTEXT_BUDGET_DEFAULT = "legacy";
 export const { SUMMARY_POLICY } = require("./semantic-handoff-policy.js") as {
   SUMMARY_POLICY: Readonly<{ maxCalls: number; maxElapsedMs: number; failureCooldownRounds: number; retainedEvents: number }>
 };

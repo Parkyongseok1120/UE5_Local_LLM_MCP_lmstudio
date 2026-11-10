@@ -31,6 +31,7 @@ export function runtimeConfigTelemetry(config: DirectConfig) {
     configuredMaxOutputReserve: config.maxOutputReserve,
     configuredSafetyMarginTokens: config.safetyMarginTokens,
     configuredFallbackContextLength: config.assumedContextLength,
+    contextBudgetMode: config.contextBudgetMode, contextBudgetRequested: config.contextBudgetRequested,
   };
 }
 
@@ -68,7 +69,7 @@ export function measurementTelemetry(before: ContextMeasurement, final: ContextM
  * every scaled run). A miss names its cause: the mandatory input is above the
  * target, working space was kept above it, optional material was added after
  * compaction had reached it, or compaction did not reach it. */
-export function targetTelemetry(config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens">,
+export function targetTelemetry(config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens"> & { sessionContextLength?: number },
   final: ContextMeasurement, lowWater: { configuredLowWaterTokens?: number; effectiveLowWaterTokens?: number;
     effectiveHighWaterTokens?: number; finalExactInputTokens?: number | null; mandatoryFloorException?: boolean } | null, compacted: boolean) {
   const applied = lowWater?.configuredLowWaterTokens ?? config.workingInputTargetTokens;
@@ -83,6 +84,10 @@ export function targetTelemetry(config: Pick<DirectConfig, "workingInputTargetTo
     inputTargetTokens: config.workingInputTargetTokens, inputTriggerTokens: config.workingInputTriggerTokens,
     appliedTargetTokens: applied, appliedTriggerTokens: lowWater?.effectiveHighWaterTokens ?? config.workingInputTriggerTokens,
     targetMet, ...(targetMet === false && miss ? { targetMissReason: miss } : {}),
+    // The session budget was resolved for another context length (a model reload).
+    // Watermarks already follow the measured length; the output cap is re-resolved next execution.
+    ...(config.sessionContextLength && final.contextLength && final.contextLength !== config.sessionContextLength
+      ? { contextLengthChanged: { resolved: config.sessionContextLength, measured: final.contextLength } } : {}),
   };
 }
 

@@ -136,6 +136,16 @@ export type DirectConfig = {
   workingInputTargetTokens: number;
   workingInputTriggerTokens: number;
   workingInputScaling: WorkingInputScaling;
+  /** The mode in effect, and what the user selected (percentage is not combined with the legacy working context). */
+  contextBudgetMode: ContextBudgetMode;
+  contextBudgetRequested: "percentage" | "legacy";
+  contextTargetPercent: number;
+  contextTriggerPercent: number;
+  contextOutputPercent: number;
+  contextSafetyPercent: number;
+  contextOutputMaxTokens: number;
+  /** The context length this execution's budget was resolved from; absent before resolution. */
+  sessionContextLength?: number;
   toolResultProjectionChars: number;
   semanticHandoff: boolean;
   semanticSummaryMaxTokens: number;
@@ -189,6 +199,10 @@ export const DEFAULT_CONTEXT_MANAGEMENT_MODE: ContextManagementMode = CONTEXT_DE
 /** "auto" scales the configured trigger/target up with the loaded context;
  * "fixed" keeps the configured absolute values (pre-1.4.0-RC4 behavior). */
 export type WorkingInputScaling = "auto" | "fixed";
+/** How the context budget is derived. percentage: shares of the loaded context
+ * length. legacy_auto / absolute: the configured token target and trigger,
+ * scaled with the context or used as they are (the earlier Auto / Fixed). */
+export type ContextBudgetMode = "percentage" | "legacy_auto" | "absolute";
 
 // Budget estimates. Every value below is an admission allowance only; the next
 // fully templated exact measurement remains the sole authority for dispatch.
