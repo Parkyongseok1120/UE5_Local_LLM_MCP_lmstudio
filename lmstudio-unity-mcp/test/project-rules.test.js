@@ -5,7 +5,7 @@ const { execFileSync } = require("node:child_process");
 const { createWorkspaceCapabilities } = require("../../shared-tool-core/workspace");
 const { createRuntime } = require("../src/server");
 function fixture(t, git = true) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-project-rules-")));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "harness-project-rules-")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const workspace = path.join(root, "Game");
   for (const dir of ["Assets/UI", "Assets/Other", "Packages", "ProjectSettings"]) fs.mkdirSync(path.join(workspace, dir), { recursive: true });

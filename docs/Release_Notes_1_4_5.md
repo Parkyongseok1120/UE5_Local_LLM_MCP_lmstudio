@@ -45,4 +45,4 @@
 - 보고 전달 성공은 감사 목표 충족이나 의미적 정확성의 증명이 아닙니다. 실제 모델 검토 보완이 새 본문을 전달하지 못한 사례도 기록했습니다.
 - 동결은 알려진 한계의 해결이나 모든 환경의 설치·게임 실행을 보증하지 않습니다.
 
-상세 구현과 실측 범위는 [보고 품질 수정 기록](Harness_Report_Quality_Implementation_20261111.md)을 참고하세요.
+상세 구현과 실측 범위는 [보고 품질 수정 기록](https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio/blob/v1.4.5/docs/Harness_Report_Quality_Implementation_20261111.md)을 참고하세요.
