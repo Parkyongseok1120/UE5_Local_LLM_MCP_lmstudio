@@ -56,3 +56,18 @@ for(const size of [1,7,1000])test(`a rewritten report with an inserted section s
  const different=REPORT.slice(0,REPORT.indexOf('## P3'))+'\n완전히 다른 결론: 이 보고서는 범위를 벗어났습니다.\n'.repeat(3);
  assert.equal(run(REPORT,different,size).output,different);
 });
+
+// Conversation 1794306949131, round 52: the review copied the whole data block
+// the report was shown in (header, body without blank lines, end line), then
+// went on. The frame lines and the echo are hidden; only what follows shows.
+const { DELIVERED_REPORT_HEADER, DELIVERED_REPORT_END } = require('../dist/review-patterns.js');
+for(const size of [1,7,1000])test(`an echoed delivered-report frame is hidden with its header and end line (fragments=${size})`,()=>{
+ const body=REPORT.split('\n').filter(line=>line.trim()).join('\n');
+ const framed=`${DELIVERED_REPORT_HEADER}\n${body}\n${DELIVERED_REPORT_END}\n`;
+ assert.equal(run(REPORT,framed,size).output,'');
+ const out=run(REPORT,framed+'## 검토 보완\n- 추가 확인 없음.',size);
+ assert.equal(out.output.trim(),'## 검토 보완\n- 추가 확인 없음.');assert.equal(out.suppressed,true);
+ assert.doesNotMatch(out.output,/Delivered report|End delivered report/);
+ // Ordinary text that merely starts with a bracket is untouched.
+ assert.equal(run(REPORT,'[참고] 다른 답변입니다.',size).output,'[참고] 다른 답변입니다.');
+});

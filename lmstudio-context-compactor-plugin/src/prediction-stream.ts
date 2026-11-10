@@ -6,6 +6,7 @@ import type {
 import { InternalDataOutputFilter } from "./internal-data-output";
 import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol, hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { ChatMessage } from "@lmstudio/sdk";
+import { DELIVERED_REPORT_HEADER as FRAME_OPEN, DELIVERED_REPORT_END as FRAME_CLOSE } from "./review-patterns.js";
 const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 
 type SplitVisibleAnswer = (text: string) => {
@@ -84,7 +85,10 @@ function sameLine(a: string, b: string): boolean {
 }
 
 /** A supplement may echo a delivered answer before producing its actual delta.
- * Hold only a possible prefix; unrelated replies and short partial matches pass. */
+ * Hold only a possible prefix; unrelated replies and short partial matches pass.
+ * The echo can be the whole data block the report was shown in, its header and
+ * end line included (conversation 1794306949131, round 52): both lines are
+ * stripped, so the block is recognized as the echo it is. */
 export class DeliveredPrefixEchoFilter {
   private buffer = "";
   private passthrough = false;
@@ -100,9 +104,23 @@ export class DeliveredPrefixEchoFilter {
     this.maxEdits = this.prefix.length >= ECHO_EDIT_MIN_PREFIX ? Math.floor(this.prefix.length * ECHO_EDIT_SHARE) : 0;
   }
   private normalize(value: string) { return value.replace(/\s+/gu, " ").trim(); }
+  /** null until the start of the output shows whether it copies the frame header. */
+  private framed: boolean | null = null;
+  private stripFrameHeader(final: boolean): boolean {
+    if (this.framed !== null) return true;
+    const head = this.buffer.trimStart();
+    if (!final && head.length < FRAME_OPEN.length && FRAME_OPEN.startsWith(head)) return false;
+    this.framed = head.startsWith(FRAME_OPEN);
+    if (this.framed) {
+      const cut = this.buffer.length - head.length + FRAME_OPEN.length;
+      this.duplicateSuppressed = true; this.suppressedChars += cut; this.buffer = this.buffer.slice(cut);
+    }
+    return true;
+  }
   push(text: string): string {
     if (this.passthrough || !this.prefix) return this.release(text);
     this.buffer += text;
+    if (!this.stripFrameHeader(false)) return "";
     if (this.rewriting) return "";
     const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, false);
     if (aligned.state === "pending" || aligned.state === "consistent") return "";
@@ -118,7 +136,7 @@ export class DeliveredPrefixEchoFilter {
   /** A held rewrite: its new lines when it still contains most of the report, else all of it. */
   private rewriteDelta(): string {
     const lines = this.buffer.split(/\r?\n/u);
-    const known = (line: string) => this.deliveredLines.some(delivered => sameLine(delivered, line));
+    const known = (line: string) => line === FRAME_CLOSE || this.deliveredLines.some(delivered => sameLine(delivered, line));
     const keys = lines.map(lineKey);
     const covered = this.deliveredLines.filter(delivered => keys.some(key => key && sameLine(delivered, key))).length;
     if (covered < this.deliveredLines.length * REWRITE_MIN_COVERAGE) return this.drain();
@@ -147,24 +165,39 @@ export class DeliveredPrefixEchoFilter {
     if (cut > 0 && /[\uDC00-\uDFFF]/u.test(this.buffer[cut] || "") && /[\uD800-\uDBFF]/u.test(this.buffer[cut - 1])) cut--;
     this.duplicateSuppressed = true; this.suppressedChars += cut;
     this.buffer = this.buffer.slice(cut);
-    this.heldSpace = true;
+    this.heldSpace = true; this.closing = true;
     return this.drain();
   }
   // Whitespace right after a suppressed echo is shown only with the delta it
   // precedes; alone it would deliver an empty supplement.
   private heldSpace = false;
   private space = "";
-  private release(text: string): string {
+  /** Right after a suppressed echo the frame's end line may follow; it is dropped too. */
+  private closing = false;
+  private release(text: string, final = false): string {
     if (!this.heldSpace) return text;
-    if (/^\s*$/u.test(text)) { this.space += text; return ""; }
-    this.heldSpace = false; const out = this.space + text; this.space = ""; return out;
+    this.space += text;
+    let body = this.space.trimStart();
+    if (this.closing && body) {
+      if (!final && body.length < FRAME_CLOSE.length && FRAME_CLOSE.startsWith(body)) return "";
+      this.closing = false;
+      if (body.startsWith(FRAME_CLOSE)) {
+        this.suppressedChars += this.space.length - body.length + FRAME_CLOSE.length;
+        this.space = body = body.slice(FRAME_CLOSE.length);
+        if (!body.trim()) return "";
+      }
+    }
+    if (!body) return "";
+    this.heldSpace = false; const out = this.space; this.space = ""; return out;
   }
   finish(): string {
-    if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain()); }
+    if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain(), true); }
     this.passthrough = true;
+    this.stripFrameHeader(true);
     if (this.rewriting) return this.rewriteDelta();
     const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, true);
-    return aligned.j >= this.prefix.length * 0.9 ? this.cutEcho(aligned.i) : this.drain();
+    const out = aligned.j >= this.prefix.length * 0.9 ? this.cutEcho(aligned.i) : this.drain();
+    return out + this.release("", true);
   }
   private drain() { const text = this.buffer; this.buffer = ""; return this.release(text); }
 }

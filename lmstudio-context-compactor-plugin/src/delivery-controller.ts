@@ -16,7 +16,10 @@ export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시�
 export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
 /** The status line of a final attempt that did not complete, most specific cause first. */
 export function finalDeliveryStatusText(state: { partialDelivered: boolean; reportState: string; deliveryState: string;
-  timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean }): string {
+  timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean; reviewing?: boolean }): string {
+  // A review round that asked for tools instead of writing its supplement: the report itself stands.
+  if (state.reviewing && state.reportState === "unresolved_tool_intent")
+    return "검토 보완 단계에서는 도구를 쓸 수 없어 보완문을 만들지 못했습니다. 앞서 전달한 보고서는 그대로입니다.";
   if (state.partialDelivered) return "조사 복구가 완료되지 않아 근거가 있는 부분 보고만 전달했습니다. 전체 완료로 처리하지 않았습니다.";
   if (state.reportState === "unresolved_tool_intent") return "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다.";
   if (state.deliveryState === "truncated") return "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다.";
@@ -72,7 +75,9 @@ export class DeliveryController {
     // (conversation 1792929236226: reportDelivered:false after a complete report).
     // A budget-blocked follow-up never ran and keeps its own reason.
     const blocked = /context_budget/u.test(outcome.reason);
-    const empty = !blocked && (outcome.deliveryState === "no_answer" || outcome.reason === "empty_visible_output");
+    // A review that only asked for tools wrote no supplement: the same as an empty one.
+    const empty = !blocked && (outcome.deliveryState === "no_answer" || outcome.reason === "empty_visible_output"
+      || this.supplement.kind === "report_review" && outcome.reportState === "unresolved_tool_intent");
     const stopped = ["timed_out", "canceled"].includes(outcome.executionOutcome);
     const supplement = { kind: this.supplement.kind,
       state: stopped ? "stopped" : blocked ? "blocked" : empty ? "empty" : "delivered" } as const;
@@ -159,7 +164,9 @@ export class DeliveryController {
       : classified;
     this.observe(captured, timedOut);
     this.observation = { ...this.observation, delivery, objectiveSatisfied };
-    const needsPartial = delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
+    // A failed review of a complete report adds no partial report after it.
+    const reviewOfCompleteReport = this.supplement?.kind === "report_review" && this.supplement.reportComplete;
+    const needsPartial = !reviewOfCompleteReport && delivery.deliveryState !== "complete" && (delivery.reportState === "unresolved_tool_intent"
       || ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence", "research_repetition",
         "context_working_set_exhausted", "mutation_blocked_by_context"].includes(trigger || ""));
     const partial = needsPartial ? this.partialReport(history,
