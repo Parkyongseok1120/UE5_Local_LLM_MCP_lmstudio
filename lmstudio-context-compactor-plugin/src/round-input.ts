@@ -339,8 +339,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   }
   // A round that rewrites its adopted input near high water reaches the
   // low-water target in the same rewrite (plan B2; see deepenLowWater).
+  // Guidance that was admitted before comes back after a compaction.
+  const retainedGuidance = options.guidanceRetention?.kept ?? options.guidanceRetention?.dropped;
+  const reservedOptionalTokens = Math.min(config.designGuidanceMaxTokens, Math.max(0, retainedGuidance?.tokens ?? 0));
   let lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
     force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
@@ -369,7 +372,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // contract; the summary completion itself never authorizes dispatch.
     if (activeNote !== priorNote) {
       lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
         force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
       assembledInput = lowWater.assembled; acceptLow();
     }

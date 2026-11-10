@@ -142,3 +142,87 @@ test("a percentage execution caps the model call with the resolved output reserv
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.outputReserve, 4096);
 });
+
+// D5: what returns after a compaction is counted before the compaction.
+const { WorkingContext } = require("../src/working-context.js");
+const { ContextManager, createInputAssembler } = require("../dist/context-manager");
+const { EvidenceManager } = require("../dist/evidence-manager");
+const { prepareRoundInput } = require("../dist/round-input");
+const charSource = contextLength => ({ async getContextLength() { return contextLength; },
+  async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens(text) { return Math.ceil(String(text).length / 4); } });
+function prose(tokens, parts) {
+  const history = Chat.from([{ role: "user", content: "Review the replication contracts" }]);
+  for (let i = 0; i < parts; i++)
+    history.append(ChatMessage.from({ role: "assistant", content: `progress ${i} ${"p".repeat(Math.floor(tokens * 4 / parts))}` }));
+  return history;
+}
+async function round(config, history, guidanceRetention) {
+  const events = [];
+  const store = new WorkingContext({ conversation: "percent", lineage: `percent-${Math.random()}`, repository: "fixture", workspace: "fixture" });
+  const tools = [{ name: "read_file", pluginIdentifier: "mcp/unreal-agent" }];
+  try {
+    const result = await prepareRoundInput({
+      ctl: { debug(event) { events.push(event); }, guardAbort() {} }, config, tokenSource: charSource(32768),
+      contextManager: new ContextManager(config, new BudgetBroker(config)),
+      evidenceManager: new EvidenceManager(store, tools), workingContext: store,
+      workingHistory: history, visibleHistory: history, preProjectionHistory: history, postProjectionHistory: history,
+      roundTools: tools, modelTools: tools, roundScopeInstructions: [], scopeInstructions: [],
+      roundOutputReserve: config.maxOutputReserve, activeNote: null, noteEnabled: false, historicalAvailabilityLedger: [],
+      semanticSummaryCooldownUntilRound: 99, objectiveFingerprint: "percent", finalizing: false, boundedAudit: true,
+      researchRecoveryEpisodeStarted: false, finalizationTrigger: null, projectionApplied: false, executionId: "percent",
+      modelInputId: "percent:input-1", roundIndex: 3, guidanceRetention });
+    return { result, low: events.filter(event => event.event === "context_low_water").at(-1),
+      guidance: events.find(event => event.event === "design_guidance_input") };
+  } finally { store.close(); }
+}
+const kept = tokens => ({ kept: { ids: ["fixture"], instruction: `[Optional design reference]\n${"g".repeat(2500 * 4)}`,
+  selectionScope: "unscoped", ...(tokens === undefined ? {} : { tokens }) } });
+const guided = extra => {
+  const base = configOf({ contextManagementMode: "hybrid", showDebugInfo: true, designGuidanceMode: "core", designGuidanceMaxTokens: 6000,
+    toolResultProjectionChars: 512, projectEngine: "unreal", ...extra });
+  return applySessionBudget(base, resolveSessionBudget(base, 32768, "model"));
+};
+
+test("percentage compaction leaves room for the guidance that returns, so the round ends at the target", async () => {
+  const config = guided({ contextBudgetMode: "percentage" });
+  const w = new BudgetBroker(config).watermarks({ contextLength: 32768, outputReserve: config.maxOutputReserve, inputTokens: 0 }, 0, true, 2048);
+  const reserved = await round(config, prose(w.effectiveHighWaterTokens + 2000, 40), kept(2500));
+  assert.equal(reserved.result.kind, "ready");
+  assert.equal(reserved.low.reservedOptionalTokens, 2500);
+  assert.equal(reserved.low.compactionTargetTokens, reserved.low.effectiveLowWaterTokens - 2500);
+  assert.ok(reserved.low.finalExactInputTokens <= reserved.low.compactionTargetTokens);
+  assert.equal(reserved.guidance.reason, "sticky_kept");
+  assert.ok(reserved.result.finalMeasurement.inputTokens <= reserved.low.effectiveLowWaterTokens, "target share met with the guidance in");
+  // The same round without a known size (nothing to reserve) ends above the target: the outcome the legacy runs recorded.
+  const unreserved = await round(config, prose(w.effectiveHighWaterTokens + 2000, 40), kept(undefined));
+  assert.equal(unreserved.low.reservedOptionalTokens, 0);
+  assert.equal(unreserved.guidance.reason, "sticky_kept");
+  assert.ok(unreserved.result.finalMeasurement.inputTokens > unreserved.low.effectiveLowWaterTokens);
+});
+
+test("the reservation neither starts a cut nor changes the legacy modes", async () => {
+  const config = guided({ contextBudgetMode: "percentage" });
+  const w = new BudgetBroker(config).watermarks({ contextLength: 32768, outputReserve: config.maxOutputReserve, inputTokens: 0 }, 0, true, 2048);
+  // Under the trigger: retained guidance alone does not compact, whatever its size.
+  const calm = await round(config, prose(w.effectiveHighWaterTokens - 3000, 40), kept(2500));
+  assert.equal(calm.low.selectedCandidate, "unchanged");
+  const legacy = guided({});
+  const lw = new BudgetBroker(legacy).watermarks({ contextLength: 32768, outputReserve: legacy.maxOutputReserve, inputTokens: 0 }, 0, true, 2048);
+  const before = await round(legacy, prose(lw.effectiveHighWaterTokens + 2000, 40), kept(2500));
+  assert.equal(before.low.reservedOptionalTokens, 0);
+  assert.equal(before.low.compactionTargetTokens, before.low.effectiveLowWaterTokens);
+});
+
+test("a reservation takes at most half of the room above the mandatory floor", async () => {
+  const config = guided({ contextBudgetMode: "percentage" });
+  const assemble = createInputAssembler({ tokenSource: charSource(32768), config, roundTools: [], roundScopeInstructions: [],
+    getRoundOutputReserve: () => config.maxOutputReserve, modelInputId: "percent", noteEnabled: false, getNote: () => null,
+    historicalAvailabilityLedger: [] });
+  const manager = new ContextManager(config, new BudgetBroker(config));
+  const result = await manager.enforceLowWater(prose(26000, 40), assemble, { hasReadTools: false, reservedOptionalTokens: 1_000_000 });
+  const t = result.telemetry;
+  assert.equal(t.requestedOptionalTokens, 1_000_000);
+  assert.equal(t.reservedOptionalTokens, Math.floor((t.effectiveLowWaterTokens - result.floorMeasurement.inputTokens) / 2));
+  assert.ok(t.finalExactInputTokens <= t.compactionTargetTokens);
+  assert.notEqual(t.selectedCandidate, "mandatory_floor");
+});

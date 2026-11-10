@@ -1,5 +1,31 @@
 import type { Chat } from "@lmstudio/sdk";
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
+const { invariantSystemText } = require("./direct-compaction-core.js");
+
+/** What one composed system message was joined from. Kept as references; the
+ * breakdown below is computed only when telemetry asks for it. */
+export type SystemSources = { hostTexts: readonly string[]; instructions: readonly string[];
+  noteProtocol: string; runtimeDataRule: string };
+
+/** Telemetry only. The system message by the owner of each part (UTF-16 code
+ * units; the parts and their separators add up to `totalChars`). The host
+ * part is split into the text that never changes and the checkpoint a
+ * compaction appended to it. Instruction heads are harness-authored first
+ * lines; host text is reported by length only. */
+export function systemComposition(sources: SystemSources) {
+  const hostChars = sources.hostTexts.reduce((sum, text) => sum + text.length, 0);
+  const hostInvariantChars = sources.hostTexts.reduce((sum, text) =>
+    sum + String(invariantSystemText({ role: "system", text }) || "").length, 0);
+  const instructionChars = sources.instructions.reduce((sum, text) => sum + text.length, 0);
+  const parts = [...sources.hostTexts, ...sources.instructions, sources.noteProtocol, sources.runtimeDataRule].filter(Boolean);
+  const totalChars = parts.join("\n\n").length;
+  return { unit: "utf16_code_units" as const, totalChars, hostInvariantChars, checkpointChars: hostChars - hostInvariantChars,
+    instructionChars, instructionCount: sources.instructions.length,
+    noteProtocolChars: sources.noteProtocol.length, runtimeDataRuleChars: sources.runtimeDataRule.length,
+    separatorChars: totalChars - hostChars - instructionChars - sources.noteProtocol.length - sources.runtimeDataRule.length,
+    largestInstructions: sources.instructions.map(text => ({ head: text.split("\n", 1)[0].slice(0, 60), chars: text.length }))
+      .sort((a, b) => b.chars - a.chars).slice(0, 5) };
+}
 
 /** Telemetry only. UTF-16 code units of one assembled model input, by the
  * part that carries them. The categories partition the input; `subsets` are
