@@ -93,13 +93,13 @@ export function resolveSessionBudget(config: Pick<DirectConfig, "contextBudgetMo
 /** The configuration the execution runs with: in percentage mode the resolved
  * output reserve and safety margin replace the configured tokens, so every
  * existing reader of those two values follows the session budget. */
-export function applySessionBudget<T extends Pick<DirectConfig, "maxOutputReserve" | "safetyMarginTokens" | "outputRecoveryMaxTokens">>(
+export function applySessionBudget<T extends Pick<DirectConfig, "maxOutputReserve" | "safetyMarginTokens" | "outputRecoveryMaxTokens" | "outputRecoveryFollowsReserve">>(
   config: T, budget: SessionBudget): T & { sessionContextLength: number } {
   if (budget.mode !== "percentage") return { ...config, sessionContextLength: budget.contextLength };
   return { ...config, sessionContextLength: budget.contextLength, maxOutputReserve: budget.outputReserveTokens,
     safetyMarginTokens: budget.safetyMarginTokens,
-    // A continuation limit that was following the output reserve keeps following it.
-    outputRecoveryMaxTokens: config.outputRecoveryMaxTokens === config.maxOutputReserve
+    // Numeric equality does not imply inheritance: the user may have set that cap explicitly.
+    outputRecoveryMaxTokens: config.outputRecoveryFollowsReserve
       ? budget.outputReserveTokens : config.outputRecoveryMaxTokens };
 }
 

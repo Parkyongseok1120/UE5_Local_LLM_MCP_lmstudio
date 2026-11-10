@@ -105,6 +105,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     reportReviewMode: config.get("reportReviewMode") === "off" ? "off" : REPORT_REVIEW_DEFAULT,
     reasoningRecoveryMode: outputRecoveryMode(config.get("reasoningRecoveryMode")),
     outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
+    outputRecoveryFollowsReserve: configuredRecoveryMaxTokens === 0,
     outputRecoverySeconds: read("outputRecoverySeconds"),
     safetyMarginTokens: read("safetyMarginTokens"),
     assumedContextLength: read("assumedContextLength"),

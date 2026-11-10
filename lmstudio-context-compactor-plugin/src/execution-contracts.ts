@@ -160,6 +160,8 @@ export type DirectConfig = {
   reportReviewMode: OutputRecoveryMode;
   reasoningRecoveryMode: OutputRecoveryMode;
   outputRecoveryMaxTokens: number;
+  /** True only when the saved continuation limit is zero (automatic). */
+  outputRecoveryFollowsReserve: boolean;
   outputRecoverySeconds: number;
   safetyMarginTokens: number;
   assumedContextLength: number;

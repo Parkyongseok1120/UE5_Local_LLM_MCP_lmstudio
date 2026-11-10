@@ -55,6 +55,17 @@ test("percentage mode resolves output and safety from the loaded context", () =>
   assert.equal(applySessionBudget(percentage({ outputRecoveryMaxTokens: 2000 }), budget).outputRecoveryMaxTokens, 2000);
 });
 
+test("an explicit continuation limit equal to the old reserve is not treated as automatic", () => {
+  const explicit = percentage({ maxOutputReserve: 8192, outputRecoveryMaxTokens: 8192 });
+  for (const contextLength of [32768, 131072]) {
+    const applied = applySessionBudget(explicit, resolveSessionBudget(explicit, contextLength, "model"));
+    assert.equal(applied.outputRecoveryMaxTokens, 8192, `explicit cap at C=${contextLength}`);
+  }
+  const automatic = percentage({ maxOutputReserve: 8192, outputRecoveryMaxTokens: 0 });
+  const applied = applySessionBudget(automatic, resolveSessionBudget(automatic, 131072, "model"));
+  assert.equal(applied.outputRecoveryMaxTokens, 13107);
+});
+
 test("percentage watermarks keep the requested shares and name every adjustment", () => {
   const config = percentage();
   const rows = [
@@ -141,6 +152,52 @@ test("a percentage execution caps the model call with the resolved output reserv
   assert.deepEqual(event.adjustments, ["output_floor"]);
   const measurement = ctl.debugValues.find(value => value.event === "direct_context_measurement");
   assert.equal(measurement.outputReserve, 4096);
+});
+
+test("percentage report continuation preserves explicit caps and follows automatic reserves", async () => {
+  for (const [savedLimit, expected] of [[8192, 8192], [0, 13107]]) {
+    const calls = [];
+    const model = { identifier: "percentage-continuation", async getContextLength() { return 131072; },
+      async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+      async act(_chat, tools, options) {
+        calls.push(options.maxTokens);
+        if (calls.length > 1) assert.deepEqual(tools, [], "report continuation must be tool-free");
+        options.onPredictionCompleted({ stats: { stopReason: calls.length === 1 ? "maxPredictedTokensReached" : "eosFound",
+          promptTokensCount: 100, predictedTokensCount: calls.length === 1 ? options.maxTokens : 20 } });
+        options.onMessage(ChatMessage.create("assistant", calls.length === 1 ? "Partial report." : "Completed report."));
+      } };
+    const ctl = fakeController(Chat.from([{ role: "user", content: "Write a report." }]), model,
+      { contextManagementMode: "deterministic", contextBudgetMode: "percentage", maxOutputReserve: 8192,
+        outputRecoveryMode: "on", outputRecoveryMaxTokens: savedLimit, reportReviewMode: "off" });
+    await handlePredictionLoop(ctl);
+    assert.deepEqual(calls, [13107, expected], `saved continuation limit ${savedLimit}`);
+    assert.equal(ctl.debugValues.find(value => value.event === "output_recovery").completionAccepted, true);
+  }
+});
+
+test("percentage reasoning recovery grows from the session reserve and ignores the report continuation cap", async () => {
+  const calls = [];
+  const model = { identifier: "percentage-reasoning", async getContextLength() { return 131072; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+    async act(_chat, _tools, options) {
+      calls.push(options.maxTokens);
+      if (calls.length === 1) {
+        options.onPredictionFragment({ roundIndex: 0, content: "UNFINISHED-THOUGHT", reasoningType: "reasoning",
+          tokensCount: options.maxTokens, containsDrafted: false, isStructural: false });
+        options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached", promptTokensCount: 100,
+          predictedTokensCount: options.maxTokens } });
+        return;
+      }
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 20 } });
+      options.onMessage(ChatMessage.create("assistant", "Which input binding should I use?"));
+    } };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Make a small change." }]), model,
+    { contextManagementMode: "deterministic", contextBudgetMode: "percentage", maxOutputReserve: 8192,
+      reasoningRecoveryMode: "on", outputRecoveryMode: "off", outputRecoveryMaxTokens: 256, reportReviewMode: "off" });
+  await handlePredictionLoop(ctl);
+  assert.deepEqual(calls, [13107, 26214]);
+  assert.deepEqual(ctl.debugValues.filter(value => value.event === "direct_round_observation").map(value => value.callPurpose),
+    ["research", "reasoning_recovery"]);
 });
 
 // D5: what returns after a compaction is counted before the compaction.

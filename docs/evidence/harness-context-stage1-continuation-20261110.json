@@ -1,0 +1,27 @@
+{
+  "mode": "codegen",
+  "scope": {"baselineCommit": "0c2eb26", "runtimeModified": false, "stage": 1},
+  "claims": [{
+    "claim": "Percentage session budgeting infers automatic continuation limits from numeric equality and loses an explicit limit equal to the old output reserve.",
+    "claimType": "data_flow", "verdict": "Bug", "severity": "P2", "proofLevel": "TestVerified",
+    "evidence": [
+      {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/execution-config.ts:107", "observation": "readConfig replaces zero with maxOutputReserve, losing the setting origin."},
+      {"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:102", "observation": "applySessionBudget identifies inheritance by equality of resolved numbers."},
+      {"kind": "test", "location": "lmstudio-context-compactor-plugin/test/context-budget-percentage.test.cjs", "observation": "Before fix, an explicit continuation limit equal to the old reserve test fails: C=32768 produces 4096 instead of explicit 8192."}
+    ],
+    "behaviorPath": [
+      {"stage": "entry", "stageStatus": "present", "location": "src/execution-config.ts", "symbol": "readConfig reads explicit recovery limit"},
+      {"stage": "decision", "stageStatus": "present", "location": "src/budget-broker.ts", "symbol": "applySessionBudget compares resolved numbers"},
+      {"stage": "mutation", "stageStatus": "present", "location": "src/budget-broker.ts", "symbol": "applySessionBudget replaces recovery limit"},
+      {"stage": "observer", "stageStatus": "present", "location": "test/context-budget-percentage.test.cjs", "symbol": "explicit continuation limit regression"}
+    ],
+    "counterEvidence": [{"kind": "project_source", "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:122", "observation": "Delivery separately caps recovery by the general reserve. At small C the actual call stays safe, but at large C equality can increase an explicitly requested cap."}],
+    "unknowns": ["No installed LM Studio model run has been performed."]
+  }],
+  "existing": ["readConfig owns setting normalization", "applySessionBudget owns effective per-execution output and safety", "DeliveryController.limits owns continuation cap"],
+  "proposed": ["Preserve the zero/automatic origin in DirectConfig and consume that flag when resolving the session budget."],
+  "doNotDuplicate": ["Do not create a second budget calculator or persist effective values into user settings."],
+  "invariants": ["Explicit positive continuation limits remain unchanged in effective configuration.", "Only zero/default continuation limit follows the session output reserve.", "Actual calls still obey generation headroom and the general reserve.", "Legacy modes retain existing values."],
+  "impactedSurfaces": ["execution-contracts.ts", "execution-config.ts", "budget-broker.ts", "context-budget-percentage.test.cjs", "generated runtime identity", "stage1 implementation record"],
+  "validationPlan": ["Reproduce failure before changing implementation.", "Test explicit and automatic continuation settings at smaller and larger loaded contexts.", "Exercise actual prediction-loop continuation and reasoning-recovery callbacks with percentage mode.", "Build, run plugin suite, and check all four generators.", "If a check fails, keep changes local and record the failed check; do not install or merge."]
+}
