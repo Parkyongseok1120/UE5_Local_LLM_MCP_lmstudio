@@ -111,7 +111,10 @@ test("a read cut by its byte budget reports why and how to continue", async t =>
 // work; raising it is a deliberate decision, not a side effect.
 test("the served Unity tool catalog stays within its prompt budget and names continuation", async t => {
   const f = fixture(t);
-  assert.ok(JSON.stringify(f.tools).length <= 37000, `catalog is ${JSON.stringify(f.tools).length} chars`);
+  // Stage 2 explicitly budgets the new rules schema, without expanding the old surface.
+  assert.ok(JSON.stringify(f.tools.filter(tool => tool.name !== "project_rules")).length <= 37000);
+  assert.ok(JSON.stringify(f.tools.find(tool => tool.name === "project_rules")).length <= 2048);
+  assert.ok(JSON.stringify(f.tools).length <= 39049, `catalog is ${JSON.stringify(f.tools).length} chars`);
   const read = f.tools.find(tool => tool.name === "read_file");
   assert.match(read.description, /moreLinesInFile/);
   assert.match(f.tools.find(tool => tool.name === "search_files").description, /No match is not absence/);

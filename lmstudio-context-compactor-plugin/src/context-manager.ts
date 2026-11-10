@@ -17,7 +17,7 @@ import { visibleAssistantOutput } from "./raw-tool-intent";
 import { hasReadCapability, type RemoteToolLike } from "./tool-capability-registry";
 import { renderTaskProgress } from "./continuity-memory.js";
 import { REVIEW_REGISTER_HEADER } from "./review-patterns.js";
-import { inputComposition } from "./input-composition";
+import { inputComposition, systemComposition, type SystemSources } from "./input-composition";
 import { isRetiredFact } from "./runtime-fact-store";
 
 type MeasurementCost = { measurementCalls: number; measurementMs: number; templateCalls: number;
@@ -187,9 +187,10 @@ export function targetRemainingForInput(measurement: ContextMeasurement, config:
 
 export function shouldCompactContext(measurement: ContextMeasurement, config: DirectConfig, hasReadTools = false): boolean {
   if (config.observeOnly) return false;
-  return core.shouldCompact(measurement, config)
-    || (config.contextManagementMode !== "legacy" && measurement.exact
-      && measurement.inputTokens > new BudgetBroker(config).watermarks(measurement, 0, hasReadTools).effectiveHighWaterTokens);
+  if (core.shouldCompact(measurement, config)) return true;
+  if (config.contextManagementMode === "legacy" || !measurement.exact) return false;
+  const water = new BudgetBroker(config).watermarks(measurement, 0, hasReadTools);
+  return measurement.inputTokens > water.effectiveHighWaterTokens || config.contextBudgetMode === "percentage" && !water.nextActionFit;
 }
 
 export async function selectSoftCompaction(
@@ -259,6 +260,8 @@ export function composeModelHistory(
 ) {
   const instructions = systemInstructions.map((value) => String(value || "").trim()).filter(Boolean);
   const messages = history.getMessagesArray();
+  const hostTexts = messages.filter((message) => message.isSystemPrompt())
+    .map((message) => message.getText().trim()).filter(Boolean);
   const taskData = config.observeOnly ? "" : renderTaskProgress(messages);
   const facts = admitRuntimeFacts(runtimeFacts, allowanceChars);
   const systemIndexes = messages.map((message, index) => message.isSystemPrompt() ? index : -1)
@@ -268,7 +271,8 @@ export function composeModelHistory(
   if (!enableNoteProtocol && instructions.length === 0 && !referenceData && !taskData && !facts.length
     && systemLayoutIsCompatible) {
     return { history, overhead: 0, privateDataParts: [] as string[], runtimeDataChars: 0,
-      runtimeDataCurrentChars: 0, runtimeDataSupersededChars: 0, forcedRewrite: undefined };
+      runtimeDataCurrentChars: 0, runtimeDataSupersededChars: 0, forcedRewrite: undefined,
+      systemSources: { hostTexts, instructions, noteProtocol: "", runtimeDataRule: "" } as SystemSources };
   }
   const noteText = note ? modelNotes.renderAssistantNote(note, messages) : "";
   // Real ids of recent completed calls; kept in the per-round data slot so the cached system prefix stays stable.
@@ -288,13 +292,10 @@ export function composeModelHistory(
   // The runtime-data rule is present whenever this composition can carry data
   // slots, from the first round on, so the system prefix never changes for it.
   // Observe-only leaves the model input as the host built it.
-  const combinedSystemText = [
-    ...messages.filter((message) => message.isSystemPrompt())
-      .map((message) => message.getText().trim()).filter(Boolean),
-    ...instructions,
-    ...(canIncludeInstruction ? [instruction] : []),
-    ...(config.observeOnly ? [] : [RUNTIME_DATA_INSTRUCTION]),
-  ].join("\n\n");
+  const systemSources: SystemSources = { hostTexts, instructions, noteProtocol: canIncludeInstruction ? instruction : "",
+    runtimeDataRule: config.observeOnly ? "" : RUNTIME_DATA_INSTRUCTION };
+  const combinedSystemText = [...hostTexts, ...instructions, systemSources.noteProtocol, systemSources.runtimeDataRule]
+    .filter(Boolean).join("\n\n");
   if (combinedSystemText) composed.append("system", combinedSystemText);
   // Data that changes between rounds stays in assistant data slots (never in a
   // user or system message), placed before the latest user message or, once the
@@ -372,7 +373,7 @@ export function composeModelHistory(
   const runtimeDataCurrentChars = runtimeParts.reduce((sum, part) => sum + part.length, 0);
   const runtimeDataSupersededChars = Math.max(0, runtimeDataChars - runtimeDataCurrentChars);
   return { history: composed, overhead, privateDataParts, runtimeDataChars, runtimeDataCurrentChars,
-    runtimeDataSupersededChars, forcedRewrite, ...(dataBlock ? { dataBlock } : {}) };
+    runtimeDataSupersededChars, forcedRewrite, systemSources, ...(dataBlock ? { dataBlock } : {}) };
 }
 
 /** An execution's data blocks already sent to the model, keyed by anchor. */
@@ -648,12 +649,14 @@ export class ContextManager {
     candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string; referenceData?: string; dataIds?: readonly string[] }>,
     assemble: (instruction: string, referenceData?: string) => Promise<AssembledInput>,
     options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void;
-      admissionWater?: "low" | "high" }) {
+      admissionWater?: "low" | "high"; appliedLowWaterTokens?: number }) {
     const requestedIds = candidates[0]?.ids || [];
     const requestedDataIds = candidates[0]?.dataIds || [];
     const admissionWater = options.admissionWater === "high" ? "high" : "low";
     const ceiling = (water: ReturnType<BudgetBroker["watermarks"]>) =>
-      admissionWater === "high" ? water.effectiveHighWaterTokens : water.effectiveLowWaterTokens;
+      options.appliedLowWaterTokens !== undefined
+        ? Math.min(options.appliedLowWaterTokens, water.effectiveHighWaterTokens)
+        : admissionWater === "high" ? water.effectiveHighWaterTokens : water.effectiveLowWaterTokens;
     let reason = "no_candidates";
     let attempts = 0;
     const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = [],
@@ -662,7 +665,8 @@ export class ContextManager {
       telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
         requestedDataIds, selectedDataIds, omittedDataIds: requestedDataIds.filter(id => !selectedDataIds.includes(id)),
         reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
-        finalInputTokens: assembled.measurement.inputTokens, admissionWater },
+        finalInputTokens: assembled.measurement.inputTokens, admissionWater,
+        ...(options.appliedLowWaterTokens !== undefined ? { appliedLowWaterTokens: options.appliedLowWaterTokens } : {}) },
     });
     if (!candidates.length) return result(base);
     if (!Number.isFinite(options.maxAddedTokens) || options.maxAddedTokens <= 0) {
@@ -728,7 +732,11 @@ committed: false, reason: error instanceof Error && error.message === "typed_fil
    * not block a round whose input already fits under high water. */
   async enforceLowWater(history: Chat, assemble: (history: Chat, profile?: { rewrite?: boolean }) => Promise<AssembledInput>,
     options: { force?: boolean; deepen?: boolean; keepLastAssistantAnswer?: boolean; hasReadTools: boolean; minimumReadTokens?: number;
-      pinnedWorkingSetMaxChars?:number; pinMetadata?:Record<string,unknown> }) {
+      pinnedWorkingSetMaxChars?:number; pinMetadata?:Record<string,unknown>;
+      /** Tokens of optional material (retained guidance) that returns after this
+       * compaction. Percentage mode compacts that much lower, so the round's
+       * final input ends at the target share instead of above it. */
+      reservedOptionalTokens?: number }) {
     const before = await assemble(history);
     if (this.config.observeOnly || this.config.contextManagementMode === "legacy" || !before.measurement.exact
       || before.measurement.contextLengthSource !== "model") {
@@ -757,6 +765,16 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
     const required = options.force || before.measurement.inputTokens > water.effectiveHighWaterTokens
       || water.preDispatchCompaction;
     const pressured = required || Boolean(options.deepen);
+    // The level a compaction aims for once it runs. Legacy modes aim at low
+    // water and let optional material sit above it (the measured runs ended
+    // 1-4K over). The reservation only deepens a compaction that low water
+    // already asks for, and takes at most half of the room above the mandatory
+    // floor: optional text never starts a cut or costs the turn its recent exchanges.
+    const requestedOptionalTokens = this.config.contextBudgetMode === "percentage"
+      ? Math.max(0, Math.trunc(Number(options.reservedOptionalTokens) || 0)) : 0;
+    const reservedOptionalTokens = Math.min(requestedOptionalTokens,
+      Math.floor(Math.max(0, water.effectiveLowWaterTokens - floor.measurement.inputTokens) / 2));
+    const compactionTarget = water.effectiveLowWaterTokens - reservedOptionalTokens;
     if (pressured && before.measurement.inputTokens > water.effectiveLowWaterTokens) {
       const caps = [...new Set([128, 64, 32, 16, 8, 4, 2].filter(cap => cap <= history.length))];
       const exchangeCaps = caps.map(cap => ({ name: `complete_exchange_cap_${cap}`, options: {
@@ -782,7 +800,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       ];
       // Complete exchanges are indivisible. Never assume token sizes are monotone.
       const attempt = async (name: string, choiceOptions: Record<string, unknown>, recentTurns = 0,
-        ceiling = water.effectiveLowWaterTokens) => {
+        ceiling = compactionTarget) => {
         const candidate = name === "mandatory_floor" ? floorCandidate
           : buildCompactedHistory(history, recentTurns, this.config, { ...this.checkpointOptions, requiredIndexes, ...choiceOptions });
         const input = candidate.history === history ? before
@@ -806,7 +824,7 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       // target). Keep the most exchanges between the rejected cap above and
       // the accepted one that still reaches low water, leaving a quarter of the
       // gap to high water as growth room so the next rewrite does not follow at once.
-      const refinedCeiling = water.effectiveLowWaterTokens
+      const refinedCeiling = compactionTarget
         - Math.max(0, Math.floor((water.effectiveHighWaterTokens - water.effectiveLowWaterTokens) / 4));
       const capOf = (name: string) => Number(/complete_exchange_cap_(\d+)$/u.exec(name)?.[1] ?? NaN);
       if (selectedChoice && Number.isInteger(capOf(selectedChoice.name))
@@ -839,6 +857,8 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
       telemetry: {
 ...water, tokenMetric: "exact_templated_model_input", beforeExactInputTokens: before.measurement.inputTokens,
         candidateMeasurements: measurements, selectedCandidate: selected.name,
+        compactionTargetTokens: compactionTarget, reservedOptionalTokens,
+        ...(requestedOptionalTokens > reservedOptionalTokens ? { requestedOptionalTokens } : {}),
         ...(this.config.showDebugInfo && selected.assembled.measureStages
           ? await selected.assembled.measureStages() : selected.assembled.stages), finalExactInputTokens: final.inputTokens, targetDelta: final.inputTokens - water.effectiveLowWaterTokens,
         compactionSucceeded: success, compactionRequested: Boolean(pressured),
@@ -852,7 +872,8 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
         // The input that set mandatoryFloorTokens: the floor candidate only when it measured smaller.
         ...(this.config.showDebugInfo ? { floorComposition: { selectedFrom: floor === before ? "current_input" : "mandatory_floor_candidate",
           exact: floor.measurement.exact, inputTokens: floor.measurement.inputTokens, toolSchemaTokens: floor.measurement.toolSchemaTokens,
-          chars: inputComposition(floor.history, { runtimeDataChars: floor.composition.runtimeDataChars }) } } : {})
+          chars: inputComposition(floor.history, { runtimeDataChars: floor.composition.runtimeDataChars }),
+          system: systemComposition(floor.composition.systemSources) } } : {})
 }
     };
   }

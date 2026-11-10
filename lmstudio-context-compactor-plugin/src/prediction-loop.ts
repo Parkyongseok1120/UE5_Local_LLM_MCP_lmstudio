@@ -16,12 +16,14 @@ import { core, inputAvailability, modelNotes, workingContextModule, objectiveCon
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, finalDeliveryStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
-import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
+import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, measurementTelemetry, targetTelemetry, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
 import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
 import { RuntimeFactStore } from "./runtime-fact-store";
+import { sessionBudgetConfig } from "./session-budget";
+import { PROJECT_RULES_UNCHECKED, projectRuleFact } from "./project-rule-facts";
 import { NotePersistence } from "./note-persistence";
 import { reportReviewObligations } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
@@ -74,7 +76,7 @@ export function createPredictionLoopHandler(
     const cleanupFailures: string[] = [];
     try {
     ctl.guardAbort();
-    const config = readConfig(ctl);
+    let config = readConfig(ctl);
     showDebugInfo = config.showDebugInfo;
     const pulledHistory = await ctl.pullHistory();
     const attachments = config.observeOnly ? { modelHistory: pulledHistory, attachmentHistory: pulledHistory }
@@ -95,6 +97,8 @@ export function createPredictionLoopHandler(
     if (selectedSourceIsThisPlugin(tokenSource)) {
       throw new Error("Select the actual Qwen/LLM in LM Studio. The context compactor is middleware, not a chat model.");
     }
+    // The budget values of config are read only after this point.
+    config = await sessionBudgetConfig(config, tokenSource, value => ctl.debug(value));
 
     let workingDirectory = "";
     try { workingDirectory = ctl.getWorkingDirectory(); } catch { /* No stable chat workspace is available. */ }
@@ -263,11 +267,13 @@ export function createPredictionLoopHandler(
     let reportReviewBlocked = false;
     // The review round ran and returned no supplement.
     let reportReviewEmpty = false;
+    let reportReviewDuplicateOnly = false;
     let reviewMissing: ReviewRow[] = [];
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
     const runtimeFacts = new RuntimeFactStore();
+    if (modelTools.some(tool => tool.name === "project_rules")) runtimeFacts.set("project_rules", PROJECT_RULES_UNCHECKED);
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -561,28 +567,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           compactionAppliedCount,
           compactionAppliedModes,
           observeOnly: config.observeOnly,
-          exactMeasurement: before.exact,
-          contextLengthSource: before.contextLengthSource,
-          promptMeasurementSource: before.promptMeasurementSource,
-          templatedInputChars: before.templatedInputChars,
-          messageCount: before.messageCount,
-          inputTokens: before.inputTokens,
-          remainingTokens: before.remainingTokens,
-          toolSchemaChars: before.toolSchemaChars,
-          toolSchemaTokens: before.toolSchemaTokens,
-          toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
-          finalExactMeasurement: finalMeasurement.exact,
-          finalContextLengthSource: finalMeasurement.contextLengthSource,
-          finalPromptMeasurementSource: finalMeasurement.promptMeasurementSource,
-          finalTemplatedInputChars: finalMeasurement.templatedInputChars,
-          finalInputTokens: finalMeasurement.inputTokens,
-          finalToolSchemaChars: finalMeasurement.toolSchemaChars,
-          finalToolSchemaTokens: finalMeasurement.toolSchemaTokens,
-          finalToolSchemaTokenMeasurement: finalMeasurement.toolSchemaTokenMeasurement,
-          toolSchemaFingerprint: finalMeasurement.toolSchemaFingerprint,
-          actToolSurfaceFingerprint,
-          toolSurfaceMatchesMeasured: finalMeasurement.toolSchemaFingerprint === actToolSurfaceFingerprint,
-          templatedInputFingerprint: finalMeasurement.templatedInputFingerprint,
+          ...measurementTelemetry(before, finalMeasurement, actToolSurfaceFingerprint),
           outputReserve: roundOutputReserve,
           requestedMaxTokens: requestedOutputCap,
           appliedMaxTokens: roundOutputReserve,
@@ -604,11 +589,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
           },
           workingContext: workingContext ? {
             mode: config.contextManagementMode,
-            inputTargetTokens: config.workingInputTargetTokens,
-            inputTriggerTokens: config.workingInputTriggerTokens,
+            ...targetTelemetry(config, finalMeasurement, lowWater.telemetry, compacted),
             runtimeDataChars: modelComposition?.runtimeDataChars ?? 0,
-            targetMet: finalMeasurement.exact
-              ? finalMeasurement.inputTokens <= config.workingInputTargetTokens : null,
             mandatoryFloorTokens: mandatoryFloorMeasurement?.exact
               ? mandatoryFloorMeasurement.inputTokens : null,
             mandatoryFloorExceedsTarget,
@@ -830,7 +812,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // Preserve captured originals for diagnostics and tool evidence.
         const visibleCaptured = stream.normalizeCaptured(captured);
         if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
-          executionId, roundIndex, deliveredChars: reportContinuation.length, suppressedChars: stream.suppressedChars });
+          executionId, roundIndex, priorReportChars: reportContinuation.length,
+          generatedVisibleChars: visibleCaptured.presentation.generatedVisibleChars,
+          deliveredChars: visibleCaptured.presentation.deliveredChars, suppressedChars: stream.suppressedChars });
         deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
         if (!hasUnexecutedRawToolSyntax(visibleTranscript.lastAnswerText))
           deliveryController.retainReportPrefix(visibleTranscript.lastAnswerText);
@@ -924,6 +908,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const interruption = transaction.interruptionMessage(runtimeToolTrace.values());
         if (interruption) workingHistory.append(interruption);
         const budgetFeedback = readBudgetFeedback([...runtimeToolTrace.values()]);
+        const ruleFact = projectRuleFact(captured.messages);
+        if (ruleFact) runtimeFacts.set("project_rules", ruleFact);
         if (budgetFeedback && !config.observeOnly) runtimeFacts.set("budget", budgetFeedback);
         else if (readBudgetResolved([...runtimeToolTrace.values()])) runtimeFacts.onEvent("read_budget_resolved");
         evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,
@@ -1426,11 +1412,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             continue;
           }
           if (reviewingReport && (rawIntentFinal || !visibleTextFromMessages(visibleCaptured.messages).trim())) reportReviewEmpty = true;
+          if (reviewingReport && reportReviewEmpty && !rawIntentFinal && !phaseTimedOut && !ctl.abortSignal.aborted && captured.failure === undefined)
+            reportReviewDuplicateOnly = visibleCaptured.presentation.generatedVisibleChars > 0
+              && visibleCaptured.presentation.duplicateSuppressedChars >= visibleCaptured.presentation.generatedVisibleChars;
           if (deliveryState === "complete" && !continuingReport && reviewable && scheduleReportReview()) continue;
           if (deliveryState !== "complete") ctl.createStatus({ status: deliveryState === "no_answer" ? "error" : "canceled",
             text: finalDeliveryStatusText({ partialDelivered: Boolean(safePartialReport), reportState: finalDelivery.reportState,
               deliveryState, timedOut: phaseTimedOut, aborted: ctl.abortSignal.aborted, failed: captured.failure !== undefined,
-              continuing: continuingReport, reviewing: reviewingReport }) });
+              continuing: continuingReport, reviewing: reviewingReport, duplicateOnly: reportReviewDuplicateOnly }) });
           break;
         }
         if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
@@ -1640,7 +1629,7 @@ event: decision.trigger === "research_recovery_exhausted"
       const notices = terminalReportNotices(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText, {
         packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
         reviewedReport: reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty,
-        reportReviewBlocked, reportReviewEmpty, reviewMissing, objectiveKind: objective.kind });
+        reportReviewBlocked, reportReviewEmpty, reportReviewDuplicateOnly, reviewMissing, objectiveKind: objective.kind });
       for (const notice of notices) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(notice.text);
         if (config.showDebugInfo) ctl.debug({ event: notice.event, executionId, ...notice.details });

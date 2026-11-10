@@ -339,8 +339,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   }
   // A round that rewrites its adopted input near high water reaches the
   // low-water target in the same rewrite (plan B2; see deepenLowWater).
+  // Guidance that was admitted before comes back after a compaction.
+  const retainedGuidance = options.guidanceRetention?.kept ?? options.guidanceRetention?.dropped;
+  const reservedOptionalTokens = Math.min(config.designGuidanceMaxTokens, Math.max(0, retainedGuidance?.tokens ?? 0));
   let lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
     force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
@@ -369,7 +372,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // contract; the summary completion itself never authorizes dispatch.
     if (activeNote !== priorNote) {
       lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
         force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
       assembledInput = lowWater.assembled; acceptLow();
     }
@@ -485,7 +488,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
-        admissionWater: reuse || topicBacked ? "high" : "low" });
+        admissionWater: compacted ? "low" : reuse || topicBacked ? "high" : "low",
+        // Reuse the floor-aware target of this compaction, including for unknown-size references.
+        ...(compacted ? { appliedLowWaterTokens: lowWater.telemetry?.effectiveLowWaterTokens } : {}) });
     assembledInput = guidance.assembled;
     selectedReference = { instruction: guidance.selectedInstruction, referenceData: guidance.selectedReferenceData };
     architectureInputRefs=architectureVariants.find(view=>guidance.selectedReferenceData?.includes(view.text))?.issued;
@@ -605,6 +610,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
     lowWater, rewriteCauses: [...rewriteCauses], projectionApplied, projectionExhausted, pressure, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
-    mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
-      && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };
+    // Against the target this round applied (see targetTelemetry), not the raw configured number.
+    // Without telemetry no exact floor was measured, so nothing exceeds anything.
+    mandatoryFloorExceedsTarget: lowWater.telemetry?.mandatoryFloorException === true };
 }

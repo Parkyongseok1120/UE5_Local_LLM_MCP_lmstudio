@@ -57,7 +57,8 @@
     "git_log",
     "git_changed_files",
     "git_diff_file",
-    "git_read_file"
+    "git_read_file",
+    "project_rules"
   ],
   "projectSwitchCanonical": "unreal_set_active_project",
   "docReferencedTools": [
@@ -102,7 +103,8 @@
     "git_log": "read",
     "git_changed_files": "read",
     "git_diff_file": "read",
-    "git_read_file": "read"
+    "git_read_file": "read",
+    "project_rules": "read"
   },
   "ragToolEffects": {
     "unreal_get_active_project": "read",
@@ -130,7 +132,8 @@
       "mcp/unreal-agent": 24576
     },
     "toolDefaults": {
-      "git_changed_files": 4096
+      "git_changed_files": 4096,
+      "project_rules": 8192
     },
     "fieldDefault": 32768,
     "maxBytesCeiling": 4096
@@ -228,7 +231,8 @@
     "git_log": "read",
     "git_changed_files": "read",
     "git_diff_file": "read",
-    "git_read_file": "read"
+    "git_read_file": "read",
+    "project_rules": "read"
   },
   "capabilityProviders": {
     "mcp/unreal-agent": {
@@ -382,6 +386,9 @@
       },
       "git_read_file": {
         "resultKind": "source_body"
+      },
+      "project_rules": {
+        "resultKind": "metadata"
       }
     },
     "mcp/unreal-rag": {
@@ -691,6 +698,9 @@
       },
       "git_read_file": {
         "resultKind": "source_body"
+      },
+      "project_rules": {
+        "resultKind": "metadata"
       }
     },
     "mcp/evidence-first": {

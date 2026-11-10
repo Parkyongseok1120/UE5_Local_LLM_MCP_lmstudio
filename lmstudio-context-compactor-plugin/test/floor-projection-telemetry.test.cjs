@@ -79,8 +79,27 @@ test("floor composition describes the input that set mandatoryFloorTokens", asyn
   assert.equal(floor.inputTokens, result.floorMeasurement.inputTokens);
   assert.equal(floor.exact, true);
   assert.ok(floor.chars.totalChars < history.toString().length, "the smaller floor candidate, not the current input");
+  // The system section by owner: the parts and their separators are the whole message.
+  const system = floor.system;
+  assert.equal(system.totalChars, floor.chars.systemChars);
+  assert.equal(system.hostInvariantChars, "invariant".length);
+  assert.ok(system.checkpointChars > 0, "the checkpoint this floor candidate appended");
+  assert.equal(system.hostInvariantChars + system.checkpointChars + system.instructionChars + system.noteProtocolChars
+    + system.runtimeDataRuleChars + system.separatorChars, system.totalChars);
   // Without debug output the telemetry is not computed.
   const quiet = lowWater(false);
   const silent = await quiet.manager.enforceLowWater(history, quiet.assemble, { hasReadTools: false });
   assert.equal(silent.telemetry.floorComposition, undefined);
+});
+
+test("system composition names each instruction by its first line and host text by length only", () => {
+  const { systemComposition } = require("../dist/input-composition");
+  const guidance = `[Optional design reference]\n${"g".repeat(400)}`;
+  const parts = systemComposition({ hostTexts: ["HOST SECRET PROMPT"], instructions: ["[Scope]\nshort", guidance],
+    noteProtocol: "", runtimeDataRule: "rule" });
+  assert.equal(parts.totalChars, ["HOST SECRET PROMPT", "[Scope]\nshort", guidance, "rule"].join("\n\n").length);
+  assert.equal(parts.checkpointChars, 0);
+  assert.equal(parts.instructionCount, 2);
+  assert.deepEqual(parts.largestInstructions.map(item => item.head), ["[Optional design reference]", "[Scope]"]);
+  assert.ok(!JSON.stringify(parts).includes("HOST SECRET"));
 });

@@ -1,0 +1,17 @@
+{
+  "mode": "codegen",
+  "claims": [{
+    "claim": "Project rules can use the existing shared workspace provider boundary without widening ordinary Unity file reads.",
+    "claimType": "codegen", "verdict": "Ambiguous", "severity": "P2", "proofLevel": "Proposed",
+    "evidence": [{"kind": "project_source", "location": "shared-tool-core/workspace.js", "observation": "Both providers register shared definitions and dispatch through createWorkspaceCapabilities."}, {"kind": "project_source", "location": "shared-tool-core/git.js:122", "observation": "VersionControl.scope verifies workspace containment under the actual Git worktree."}],
+    "behaviorPath": [],
+    "counterEvidence": [{"kind": "project_source", "location": "lmstudio-unity-mcp/src/server.js:148", "observation": "Unity dispatch currently recognizes only workspace_status and git_ names; project_rules needs an explicit offline route."}],
+    "unknowns": ["Provider boundary and plugin fact wiring tests remain to be run."]
+  }],
+  "existing": ["shared workspace registration, Git scope, stable read identity helpers", "provider path and project binding", "RuntimeFactStore retirement and per-execution lifetime", "stable tool manifest and generators"],
+  "proposed": ["Bounded AGENTS index/read operation shared by Unity and Unreal", "Rule existence metadata in workspace status", "400-character rule reminder from actual provider observations; never insert whole rules as runtime facts"],
+  "doNotDuplicate": ["No general parent-directory read access", "No writer or second fact store", "Do not treat content as host instructions or execute embedded commands"],
+  "invariants": ["Only AGENTS.md between gitRoot and target ancestors is observable; no sibling, arbitrary parent or symlink access.", "Read at most 65536 bytes per document; prefix hashes are labeled when truncated.", "Default response includes metadata and headings only, and respects the whole-response byteBudget.", "Explicit read requires an observed rule identifier and matching version.", "Project switching and changed content replace or retire the old notice; reminder length is at most 400 characters."],
+  "impactedSurfaces": ["shared-tool-core/workspace.js and project-rules.js", "Unity offline dispatch", "tool manifest and generated contracts", "plugin rule facts and runtime facts", "provider and plugin tests"],
+  "validationPlan": ["Nested Git root/workspace, non-Git fallback, child scope, missing path, symlink and traversal fixtures.", "12KB default index, 64KB truncation, Unicode and small byte budget paging, stale hash tests.", "Observe fact through actual handler with guidance disabled and ensure no document body injection.", "Build, plugin suite, Unity provider and Unreal provider tests and generator checks.", "Keep changes local if validation fails; preserve existing installed plugin and game projects."]
+}
