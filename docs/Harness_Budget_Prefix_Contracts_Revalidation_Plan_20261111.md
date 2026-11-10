@@ -303,7 +303,7 @@
 
 ### 9.1 고정한 종료 스냅샷
 
-- 원본: `C:/Users/sster/.lmstudio/conversations/1794323874297.conversation.json`.
+- 원본: `<USER_HOME>/.lmstudio/conversations/1794323874297.conversation.json`.
 - 크기 4,430,475 bytes, SHA-256 `c5df5e730e33f5fcfb2e42073704dcb88c1bed7d39adc6b790fb2d31822389df`.
 - 모델 호출 46회: research 45회와 도구 없는 report_review 1회. 모델 호출 합계 2,634,667ms(43분 55초), 첫 토큰 대기 합계 1,936,278ms(32분 16초, 73.5%), 실행 경과 2,695,629ms(44분 56초). 첫 토큰 대기는 순수 GPU prefill이나 cache miss 시간으로 단정하지 않는다.
 - report_review 하나에 99,808ms가 들었다. visibleChars=3,507, duplicateSuppressedChars=3,507, deliveredChars=0이다. '모델이 생성하지 않았다'와 '생성했지만 앞선 보고와 중복되어 전달하지 않았다'는 다른 결과다.

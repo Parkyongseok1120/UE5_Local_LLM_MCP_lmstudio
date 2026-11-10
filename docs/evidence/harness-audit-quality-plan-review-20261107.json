@@ -605,17 +605,17 @@
       "evidence": [
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
+          "location": "<UE_5_7_ROOT>/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
           "observation": "Actor connection과 channel connection 비교로 bNetOwner를 설정합니다."
         },
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
+          "location": "<UE_5_7_ROOT>/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
           "observation": "ReceivedRPC에서 ShouldCallRemoteFunction 결과로 실행을 분기합니다."
         },
         {
           "kind": "framework_source",
-          "location": "C:/Program Files/Epic Games/UE_5.8/Engine/Source/Runtime/Engine/Private/NetDriver.cpp:8452",
+          "location": "<UE_5_8_ROOT>/Engine/Source/Runtime/Engine/Private/NetDriver.cpp:8452",
           "observation": "기본 ShouldCallRemoteFunction 구현이 서버에서 bNetOwner를 요구합니다."
         },
         {
@@ -628,19 +628,19 @@
         {
           "stage": "entry",
           "stageStatus": "present",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
+          "location": "<UE_5_7_ROOT>/Engine/Source/Runtime/Engine/Private/DataChannel.cpp:3358",
           "symbol": "수신 연결"
         },
         {
           "stage": "decision",
           "stageStatus": "present",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
+          "location": "<UE_5_7_ROOT>/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1387",
           "symbol": "ShouldCallRemoteFunction"
         },
         {
           "stage": "dispatch",
           "stageStatus": "present",
-          "location": "C:/Program Files/Epic Games/UE_5.7/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1447",
+          "location": "<UE_5_7_ROOT>/Engine/Source/Runtime/Engine/Private/DataReplication.cpp:1447",
           "symbol": "허용된 RPC 실행"
         }
       ],

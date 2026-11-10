@@ -2,7 +2,7 @@
   "mode": "architecture",
   "status": "initial_report_quality_patch_implemented_and_tested; no installation/settings/model AB; broader performance plan pending",
   "sourceSnapshot": {
-    "path": "C:/Users/sster/.lmstudio/conversations/1794323874297.conversation.json",
+    "path": "<USER_HOME>/.lmstudio/conversations/1794323874297.conversation.json",
     "sha256": "cb45fa45365511caa2308e1fcdb73af5a7b0d6e062a86d7a57297f2bb4c036ca",
     "bytes": 2368971,
     "completedCalls": 23,
@@ -762,7 +762,7 @@
     "deferredWork": "ReviewRegister 영속화 및 editor 확장은 성능 패치와 분리. 지속 상태는 window와 같은 transaction/generation으로 저장."
   },
   "terminalSnapshot": {
-    "path": "C:/Users/sster/.lmstudio/conversations/1794323874297.conversation.json",
+    "path": "<USER_HOME>/.lmstudio/conversations/1794323874297.conversation.json",
     "sha256": "c5df5e730e33f5fcfb2e42073704dcb88c1bed7d39adc6b790fb2d31822389df",
     "bytes": 4430475,
     "completedCalls": 46,

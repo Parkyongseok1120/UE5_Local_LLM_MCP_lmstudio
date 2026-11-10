@@ -61,7 +61,7 @@ AGENTS 본문을 상시 주입하지 않지만 새 도구의 스키마 자체에
 
 초기 전체 검사에서는 새 파일의 상태 검사 목록, 도구 수 및 schema 예산 계약의 갱신 누락을 발견해 수정했다. 또 하위 프로세스 PATH에서 Python/PowerShell을 찾지 못한 Unreal 잠금 테스트 실패는 테스트 프로세스의 PATH에 실제 실행 파일 위치를 포함해 해결했다. 해당 잠금 코드를 수정하거나 검사를 건너뛰지 않았다.
 
-실제 `C:/Users/sster/Documents/Git/Human-Bartender/HumanBartender`를 workspace로 두고 `Assets/`를 조회했다. 상위 저장소 `AGENTS.md` 한 개, 12,257바이트, 제목 10개, 잘림 없음이 반환됐고 기본 응답에 본문은 없었다. 관찰 hash는 `73137bc3e0a8fb64ac84da7e4a9d9b2167b9c23f22d39fb49f0db3959f6dda38`이다. 게임 파일은 변경하지 않았다.
+실제 `<USER_HOME>/Documents/Git/Human-Bartender/HumanBartender`를 workspace로 두고 `Assets/`를 조회했다. 상위 저장소 `AGENTS.md` 한 개, 12,257바이트, 제목 10개, 잘림 없음이 반환됐고 기본 응답에 본문은 없었다. 관찰 hash는 `73137bc3e0a8fb64ac84da7e4a9d9b2167b9c23f22d39fb49f0db3959f6dda38`이다. 게임 파일은 변경하지 않았다.
 
 ## 전달 범위
 
