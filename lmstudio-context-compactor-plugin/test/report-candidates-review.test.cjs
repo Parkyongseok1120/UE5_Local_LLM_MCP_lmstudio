@@ -57,11 +57,11 @@ test("the delivery owner exists before initialization and puts candidates before
 const inventory = (files, directories = [{ path: "project://Source/Game", complete: true, subdirectories: [], files: files.length }], overflow = false) =>
   ({ listed: { overflow, directories, files: files.map(([name, coverage]) => ({ path: `project://Source/Game/${name}`, sourceKey: name, coverage })) } });
 
-test("a clean verdict is limited to the files actually read", () => {
-  const report = "## 리뷰\n- A는 정상.\n\n## 결론\n**P0/P1 결함 없음.** 서버 권위 계약이 일관됩니다.";
+test("explicit full-reading claims are checked without requiring complete reading", () => {
+  const report = "범위: 전체 소스를 전량 확인했습니다.\n## 리뷰\n- A는 정상.\n\n## 결론\n**P0/P1 결함 없음.** 서버 권위 계약이 일관됩니다.";
   const gap = cleanVerdictScopeGap(report, inventory([["A.cpp", "complete"], ["B.cpp", "unread"], ["C.cpp", "partial"]]));
   assert.equal(gap.kind, "clean_verdict_scope");
-  assert.match(gap.message, /P0\/P1 없음 결론이 읽은 범위를 넘습니다/u);
+  assert.match(gap.message, /전량 읽었다는 수행 이력/u);
   assert.match(gap.message, /Game\/B\.cpp\(미열람\)/u);
   assert.match(gap.message, /Game\/C\.cpp\(일부만 읽음\)/u);
   assert.match(gap.notice, /\[확인 범위\]/u);
@@ -81,7 +81,7 @@ test("a clean verdict is limited to the files actually read", () => {
 test("the scope gap is an obligation for review and explain, not for a change request", () => {
   const register = new ReviewRegister();
   const history = Chat.from([{ role: "user", content: "Review" }]);
-  const answer = "## 결론\n결함 없음.";
+  const answer = "범위: 전체 소스를 전량 확인했습니다.\n## 결론\n결함 없음.";
   const source = { files: [], contractIds: new Set(), scope: "execution", ...inventory([["B.cpp", "unread"]]) };
   for (const kind of ["review", "explain"]) {
     const review = reportReviewObligations(history, answer, source, "unreal", kind, register);
@@ -147,10 +147,10 @@ test("review fixes: wording, partial naming and bounded audits", async () => {
   const listed = inventory([["A.cpp", "unread"], ["B.cpp", "unread"], ["C.cpp", "unread"], ["D.cpp", "unread"], ["E.cpp", "unread"], ["F.cpp", "unread"]]);
   assert.equal(cleanVerdictScopeGap("## 결론\n빌드는 문제없이 통과했고 P1 두 건을 고쳐야 합니다.", listed), null,
     "\"문제없이\" describes how something ran, not a verdict");
-  const report = "## 결론\n결함 없음.";
+  const report = "범위: 전체 소스를 전량 확인했습니다.\n## 결론\n결함 없음.";
   // Conversation 1794306949131's own wording, with the severity in parentheses.
   const parenthesized = cleanVerdictScopeGap("**결론**: 코어 아키텍처는 잘 되어 있고 구조적 결함(P0/P1)은 발견되지 않았습니다.", listed);
-  assert.match(parenthesized.message, /P0\/P1 없음 결론/u);
+  assert.equal(parenthesized, null, "unread count alone cannot invalidate architecture inference");
   assert.ok(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp`, listed), "naming one of six unread files does not scope the verdict");
   assert.equal(cleanVerdictScopeGap(`${report}\n\n## 검토 보완\n- 미확인 범위: A.cpp, B.cpp, C.cpp, D.cpp, E.cpp 외 1개`, listed), null);
   // A bounded audit keeps its one final attempt; the omission goes to the terminal notice.

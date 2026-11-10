@@ -115,7 +115,7 @@ test("empty continuation retains a partial report and never starts a third call"
   assert.equal(outcome.reportPresent, true);
   assert.equal(outcome.reportCompleted, false);
   assert.equal(outcome.deliveryState, "partial");
-  assert.ok(ctl.statuses.some(s => /이어 쓸 본문이 생성되지/.test(s.text)));
+  assert.ok(ctl.statuses.some(s => /새로 전달할 본문이 없습니다/.test(s.text)));
   assert.ok(!ctl.statuses.some(s => /제한 시간/.test(s.text)));
 });
 

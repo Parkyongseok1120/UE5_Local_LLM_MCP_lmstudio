@@ -4875,9 +4875,9 @@ test('an empty report review keeps the delivered report, records the supplement 
   assert.equal(outcome.reportDelivered, true);
   assert.equal(outcome.executionOutcome, 'completed');
   assert.equal(outcome.reason, 'report_review_empty');
-  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty' });
+  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty', outputDisposition: 'no_generation' });
   const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
-  assert.match(footer, /검토 보완 호출이 내용을 생성하지 않았습니다/);
+  assert.match(footer, /검토 보완에서 새로 전달된 본문이 없습니다/);
   assert.match(footer, /- ResetForRespawn \(Fixture\.cpp:3\): `ResetForRespawn\(\)` is never called\./);
 });
 

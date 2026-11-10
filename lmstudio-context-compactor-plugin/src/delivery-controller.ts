@@ -16,7 +16,7 @@ export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시�
 export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
 /** The status line of a final attempt that did not complete, most specific cause first. */
 export function finalDeliveryStatusText(state: { partialDelivered: boolean; reportState: string; deliveryState: string;
-  timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean; reviewing?: boolean }): string {
+   timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean; reviewing?: boolean; duplicateOnly?: boolean }): string {
   // A review round that asked for tools instead of writing its supplement: the report itself stands.
   if (state.reviewing && state.reportState === "unresolved_tool_intent")
     return "검토 보완 단계에서는 도구를 쓸 수 없어 보완문을 만들지 못했습니다. 앞서 전달한 보고서는 그대로입니다.";
@@ -26,7 +26,8 @@ export function finalDeliveryStatusText(state: { partialDelivered: boolean; repo
   if (state.timedOut) return "최종 보고가 제한 시간 안에 완료되지 않았습니다. 부분 출력으로 기록했습니다.";
   if (state.aborted) return "생성이 중지되었습니다. 지금까지 작성한 답변을 보존했습니다.";
   if (state.failed) return "생성 중 오류가 발생했습니다. 지금까지 작성한 답변을 보존했습니다.";
-  return state.continuing ? "이어 쓸 본문이 생성되지 않았습니다. 앞서 작성한 답변을 보존했습니다."
+  if (state.duplicateOnly) return "앞선 답변과 중복된 출력을 제외한 뒤 새로 전달할 보완 내용이 없습니다. 앞서 작성한 답변을 보존했습니다.";
+  return state.continuing ? "새로 전달할 본문이 없습니다. 앞서 작성한 답변을 보존했습니다."
     : "최종 보고가 생성되지 않았습니다. 완료로 처리하지 않았습니다.";
 }
 
@@ -56,12 +57,14 @@ export class DeliveryController {
   }
   // Only this attempt's answer can become a final report. Prior progress text
   // and an interrupted earlier generation must never count as delivered work.
-  beginRound() { this.observation = { reportText: "" }; }
+  beginRound() { this.observation = { reportText: "" }; this.outputDisposition = undefined; }
   retainReportPrefix(text: string) { this.priorReportPresent ||= Boolean(text.trim()); }
   /** The report the user already has and the follow-up round that extends it:
    * a review supplement after a complete report, or the continuation of a cut one. */
   private supplement: { kind: "report_review" | "output_recovery"; reportComplete: boolean } | null = null;
+  private outputDisposition: NonNullable<ExecutionOutcome["supplement"]>["outputDisposition"];
   beginSupplement(kind: "report_review" | "output_recovery", reportComplete: boolean) {
+    this.outputDisposition = undefined;
     this.supplement = { kind, reportComplete };
   }
   private includePriorReport(outcome: ExecutionOutcome): ExecutionOutcome {
@@ -80,13 +83,19 @@ export class DeliveryController {
       || this.supplement.kind === "report_review" && outcome.reportState === "unresolved_tool_intent");
     const stopped = ["timed_out", "canceled"].includes(outcome.executionOutcome);
     const supplement = { kind: this.supplement.kind,
+      ...(this.outputDisposition ? { outputDisposition: this.outputDisposition } : {}),
       state: stopped ? "stopped" : blocked ? "blocked" : empty ? "empty" : "delivered" } as const;
     if (!this.supplement.reportComplete || stopped || !(empty || blocked)) return { ...merged, reportDelivered: true, supplement };
     return { ...merged, executionOutcome: "completed", reason: blocked ? outcome.reason : `${this.supplement.kind}_empty`,
       reportDelivered: true, reportCompleted: true, deliveryState: "complete", reportState: "report",
       taskCompleted: outcome.objectiveSatisfied === true, supplement };
   }
-  observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown; unexecutedToolIntent?: boolean }, timedOut = false) {
+  observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown; unexecutedToolIntent?: boolean;
+    presentation?: { generatedVisibleChars: number; deliveredChars: number; duplicateSuppressedChars: number } }, timedOut = false) {
+    const shown = captured.presentation;
+    this.outputDisposition = shown ? shown.deliveredChars > 0 ? "delivered"
+      : shown.generatedVisibleChars > 0 && shown.duplicateSuppressedChars >= shown.generatedVisibleChars ? "duplicate_only"
+        : shown.generatedVisibleChars > 0 ? "filtered" : "no_generation" : undefined;
     this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
       messages: captured.messages, finishReason: captured.finishReason, failure: captured.failure, timedOut,
       unexecutedToolIntent: captured.unexecutedToolIntent };
@@ -533,7 +542,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
 export function terminalReportNotices(history: Chat, answer: string, options: {
   returnedSources?: import("./context-ports").ReturnedSources;
   packetQuoteGaps: QuoteMismatch[]; packetEngineGaps: EngineClaimGap[]; engine: string; observeOnly: boolean;
-  reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reviewMissing: ReviewRow[];
+   reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reportReviewDuplicateOnly?: boolean; reviewMissing: ReviewRow[];
   objectiveKind?: ObjectiveKind;
 }) {
   const notices: Array<{event: string; text: string; details?: Record<string, unknown>}> = [];
@@ -556,7 +565,8 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
     if (options.objectiveKind && REPORT_REVIEW_OBJECTIVES.has(options.objectiveKind))
       add("coverage_scope_notice", cleanVerdictScopeGap(answer, source)?.notice ?? null);
     if (options.reportReviewBlocked || options.reportReviewEmpty)
-      add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewEmpty ? "empty" : "budget"));
+      add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewDuplicateOnly ? "duplicate"
+        : options.reportReviewEmpty ? "empty" : "budget"));
   }
   return notices;
 }

@@ -257,7 +257,8 @@ export type ExecutionOutcome = Readonly<{
   objectiveSatisfied: boolean | null;
   taskCompleted: boolean;
   /** A follow-up round that extended an already delivered report. */
-  supplement?: { kind: "report_review" | "output_recovery"; state: "delivered" | "empty" | "blocked" | "stopped" };
+  supplement?: { kind: "report_review" | "output_recovery"; state: "delivered" | "empty" | "blocked" | "stopped";
+    outputDisposition?: "delivered" | "duplicate_only" | "filtered" | "no_generation" };
 }>;
 
 export type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";

@@ -267,6 +267,7 @@ export function createPredictionLoopHandler(
     let reportReviewBlocked = false;
     // The review round ran and returned no supplement.
     let reportReviewEmpty = false;
+    let reportReviewDuplicateOnly = false;
     let reviewMissing: ReviewRow[] = [];
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
@@ -811,7 +812,9 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // Preserve captured originals for diagnostics and tool evidence.
         const visibleCaptured = stream.normalizeCaptured(captured);
         if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
-          executionId, roundIndex, deliveredChars: reportContinuation.length, suppressedChars: stream.suppressedChars });
+          executionId, roundIndex, priorReportChars: reportContinuation.length,
+          generatedVisibleChars: visibleCaptured.presentation.generatedVisibleChars,
+          deliveredChars: visibleCaptured.presentation.deliveredChars, suppressedChars: stream.suppressedChars });
         deliveryController.observe(visibleCaptured, phaseTimeoutSignal?.aborted === true);
         if (!hasUnexecutedRawToolSyntax(visibleTranscript.lastAnswerText))
           deliveryController.retainReportPrefix(visibleTranscript.lastAnswerText);
@@ -1409,11 +1412,14 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             continue;
           }
           if (reviewingReport && (rawIntentFinal || !visibleTextFromMessages(visibleCaptured.messages).trim())) reportReviewEmpty = true;
+          if (reviewingReport && reportReviewEmpty && !rawIntentFinal && !phaseTimedOut && !ctl.abortSignal.aborted && captured.failure === undefined)
+            reportReviewDuplicateOnly = visibleCaptured.presentation.generatedVisibleChars > 0
+              && visibleCaptured.presentation.duplicateSuppressedChars >= visibleCaptured.presentation.generatedVisibleChars;
           if (deliveryState === "complete" && !continuingReport && reviewable && scheduleReportReview()) continue;
           if (deliveryState !== "complete") ctl.createStatus({ status: deliveryState === "no_answer" ? "error" : "canceled",
             text: finalDeliveryStatusText({ partialDelivered: Boolean(safePartialReport), reportState: finalDelivery.reportState,
               deliveryState, timedOut: phaseTimedOut, aborted: ctl.abortSignal.aborted, failed: captured.failure !== undefined,
-              continuing: continuingReport, reviewing: reviewingReport }) });
+              continuing: continuingReport, reviewing: reviewingReport, duplicateOnly: reportReviewDuplicateOnly }) });
           break;
         }
         if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
@@ -1623,7 +1629,7 @@ event: decision.trigger === "research_recovery_exhausted"
       const notices = terminalReportNotices(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText, {
         packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
         reviewedReport: reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty,
-        reportReviewBlocked, reportReviewEmpty, reviewMissing, objectiveKind: objective.kind });
+        reportReviewBlocked, reportReviewEmpty, reportReviewDuplicateOnly, reviewMissing, objectiveKind: objective.kind });
       for (const notice of notices) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(notice.text);
         if (config.showDebugInfo) ctl.debug({ event: notice.event, executionId, ...notice.details });

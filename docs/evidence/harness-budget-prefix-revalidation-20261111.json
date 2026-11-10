@@ -1,0 +1,1006 @@
+{
+  "mode": "architecture",
+  "status": "initial_report_quality_patch_implemented_and_tested; no installation/settings/model AB; broader performance plan pending",
+  "sourceSnapshot": {
+    "path": "C:/Users/sster/.lmstudio/conversations/1794323874297.conversation.json",
+    "sha256": "cb45fa45365511caa2308e1fcdb73af5a7b0d6e062a86d7a57297f2bb4c036ca",
+    "bytes": 2368971,
+    "completedCalls": 23,
+    "finalResult": false
+  },
+  "sourceCommit": "4236b1d07a94b94c53dc4d09e9795ab3aedc474b",
+  "claims": [
+    {
+      "claim": "읽기 예약의 정적 기본 최소와 관측 metadata를 포함한 요청별 최소는 서로 다른 입력으로 계산된다. 이번 산술 오류는 확인되지 않았으며 계획과 guard의 계약 통일을 제안한다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:166",
+          "observation": "retryMinimum은 provider metadata 및 request scope의 최소를 반환한다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/budget-broker.ts:343",
+          "observation": "minimumReadResultTokens는 정적 schema와 capability를 사용한다."
+        },
+        {
+          "kind": "test",
+          "location": "local Node probe, 2026-11-11",
+          "observation": "staticFloor=1844, observedMinimum=2102, available=1844에서 remaining_capacity_insufficient를 재현했다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "runtime",
+          "location": "1794323874297 conversation, calls 14-16",
+          "observation": "capacity 8524의 거부 2건은 후속 라운드에서 성공했고 최초 두 결과 정산 뒤에도 1560만 남는다."
+        }
+      ],
+      "unknowns": [
+        "실제 tokenizer에 대한 byte 추정 오차 분포."
+      ]
+    },
+    {
+      "claim": "fact 폐기 시 전체 데이터 블록 재배치와 긴 TTFT의 연관이 관찰됐다. backend KV cache 손실의 지연 기여율은 미확인이다.",
+      "claimType": "behavior",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:337",
+          "observation": "factRetired이면 blocks.clear 후 전체 runtimeParts를 새 anchor에 배치한다."
+        },
+        {
+          "kind": "runtime",
+          "location": "1794323874297 conversation, calls 11/14/16",
+          "observation": "입력 63554/63412/62313에서 TTFT 71009/13202/56985ms를 관찰했다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "src/runtime-fact-store.ts:15",
+          "symbol": "set/delete retire prior text"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts:337",
+          "symbol": "factRetired"
+        },
+        {
+          "stage": "mutation",
+          "stageStatus": "present",
+          "location": "src/context-manager.ts:345",
+          "symbol": "clear all shown blocks and move runtimeParts"
+        },
+        {
+          "stage": "side_effect",
+          "stageStatus": "unknown",
+          "location": "backend KV cache",
+          "symbol": "cache invalidation/reuse magnitude"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "src/round-loop.ts:281",
+          "symbol": "TTFT measurement"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "test/runtime-fact-lifetime.test.cjs",
+          "observation": "오래된 fact 제거는 정확성 계약이며 앞부분을 유지한 호출도 새 입력의 처리 시간이 필요하다."
+        }
+      ],
+      "unknowns": [
+        "backend cache-hit tokens, GPU 사용률, 슬롯 배정.",
+        "선택적 제거 후 실제 속도 개선과 보고 품질."
+      ]
+    },
+    {
+      "claim": "기존 실행·저장 소유자가 존재하고 context-manager에는 측정·배치·window 조정 책임이 함께 있다. ReviewRegister는 실행 한정 상태다.",
+      "claimType": "architecture",
+      "verdict": "Confirmed",
+      "severity": "Info",
+      "proofLevel": "SourceVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/context-manager.ts:51",
+          "observation": "측정, 입력 구성, assembler, window 조정이 같은 모듈에 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:160",
+          "observation": "ReviewRegister는 실행마다 새로 생성된다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/working-context.js:1131",
+          "observation": "digest CAS와 storage lock으로 저장 충돌을 막는다."
+        }
+      ],
+      "behaviorPath": [],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "tool-round-lifecycle/tool-approval/working-context/boundary/runtime-fact-lifetime",
+          "observation": "독립 검토에서 관련 63개 테스트가 통과했으며 새로운 누수는 재현하지 못했다."
+        }
+      ],
+      "unknowns": [
+        "실제 GUI 동시 채팅, 앱 종료, 진행 중 실행의 종료 cleanup."
+      ]
+    },
+    {
+      "claim": "기존 중복 제거기는 실제 보고의 한 글자 부정 의미 정정도 전부 억제하는 반례가 있다. 이번 실행에서 그 정정이 실제 발생했다는 주장은 아니다.",
+      "claimType": "architecture",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:47",
+          "observation": "긴 prefix에 작은 edit를 허용하고 유사한 줄을 같은 줄로 처리한다."
+        },
+        {
+          "kind": "test",
+          "location": "isolated existing DeliveredPrefixEchoFilter replay, 2026-11-11",
+          "observation": "3507자 보고에서 문제 없음→문제 있음 변경 후 delivered=0, suppressed=3507."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "symbol": "DeliveredPrefixEchoFilter.push",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:120"
+        },
+        {
+          "stage": "decision",
+          "symbol": "alignEcho",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:51"
+        },
+        {
+          "stage": "mutation",
+          "symbol": "cutEcho/suppressedChars",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:156"
+        },
+        {
+          "stage": "observer",
+          "symbol": "delivered text length 0",
+          "stageStatus": "present",
+          "location": "isolated DeliveredPrefixEchoFilter replay; actual report with one-character polarity correction"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "same module exact-repeat control",
+          "observation": "정확한 반복도 동일 수치. 중복 억제 자체는 필요하다."
+        }
+      ],
+      "unknowns": [
+        "이번 모델 보완 원문에 의미 정정이 있었는지 미확인."
+      ]
+    },
+    {
+      "claim": "종료 기록은 보완문 3507자 생성과 전량 중복 억제를 기록하지만 사용자 공지는 생성되지 않았다고 표현한다.",
+      "claimType": "architecture",
+      "verdict": "Bug",
+      "severity": "P2",
+      "proofLevel": "RuntimeVerified",
+      "evidence": [
+        {
+          "kind": "runtime",
+          "location": "1794323874297.conversation.json terminal snapshot report-review-1",
+          "observation": "visibleChars=3507, duplicateSuppressedChars=3507, deliveredChars=0; notice says 내용을 생성하지 않았습니다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:223",
+          "observation": "empty를 생성 없음으로 표현한다."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "symbol": "model supplemental output",
+          "stageStatus": "present",
+          "location": "1794323874297.conversation.json terminal snapshot, report-review-1 predictionUsage"
+        },
+        {
+          "stage": "decision",
+          "symbol": "stream.normalizeCaptured",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:812"
+        },
+        {
+          "stage": "mutation",
+          "symbol": "reportReviewEmpty",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-loop.ts:1411"
+        },
+        {
+          "stage": "observer",
+          "symbol": "reportReviewNotice(empty)",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:223"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/delivery-controller.ts:67",
+          "observation": "기존 보고를 보존하고 taskCompleted를 별도로 유지하는 보호는 정상이다."
+        }
+      ],
+      "unknowns": [
+        "실제 생성문과 기존 보고의 의미 차이는 미확인."
+      ]
+    },
+    {
+      "claim": "초기 보고 품질 변경은 고정된 정정·scope·기각·부분 읽기·보완 수명 반례와 handler 검사에서 요구 결과를 만족한다. 실제 모델 품질/지연 개선은 미확인이다.",
+      "claimType": "codegen",
+      "verdict": "NeedsRuntimeProof",
+      "severity": "P2",
+      "proofLevel": "TestVerified",
+      "evidence": [
+        {
+          "kind": "requirement",
+          "location": "user clarification, 2026-11-11",
+          "observation": "모든 파일 완독은 불필요하며 필요한 함수/클래스/헤더/정의를 바탕으로 추론할 수 있다."
+        },
+        {
+          "kind": "project_source",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:49",
+          "observation": "정확한 전체 prefix와 줄 경계만 제거; 수정 본문 보존."
+        },
+        {
+          "kind": "test",
+          "location": "npm test, source build ef-build-v2-08d56462c8ceb39f6648b8f8921f32ace8e9018ae1976c98c6edfe8908494594",
+          "observation": "1408 passed, 0 failed/skipped/cancelled; model is simulated in handler tests."
+        }
+      ],
+      "behaviorPath": [
+        {
+          "stage": "entry",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/prediction-stream.ts:49",
+          "symbol": "DeliveredPrefixEchoFilter"
+        },
+        {
+          "stage": "decision",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/src/review-register.ts:151",
+          "symbol": "ReviewRegister.record"
+        },
+        {
+          "stage": "observer",
+          "stageStatus": "present",
+          "location": "lmstudio-context-compactor-plugin/test/report-quality-contracts.test.cjs",
+          "symbol": "final user-visible answer and supplement outcome assertions"
+        }
+      ],
+      "counterEvidence": [
+        {
+          "kind": "test",
+          "location": "lmstudio-context-compactor-plugin/test/prediction-stream-echo.test.cjs",
+          "observation": "작은 오타 수정도 원문 문맥을 보존하므로 수정 보고 전체가 재표시될 수 있다."
+        }
+      ],
+      "unknowns": [
+        "실제 모델의 품질 비열등성, LM Studio GUI 실행, GPU 처리시간/cache 재사용."
+      ]
+    }
+  ],
+  "existing": [
+    "BudgetBroker/BatchReservation/resolveGenerationBudget",
+    "RuntimeFactStore/composeModelHistory/createInputAssembler/ContextManager",
+    "round-loop/createToolGuard/ExecutionState",
+    "WorkingContext/signed boundary/terminal-persistence",
+    "direct-config/execution-config/session-budget"
+  ],
+  "proposed": [
+    "TTFT와 backend 통계를 구분하고 설정 모드 의존성을 UI에 명시한다.",
+    "동작 보존 모듈 추출 후 퇴역 fact와 무관한 데이터 블록 이동을 줄인다.",
+    "선택한 요청 범위의 최소 예산 계획을 guard와 공유한다.",
+    "ReviewRegister 저장은 기존 3단계로 버전과 범위를 붙여 별도 구현한다.",
+    "부분 fact 제거의 완료 확인을 key/revision/표시 조각으로 제한하고 입력 후보 생성은 shared 상태를 변경하지 않게 한다.",
+    "실제 UI fallback과 metadata 학습 범위를 먼저 검증하며 동적 최소 통일을 병렬 거부 감소로 간주하지 않는다."
+  ],
+  "doNotDuplicate": [
+    "두 번째 예산 계산기, fact store, 도구 scheduler, archive를 추가하지 않는다.",
+    "provider 24KB 전체 읽기 정책과 경로/CAS/권한 검사를 우회하지 않는다."
+  ],
+  "invariants": [
+    "퇴역 fact는 다음에 전송할 입력에 남지 않는다.",
+    "이미 소비한 읽기 결과의 예약을 중복 사용하지 않는다.",
+    "최종 입력은 SDK 호출 직전 정확히 측정하고 부적합하면 전송하지 않는다.",
+    "다른 프로젝트/요청의 retry 최소를 승계하지 않는다.",
+    "진행 중인 대화/모델/설정/설치본을 변경하지 않는다.",
+    "최종 선택되지 않은 입력 후보는 표시/퇴역 ledger를 수정하지 않는다.",
+    "설정 필드 숨김으로 실제 적용 중인 값을 은폐하거나 명시적 Off/0를 바꾸지 않는다.",
+    "저장 register와 window는 같은 세대의 원자적 상태로 복원한다."
+  ],
+  "impactedSurfaces": [
+    "docs/Harness_Budget_Prefix_Contracts_Revalidation_Plan_20261111.md에 단계별 변경/검사/설정/생성물/배포 범위를 기록했다.",
+    "src/direct-config.ts, execution-config.ts, budget-broker.ts, runtime-fact-store.ts, context-manager.ts, round-input.ts, round-loop.ts, evidence-telemetry.ts",
+    "ReviewRegister/WorkingContext, contracts/generators/package allowlist/replays"
+  ],
+  "validationPlan": [
+    "현재 실행이 끝난 후 최종 보고/종료 사유/읽기 복구를 별도 검증한다.",
+    "고정 fixture로 동작 보존 추출 전후 최종 prompt fingerprint와 예약 결과를 비교한다.",
+    "stale fact 제거, Unicode/bytes/token, 병렬/취소/late callback, 소스/프로젝트 변경 회귀를 수행한다.",
+    "동일 모델/context/tools/source에서 warm/cold를 구분한 실제 A/B를 수행한다. 개선율을 미리 확약하지 않는다.",
+    "주 검토 67개 / 독립 검토 63개는 일부 중복이다. 생성물 4종 검사도 통과했다.",
+    "실패 단계는 배포하지 않는다. 저장 schema 이전과 이전 버전 복구 경로를 유지한다.",
+    "계획 문서 7절의 반례 매트릭스를 적용하고 정확성, 읽기 효율, 실제 지연을 각각 판정한다.",
+    "새 코드의 동작을 그대로 기대값으로 복제하지 않고 기존 계약 및 고정 oracle로 검사한다.",
+    "현재 종료본으로 계획 9절의 claim 정정/중복 억제/생성-전달/보고 범위 회귀를 추가한다. 앞의 실행 종료 후 검토는 이 종료본에서 수행했다.",
+    "파일 완독률을 품질 합격 기준으로 사용하지 않는다. 필요한 함수/클래스/헤더/정의의 관계만 확인하는 정상 사례를 포함한다.",
+    "의미 정정을 보존하는 중복 억제와 동일 실행의 기각 상태 연결을 성능 변경 이전 필수 품질 경계로 삼는다."
+  ],
+  "revalidation": {
+    "primaryFocusedTests": 67,
+    "independentFocusedTests": 63,
+    "testSetsOverlap": true,
+    "generatorChecks": 4,
+    "liveABExecuted": false,
+    "gpuCacheVerified": false
+  },
+  "costFirst23Calls": {
+    "modelCalls": 23,
+    "promptTokens": 1020546,
+    "predictedTokens": 16368,
+    "elapsedMs": 1150840,
+    "promptProcessingMs": 822438,
+    "generationElapsedMs": 328402,
+    "unknownPromptProcessingCalls": 0,
+    "unknownUsageCalls": 0,
+    "summary": {
+      "summaryCalls": 0,
+      "summaryPromptTokens": 0,
+      "summaryPredictedTokens": 0,
+      "summaryMs": 0,
+      "unknownUsageCalls": 0
+    },
+    "executionElapsedMs": 1177339,
+    "modelCallsIncludingSummary": 23,
+    "unknownUsageCallsIncludingSummary": 0,
+    "knownPromptTokensIncludingSummary": 1020546,
+    "knownPredictedTokensIncludingSummary": 16368,
+    "elapsedMsIncludingSummary": 1150840
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "inputTokens": 10252,
+      "timeToFirstTokenMs": 10810,
+      "postFirstTokenActMs": 4797,
+      "commonPrefixChars": 0,
+      "previousInputChars": null,
+      "rewriteCauses": []
+    },
+    {
+      "round": 2,
+      "inputTokens": 11740,
+      "timeToFirstTokenMs": 1721,
+      "postFirstTokenActMs": 3055,
+      "commonPrefixChars": 35492,
+      "previousInputChars": 35492,
+      "rewriteCauses": []
+    },
+    {
+      "round": 3,
+      "inputTokens": 12820,
+      "timeToFirstTokenMs": 3356,
+      "postFirstTokenActMs": 2080,
+      "commonPrefixChars": 35092,
+      "previousInputChars": 40862,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    },
+    {
+      "round": 4,
+      "inputTokens": 14674,
+      "timeToFirstTokenMs": 2095,
+      "postFirstTokenActMs": 6719,
+      "commonPrefixChars": 43953,
+      "previousInputChars": 43953,
+      "rewriteCauses": []
+    },
+    {
+      "round": 5,
+      "inputTokens": 18693,
+      "timeToFirstTokenMs": 4426,
+      "postFirstTokenActMs": 18096,
+      "commonPrefixChars": 49198,
+      "previousInputChars": 49198,
+      "rewriteCauses": []
+    },
+    {
+      "round": 6,
+      "inputTokens": 21144,
+      "timeToFirstTokenMs": 2983,
+      "postFirstTokenActMs": 8839,
+      "commonPrefixChars": 60576,
+      "previousInputChars": 60576,
+      "rewriteCauses": []
+    },
+    {
+      "round": 7,
+      "inputTokens": 32080,
+      "timeToFirstTokenMs": 34945,
+      "postFirstTokenActMs": 15291,
+      "commonPrefixChars": 31999,
+      "previousInputChars": 69129,
+      "rewriteCauses": [
+        "guidance_applicability_invalidated"
+      ]
+    },
+    {
+      "round": 8,
+      "inputTokens": 40544,
+      "timeToFirstTokenMs": 10970,
+      "postFirstTokenActMs": 44313,
+      "commonPrefixChars": 102255,
+      "previousInputChars": 102255,
+      "rewriteCauses": []
+    },
+    {
+      "round": 9,
+      "inputTokens": 50071,
+      "timeToFirstTokenMs": 13302,
+      "postFirstTokenActMs": 46803,
+      "commonPrefixChars": 126721,
+      "previousInputChars": 126721,
+      "rewriteCauses": []
+    },
+    {
+      "round": 10,
+      "inputTokens": 56634,
+      "timeToFirstTokenMs": 57685,
+      "postFirstTokenActMs": 22924,
+      "commonPrefixChars": 46748,
+      "previousInputChars": 153841,
+      "rewriteCauses": [
+        "data_consolidation"
+      ]
+    },
+    {
+      "round": 11,
+      "inputTokens": 63554,
+      "timeToFirstTokenMs": 71009,
+      "postFirstTokenActMs": 3252,
+      "commonPrefixChars": 135697,
+      "previousInputChars": 171502,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    },
+    {
+      "round": 12,
+      "inputTokens": 46569,
+      "timeToFirstTokenMs": 55814,
+      "postFirstTokenActMs": 16734,
+      "commonPrefixChars": 28662,
+      "previousInputChars": 191336,
+      "rewriteCauses": [
+        "reasoning_bound",
+        "low_water_compaction",
+        "projection"
+      ]
+    },
+    {
+      "round": 13,
+      "inputTokens": 55119,
+      "timeToFirstTokenMs": 47675,
+      "postFirstTokenActMs": 5949,
+      "commonPrefixChars": 98464,
+      "previousInputChars": 138361,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    },
+    {
+      "round": 14,
+      "inputTokens": 63412,
+      "timeToFirstTokenMs": 13202,
+      "postFirstTokenActMs": 23793,
+      "commonPrefixChars": 161190,
+      "previousInputChars": 161190,
+      "rewriteCauses": []
+    },
+    {
+      "round": 15,
+      "inputTokens": 56100,
+      "timeToFirstTokenMs": 48872,
+      "postFirstTokenActMs": 14925,
+      "commonPrefixChars": 65346,
+      "previousInputChars": 184165,
+      "rewriteCauses": [
+        "reasoning_bound",
+        "projection"
+      ]
+    },
+    {
+      "round": 16,
+      "inputTokens": 62313,
+      "timeToFirstTokenMs": 56985,
+      "postFirstTokenActMs": 10603,
+      "commonPrefixChars": 134763,
+      "previousInputChars": 165561,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    },
+    {
+      "round": 17,
+      "inputTokens": 61656,
+      "timeToFirstTokenMs": 77584,
+      "postFirstTokenActMs": 10430,
+      "commonPrefixChars": 51660,
+      "previousInputChars": 181617,
+      "rewriteCauses": [
+        "fact_retired",
+        "guidance_budget_drop"
+      ]
+    },
+    {
+      "round": 18,
+      "inputTokens": 45777,
+      "timeToFirstTokenMs": 53690,
+      "postFirstTokenActMs": 9882,
+      "commonPrefixChars": 29163,
+      "previousInputChars": 181505,
+      "rewriteCauses": [
+        "reasoning_bound",
+        "low_water_compaction",
+        "projection",
+        "fact_retired",
+        "guidance_rescope"
+      ]
+    },
+    {
+      "round": 19,
+      "inputTokens": 57130,
+      "timeToFirstTokenMs": 16748,
+      "postFirstTokenActMs": 28410,
+      "commonPrefixChars": 141200,
+      "previousInputChars": 141200,
+      "rewriteCauses": []
+    },
+    {
+      "round": 20,
+      "inputTokens": 58084,
+      "timeToFirstTokenMs": 52462,
+      "postFirstTokenActMs": 2816,
+      "commonPrefixChars": 120079,
+      "previousInputChars": 171288,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    },
+    {
+      "round": 21,
+      "inputTokens": 61205,
+      "timeToFirstTokenMs": 76054,
+      "postFirstTokenActMs": 9395,
+      "commonPrefixChars": 52935,
+      "previousInputChars": 176341,
+      "rewriteCauses": [
+        "fact_retired",
+        "guidance_budget_drop"
+      ]
+    },
+    {
+      "round": 22,
+      "inputTokens": 59221,
+      "timeToFirstTokenMs": 53279,
+      "postFirstTokenActMs": 8458,
+      "commonPrefixChars": 52935,
+      "previousInputChars": 181660,
+      "rewriteCauses": [
+        "reasoning_bound",
+        "projection",
+        "fact_retired",
+        "guidance_rescope"
+      ]
+    },
+    {
+      "round": 23,
+      "inputTokens": 61754,
+      "timeToFirstTokenMs": 56771,
+      "postFirstTokenActMs": 10838,
+      "commonPrefixChars": 137918,
+      "previousInputChars": 173168,
+      "rewriteCauses": [
+        "fact_retired"
+      ]
+    }
+  ],
+  "failures": [
+    {
+      "round": 14,
+      "tool": "read_file",
+      "arguments": {
+        "path": "project://Source/Latency_MultiCombat/Private/Components/WeaponAmmoComponent.cpp",
+        "byteBudget": 5214
+      },
+      "code": "HARNESS_BUDGET_DENIED",
+      "message": "Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance. About 0 of 8524 estimated tokens remain; this read needs at least 2102. Results already returned in this round are kept. This is this batch's reservation room, not the task's read budget. Request this read again by itself in the next round. Required minimum: byteBudget=2694."
+    },
+    {
+      "round": 14,
+      "tool": "read_file",
+      "arguments": {
+        "path": "project://Source/Latency_MultiCombat/Private/Components/CombatTimeSyncComponent.cpp",
+        "byteBudget": 6760
+      },
+      "code": "HARNESS_BUDGET_DENIED",
+      "message": "Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance. About 0 of 8524 estimated tokens remain; this read needs at least 2102. Results already returned in this round are kept. This is this batch's reservation room, not the task's read budget. Request this read again by itself in the next round. Required minimum: byteBudget=2694."
+    },
+    {
+      "round": 19,
+      "tool": "read_file",
+      "arguments": {
+        "path": "project://Source/Latency_MultiCombat/Private/CombatHUD.cpp",
+        "byteBudget": 25082
+      },
+      "code": "WHOLE_READ_TOO_LARGE",
+      "message": "project://Source/Latency_MultiCombat/Private/CombatHUD.cpp is 31935 bytes (698 lines); source files are located first, not read whole, above 24576 bytes. Search the symbol with context lines, read its declaration or body, or read the exact line range."
+    }
+  ],
+  "reservationReproduction": {
+    "capacity": 8524,
+    "reserveFloor": 1844,
+    "requiredMinimum": 2102,
+    "reserved": [
+      5208,
+      3316
+    ],
+    "settledTotal": 6964,
+    "remaining": 1560,
+    "arithmeticErrorFound": false
+  },
+  "planRevision": 5,
+  "planAdversarialReview": {
+    "date": "2026-11-11",
+    "runtimeModified": false,
+    "liveModelTouched": false,
+    "earlierSuitesRerun": false,
+    "scope": "기존 계획의 충분조건과 새 예외 발생 가능성 재검토. 아래 pure/module probes는 실제 모델 성능 시험이 아님.",
+    "probes": [
+      {
+        "id": "partial_ack",
+        "source": "src/runtime-fact-store.ts:40; src/prediction-loop.ts:530",
+        "kind": "hypothetical partial removal with existing global acknowledgement",
+        "observed": {
+          "retiredBefore": 2,
+          "remainingOldBRecognizedAfterGlobalAck": false
+        },
+        "meaning": "현재 전체 교체 경로의 버그를 재현한 것이 아니라 부분 제거에 기존 ack를 재사용하면 깨지는 계약을 재현.",
+        "required": "후보는 순수; 최종 채택 시 처리한 key/revision/fragment만 확인."
+      },
+      {
+        "id": "prefix_not_moved_blocks",
+        "kind": "synthetic string counterexample",
+        "observed": {
+          "fullRewriteCommonPrefixChars": 17,
+          "selectiveRewriteCommonPrefixChars": 17
+        },
+        "meaning": "이동량 감소만으로 prefix 길이와 실제 지연 개선은 보장되지 않음.",
+        "required": "최초 차이 위치와 실제 backend/TTFT/전체 시간 별도 측정."
+      },
+      {
+        "id": "minimum_not_parallel_capacity",
+        "source": "src/budget-broker.ts:248",
+        "observed": {
+          "capacity": 8524,
+          "requestMinimum": 2102,
+          "reserveFloor1844": [
+            5208,
+            3316,
+            0,
+            0
+          ],
+          "reserveFloor2102": [
+            5208,
+            3316,
+            0,
+            0
+          ]
+        },
+        "meaning": "최소치 통일만으로 이번 거부가 없어지지 않음.",
+        "required": "보호 거부와 오거부를 나누고 결과 보존과 복구, 호출 총비용을 비교."
+      },
+      {
+        "id": "ui_effective_fallback",
+        "source": "src/execution-config.ts:70",
+        "observed": {
+          "requested": "percentage",
+          "working": "legacy",
+          "scaling": "fixed",
+          "effective": "absolute"
+        },
+        "meaning": "저장된 mode만 보고 legacy token 필드를 숨기면 실제 값을 숨김.",
+        "required": "effective 조합을 표현하지 못하면 필드를 숨기지 않고 fallback 표시."
+      },
+      {
+        "id": "metadata_scope",
+        "source": "src/budget-broker.ts:22,120,166",
+        "kind": "synthetic successful metadata observation",
+        "observed": {
+          "provider": "mcp/unreal-agent",
+          "learnedInProjectA": 2291,
+          "returnedForProjectB": 2291
+        },
+        "meaning": "현재 metadata 최소는 provider 범위. 실제 production 오거부 증명이 아님.",
+        "required": "공유 가능한 response shape/바인딩 범위를 정하기 전에 전역 planner 하한으로 전파하지 않음."
+      }
+    ],
+    "acceptanceGates": {
+      "correctness": "최종 SDK 입력/정산/복원 경계에서 stale·누락·scope 오염·late execution 0. 후보의 상태 변경 금지.",
+      "readEfficiency": "필요한 거부는 유지. 오거부와 추가 page/call 비용을 별도 비교.",
+      "performance": "같은 조건의 paired cold/warm 실제 비교. 작은 검증 최소 3쌍, 변동폭과 겹치면 미확정. 시간 개선과 보고 품질 모두 필요."
+    },
+    "deferredWork": "ReviewRegister 영속화 및 editor 확장은 성능 패치와 분리. 지속 상태는 window와 같은 transaction/generation으로 저장."
+  },
+  "terminalSnapshot": {
+    "path": "C:/Users/sster/.lmstudio/conversations/1794323874297.conversation.json",
+    "sha256": "c5df5e730e33f5fcfb2e42073704dcb88c1bed7d39adc6b790fb2d31822389df",
+    "bytes": 4430475,
+    "completedCalls": 46,
+    "researchCalls": 45,
+    "reportReviewCalls": 1,
+    "finalReportPresent": true,
+    "cost": {
+      "modelCalls": 46,
+      "promptTokens": 2349256,
+      "predictedTokens": 32893,
+      "elapsedMs": 2634667,
+      "promptProcessingMs": 1936278,
+      "generationElapsedMs": 698389,
+      "unknownPromptProcessingCalls": 0,
+      "unknownUsageCalls": 0,
+      "summary": {
+        "summaryCalls": 0,
+        "summaryPromptTokens": 0,
+        "summaryPredictedTokens": 0,
+        "summaryMs": 0,
+        "unknownUsageCalls": 0
+      },
+      "executionElapsedMs": 2695629,
+      "modelCallsIncludingSummary": 46,
+      "unknownUsageCallsIncludingSummary": 0,
+      "knownPromptTokensIncludingSummary": 2349256,
+      "knownPredictedTokensIncludingSummary": 32893,
+      "elapsedMsIncludingSummary": 2634667
+    },
+    "timeMetricCaveat": "promptProcessingMs is observed act-start to first-token latency, not isolated GPU prefill; promptTokens is summed input length, not uncached tokens",
+    "outcome": {
+      "event": "execution_outcome",
+      "executionId": "62bf8e9c-088a-4867-b3cf-5c2a84789aff",
+      "modelInputId": "62bf8e9c-088a-4867-b3cf-5c2a84789aff:report-review-1",
+      "objectiveKind": "review",
+      "mutationState": "none",
+      "terminalPhase": "FINAL_DELIVERY",
+      "executionOutcome": "completed",
+      "reason": "report_review_empty",
+      "finalFinishReason": "eosFound",
+      "generationCompleted": true,
+      "reportPresent": true,
+      "reportDelivered": true,
+      "reportCompleted": true,
+      "deliveryState": "complete",
+      "reportState": "report",
+      "objectiveSatisfied": null,
+      "taskCompleted": false,
+      "supplement": {
+        "kind": "report_review",
+        "state": "empty"
+      },
+      "cleanupFailures": []
+    },
+    "reportReview": {
+      "modelInputId": "62bf8e9c-088a-4867-b3cf-5c2a84789aff:report-review-1",
+      "roundModelElapsedMs": 99808,
+      "modelPrefillMs": 57006,
+      "predictionUsage": {
+        "fragmentCount": 2385,
+        "reasoningTokensCount": 876,
+        "visibleTokensCount": 1508,
+        "visibleChars": 3507,
+        "rawToolIntentCandidate": false,
+        "rawToolIntentFirstFragment": null,
+        "rawToolIntentFirstVisibleChar": null,
+        "structuralTokensCount": 0,
+        "toolArgumentChars": 0,
+        "toolArgumentTokensCount": null,
+        "unattributedTokensCount": 51,
+        "sdkToolRequestStartedCount": 0,
+        "sdkToolRequestNamedCount": 0,
+        "sdkToolRequestEndedCount": 0,
+        "sdkToolRequestFinalizedCount": 0,
+        "sdkToolRequestFailureCount": 0
+      },
+      "renderedOutput": {
+        "deliveredChars": 0,
+        "suppressedInternalProtocol": false,
+        "incompleteInternalProtocol": false,
+        "duplicateSuppressedChars": 3507
+      }
+    },
+    "readLedger": {
+      "files": 43,
+      "redundantRereads": 0,
+      "duplicatedChars": 0,
+      "archiveRepages": 0,
+      "deliveries": 63
+    }
+  },
+  "qualityPreflightReview": {
+    "runtimeModified": false,
+    "liveABExecuted": false,
+    "earlierSuitesRerun": false,
+    "userClarification": "모든 파일 완독은 요구하지 않는다. 필요한 함수/클래스/헤더/정의와 주장 관련 관계를 확인한 추론을 허용한다. 미열람 개수만으로 실패, 강제 읽기, 추가 보완을 판정하지 않는다.",
+    "qualityUnit": "claim-specific sufficient evidence and counter-paths, not file completeness or read volume",
+    "pinBudgetProbe": {
+      "source": "lmstudio-context-compactor-plugin/src/budget-broker.ts:232",
+      "low47719PinnedChars": 35789,
+      "low30000PinnedChars": 22500,
+      "actualSettingsChanged": false,
+      "meaning": "Target reduction changes available original evidence as well as input size."
+    },
+    "lateCounterEvidence": {
+      "path": "Source/Latency_MultiCombat/Private/Components/CombatScenarioComponent.cpp",
+      "sha256": "3f8a1d4144cd46246232f5d8a2204aa1b47ff0165683693b010c35a86f05d3a2",
+      "initialRead": {
+        "round": 18,
+        "range": [
+          1,
+          414
+        ]
+      },
+      "laterReads": [
+        {
+          "round": 42,
+          "range": [
+            195,
+            280
+          ]
+        },
+        {
+          "round": 43,
+          "symbol": "UCombatScenarioComponent::RestoreParticipants",
+          "range": [
+            364,
+            392
+          ]
+        },
+        {
+          "round": 44,
+          "range": [
+            391,
+            414
+          ]
+        }
+      ],
+      "observed": "Final report retracts missing movement restoration claim; appended missing notice repeats old suspicion. Does not prove full engine lifecycle correctness or compaction as sole cause."
+    },
+    "isolatedReviewRegisterReplay": {
+      "input": "Exact selected text blocks 514,545,676,708,724,725 from terminal snapshot",
+      "observed": "TickServer/DisableMovement remain found; final component-name cleared rows do not retire those rows",
+      "boundary": "Existing module with extracted snapshot text; not full SDK/model replay",
+      "source": [
+        "src/review-patterns.js:4",
+        "src/review-register.ts:87",
+        "src/review-register.ts:124",
+        "src/review-subject.ts:7"
+      ]
+    },
+    "isolatedEchoReplay": {
+      "module": "DeliveredPrefixEchoFilter",
+      "input": "Snapshot final report, 3507 chars; replace 이 규모에서 문제 없음 with 이 규모에서 문제 있음",
+      "changed": true,
+      "deliveredChars": 0,
+      "suppressedChars": 3507,
+      "exactRepeatControl": {
+        "deliveredChars": 0,
+        "suppressedChars": 3507
+      },
+      "boundary": "Synthetic single-character correction using real report. Actual supplemental raw text equality or lost correction is not established.",
+      "source": [
+        "src/prediction-stream.ts:47",
+        "src/prediction-stream.ts:74",
+        "src/prediction-stream.ts:125"
+      ]
+    },
+    "qualityGates": [
+      "Same claim identity across suspicion, counter-evidence, disposition, final report and supplement; cross-file ambiguity must not clear unrelated findings.",
+      "Meaning-changing corrections survive duplicate suppression; exact repeats remain suppressed.",
+      "Generated text, filtered text, newly delivered text and satisfied obligations have distinct measurements and statuses.",
+      "Report delivery completion does not imply task/objective success.",
+      "Required relation evidence, normal/defect pairs, claim coverage, calibrated uncertainty and source/test/runtime proof boundaries are graded independently.",
+      "Target/trigger/pin/excerpt/read window/instructions/output budget/early stop changes remain excluded until controlled quality evaluation."
+    ],
+    "evaluation": "Fix independent source-grounded case oracles before candidate implementation. Compare actual final SDK input and final composed user-visible answer. Run model A/B per policy only when authorized work resumes; keep cold/warm separate, report uncertainty, do not declare noninferiority from three pairs.",
+    "limitations": [
+      "No new implementation exists for post-change quality or speed measurement.",
+      "Actual supplement may have been a harmless repeated report; counterexample does not prove actual lost correction.",
+      "Unread source count does not itself prove insufficient architecture reasoning.",
+      "No engine runtime validation or new real model call performed."
+    ]
+  },
+  "baselineClaimsSourceCommit": "4236b1d07a94b94c53dc4d09e9795ab3aedc474b",
+  "implementation": {
+    "date": "2026-11-11",
+    "authorization": "사용자의 계속 요청으로 초기 품질 계약 구현 재개",
+    "sourceBuildId": "ef-build-v2-08d56462c8ceb39f6648b8f8921f32ace8e9018ae1976c98c6edfe8908494594",
+    "runtimeSourceModified": true,
+    "installedRuntimeModified": false,
+    "settingsModified": false,
+    "committed": false,
+    "report": "docs/Harness_Report_Quality_Implementation_20261111.md",
+    "owners": [
+      "DeliveredPrefixEchoFilter/PredictionStreamRenderer",
+      "ReviewRegister/ReviewEvidenceIndex",
+      "report-coverage",
+      "DeliveryController/prediction-loop"
+    ],
+    "contracts": [
+      "Only an exact complete report followed by a new-line separated continuation can be removed as an echo; revisions retain context.",
+      "Inline and fenced code whitespace is preserved; canonical matching and deletion use the same offsets.",
+      "Named same-subject retraction and cross-subject relation uncertainty are separate; scope misses do not clear other owners.",
+      "Uncertain relation projections keep both the original unverified hypothesis and related correction, including bounded candidate views.",
+      "Unread file count alone cannot invalidate function/header/relationship based inference.",
+      "Generated output, new delivered output, suppressed duplicate output, original report delivery and task satisfaction remain distinct.",
+      "Each attempt resets supplemental presentation state."
+    ],
+    "validation": {
+      "typescriptBuild": true,
+      "fullPluginTests": {
+        "passed": 1408,
+        "failed": 0,
+        "skipped": 0,
+        "cancelled": 0
+      },
+      "generatorChecks": [
+        "guidance:check",
+        "toolcontract:check",
+        "unitycontract:check",
+        "identity:check"
+      ],
+      "diffCheck": true,
+      "independentReview": "Concrete counterexamples replayed; final bounded-view issue fixed and included in final full suite.",
+      "realModelAB": false,
+      "guiRuntime": false,
+      "gpuPrefillCacheMeasured": false
+    },
+    "qualityTradeoffs": [
+      "An edited report may be displayed in full again to preserve meaning and context.",
+      "Ambiguous same-claim identity is needs_recheck, not automatically cleared."
+    ],
+    "limits": [
+      "Natural-language judgments remain unverified working notes, not a factual correctness oracle.",
+      "No actual-model noninferiority or performance improvement measurement.",
+      "Input target/trigger/pin/excerpt/read-window/output/research-limit settings unchanged.",
+      "ReviewRegister persistence, editor expansion and broader performance stages remain separate."
+    ]
+  }
+}
