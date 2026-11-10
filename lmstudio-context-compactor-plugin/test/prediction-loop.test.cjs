@@ -21,82 +21,7 @@ const inputAvailability = require("../dist/input-availability.js");
 const availabilityEval = require("../scripts/availability-eval-core.cjs");
 const { workspaceToolDefinitions, createWorkspaceCapabilities } = require("../../shared-tool-core/workspace.js");
 
-function fakeController(history, tokenSource, overrides = {}, tools = []) {
-  const blocks = [];
-  const statuses = [];
-  const config = {
-    projectEngine: "auto",
-    projectIdentity: "",
-    // Keep existing fixture scenarios on the compatibility path. Fresh config
-    // behavior is covered separately by the explicit undefined-value test.
-    contextManagementMode: "legacy",
-    observeOnly: false,
-    showDebugInfo: true,
-    softRemainingTokens: 14000,
-    hardRemainingTokens: 8000,
-    maxOutputReserve: 4096,
-    safetyMarginTokens: 1024,
-    assumedContextLength: 32768,
-    recentCompleteTurns: 0,
-    compactAboveMessageCount: 4,
-    maxCheckpointChars: 12000,
-    maxToolResultChars: 1200,
-    ...overrides,
-  };
-  const session = {
-    tools,
-    disposed: false,
-    [Symbol.dispose]() { this.disposed = true; },
-  };
-  const ctl = {
-    abortSignal: new AbortController().signal,
-    guardAbort() {},
-    getPluginConfig() { return { get: (key) => config[key] }; },
-    async pullHistory() { return history; },
-    async tokenSource() { return tokenSource; },
-    async startToolUseSession() { return session; },
-    async requestConfirmToolCall() { return { type: "allow" }; },
-    createToolStatus(callId, initialState) {
-      const status = { callId, state: initialState, states: [initialState] };
-      statuses.push(status);
-      return { setStatus(state) { status.state = state; status.states.push(state); } };
-    },
-    debug(value) { ctl.debugValue = value; },
-    createStatus(initialState) {
-      const status = { state: initialState, texts: [initialState.text], states: [initialState], removed: false };
-      statuses.push(status);
-      return {
-        setText(text) { status.state = { ...status.state, text }; status.texts.push(text); },
-        setState(state) { status.state = state; status.states.push(state); },
-        remove() { status.removed = true; },
-      };
-    },
-    createContentBlock(options) {
-      const block = { options, text: "", requests: [], results: [], styles: [] };
-      blocks.push(block);
-      return {
-        appendText(text) { block.text += text; },
-        appendToolRequest(request) { block.requests.push(request); },
-        replaceToolRequest(request) {
-          const index = block.requests.findIndex(value => value.callId === request.callId);
-          if (index >= 0) block.requests[index] = request;
-        },
-        appendToolResult(result) { block.results.push(result); },
-        setStyle(style) { block.styles.push(style); block.options.style = style; },
-      };
-    },
-    blocks,
-    statuses,
-    session,
-    debugValues: [],
-    debugValue: null,
-  };
-  ctl.debug = (value) => {
-    ctl.debugValue = value;
-    ctl.debugValues.push(value);
-  };
-  return ctl;
-}
+const { fakeController } = require("./helpers/prediction-loop-fixture.cjs");
 
 for(const scenario of ["ordinary","same_round_change","cancel","off","note_disabled","malformed","v1_clear","truncated_objective"])
 test(`architecture production replay: ${scenario}`,async t=>{
@@ -459,7 +384,7 @@ test("recovery re-entry never reuses a model input identity after the episode co
       const name = n === 3 ? "git_diff_file" : "git_changed_files";
       const request = { type: "function", id: "round" + n, name, arguments: { path: "a.txt", comparison: "range", base: "a", head: "b", limit: 1 } };
       assert.ok(roundTools.some(t => t.name === name));
-      const value = n === 1 ? { error: "Shared read-result budget exhausted." }
+      const value = n === 1 ? { error: "Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance." }
         : { ok: true, kind: "git_observation", status: "complete", action: n === 3 ? "diff_file" : "changed_files",
           path: "a.txt", comparison: "range", base: "a", head: "b", pageStart: n, pageEnd: n,
           returnedCount: 1, hasMore: false, text: "observed fact " + n };
@@ -3286,7 +3211,8 @@ test("initial raw tool output records the provider boundary when the measured st
   assert.equal(first.outputLimitStage, undefined);
 });
 
-test("no-progress recovery delivers a safe partial report without task completion", async () => {
+for (const percentageBudget of [false, true]) test(`no-progress recovery delivers a safe partial report without task completion (percentage=${percentageBudget})`, async () => {
+  const caps = [];
   const history = Chat.from([{ role: "user", content: "Investigate Git changed files and report only verified evidence." }]);
   const definition = workspaceToolDefinitions().find(tool => tool.name === "git_changed_files");
   const tool = { name: definition.name, description: definition.description,
@@ -3294,6 +3220,7 @@ test("no-progress recovery delivers a safe partial report without task completio
   let calls = 0;
   const model = exactCountingModel(async (chat, tools, options) => {
     calls += 1;
+    caps.push(options.maxTokens);
     if (calls === 1) {
       options.onMessage(ChatMessage.create("assistant",
         "<tool_call><function=git_diff></function></tool_call>"));
@@ -3320,7 +3247,9 @@ test("no-progress recovery delivers a safe partial report without task completio
     options.onMessage(ChatMessage.create("assistant", "The available evidence is incomplete; the investigation did not make verified progress."));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 35 } });
   });
+  if (percentageBudget) model.getContextLength = async () => 131072;
   const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+    ...(percentageBudget ? { contextBudgetMode: "percentage" } : {}),
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
   await handlePredictionLoop(ctl);
@@ -3329,6 +3258,8 @@ test("no-progress recovery delivers a safe partial report without task completio
   assert.equal(partial.reportDelivered, true);
   assert.equal(partial.taskCompleted, false);
   assert.equal(partial.reason, "research_no_progress");
+  // The existing unbounded recovery report policy grants twice the session cap when headroom fits.
+  if (percentageBudget) assert.deepEqual(caps, [13107, 4096, 26214]);
   assert.match(ctl.blocks.at(-1).text, /부분 조사 보고 \(미완료\)/u);
   assert.match(ctl.blocks.at(-1).text, /invalid_cursor/u);
   const finalization = ctl.debugValues.find(value => value.event === "research_recovery_finalization");
@@ -3790,8 +3721,10 @@ test("working input target reports the mandatory floor without deleting the curr
     options.onMessage(ChatMessage.create("assistant", "answer"));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound" } });
   });
+  // Fixed scaling makes 2048 the applied target; with auto it is only a minimum
+  // and the judgment follows the scaled target the round actually used.
   const ctl = fakeController(history, model, {
-    contextManagementMode: "deterministic", workingInputTargetTokens: 2048,
+    contextManagementMode: "deterministic", workingInputTargetTokens: 2048, workingInputScaling: "fixed",
     workingInputTriggerTokens: 2048, maxOutputReserve: 1024, safetyMarginTokens: 512,
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   });
@@ -4942,9 +4875,9 @@ test('an empty report review keeps the delivered report, records the supplement 
   assert.equal(outcome.reportDelivered, true);
   assert.equal(outcome.executionOutcome, 'completed');
   assert.equal(outcome.reason, 'report_review_empty');
-  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty' });
+  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty', outputDisposition: 'no_generation' });
   const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
-  assert.match(footer, /검토 보완 호출이 내용을 생성하지 않았습니다/);
+  assert.match(footer, /검토 보완에서 새로 전달된 본문이 없습니다/);
   assert.match(footer, /- ResetForRespawn \(Fixture\.cpp:3\): `ResetForRespawn\(\)` is never called\./);
 });
 

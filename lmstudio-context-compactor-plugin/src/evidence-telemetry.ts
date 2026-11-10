@@ -31,6 +31,63 @@ export function runtimeConfigTelemetry(config: DirectConfig) {
     configuredMaxOutputReserve: config.maxOutputReserve,
     configuredSafetyMarginTokens: config.safetyMarginTokens,
     configuredFallbackContextLength: config.assumedContextLength,
+    contextBudgetMode: config.contextBudgetMode, contextBudgetRequested: config.contextBudgetRequested,
+  };
+}
+
+/** The before/final measurement fields of a round's direct_context_measurement event. */
+export function measurementTelemetry(before: ContextMeasurement, final: ContextMeasurement, actToolSurfaceFingerprint: string) {
+  return {
+    exactMeasurement: before.exact,
+    contextLengthSource: before.contextLengthSource,
+    promptMeasurementSource: before.promptMeasurementSource,
+    templatedInputChars: before.templatedInputChars,
+    messageCount: before.messageCount,
+    inputTokens: before.inputTokens,
+    remainingTokens: before.remainingTokens,
+    toolSchemaChars: before.toolSchemaChars,
+    toolSchemaTokens: before.toolSchemaTokens,
+    toolSchemaTokenMeasurement: before.toolSchemaTokenMeasurement,
+    finalExactMeasurement: final.exact,
+    finalContextLengthSource: final.contextLengthSource,
+    finalPromptMeasurementSource: final.promptMeasurementSource,
+    finalTemplatedInputChars: final.templatedInputChars,
+    finalInputTokens: final.inputTokens,
+    finalToolSchemaChars: final.toolSchemaChars,
+    finalToolSchemaTokens: final.toolSchemaTokens,
+    finalToolSchemaTokenMeasurement: final.toolSchemaTokenMeasurement,
+    toolSchemaFingerprint: final.toolSchemaFingerprint,
+    actToolSurfaceFingerprint,
+    toolSurfaceMatchesMeasured: final.toolSchemaFingerprint === actToolSurfaceFingerprint,
+    templatedInputFingerprint: final.templatedInputFingerprint,
+  };
+}
+
+/** Whether the final input met the target the round actually applied: the
+ * configured or context-scaled target after the broker's limits, not the raw
+ * configured number (comparing against the raw setting reported a miss on
+ * every scaled run). A miss names its cause: the mandatory input is above the
+ * target, working space was kept above it, optional material was added after
+ * compaction had reached it, or compaction did not reach it. */
+export function targetTelemetry(config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens"> & { sessionContextLength?: number },
+  final: ContextMeasurement, lowWater: { configuredLowWaterTokens?: number; effectiveLowWaterTokens?: number;
+    effectiveHighWaterTokens?: number; finalExactInputTokens?: number | null; mandatoryFloorException?: boolean } | null, compacted: boolean) {
+  const applied = lowWater?.configuredLowWaterTokens ?? config.workingInputTargetTokens;
+  const effectiveLow = lowWater?.effectiveLowWaterTokens ?? applied;
+  const targetMet = final.exact ? final.inputTokens <= applied : null;
+  const miss = lowWater?.mandatoryFloorException ? "mandatory_floor"
+    : !compacted ? null
+      : final.inputTokens <= effectiveLow ? "working_space_above_target"
+        : typeof lowWater?.finalExactInputTokens === "number" && lowWater.finalExactInputTokens <= effectiveLow
+          ? "optional_material_after_compaction" : "compaction_target_unmet";
+  return {
+    inputTargetTokens: config.workingInputTargetTokens, inputTriggerTokens: config.workingInputTriggerTokens,
+    appliedTargetTokens: applied, appliedTriggerTokens: lowWater?.effectiveHighWaterTokens ?? config.workingInputTriggerTokens,
+    targetMet, ...(targetMet === false && miss ? { targetMissReason: miss } : {}),
+    // The session budget was resolved for another context length (a model reload).
+    // Watermarks already follow the measured length; the output cap is re-resolved next execution.
+    ...(config.sessionContextLength && final.contextLength && final.contextLength !== config.sessionContextLength
+      ? { contextLengthChanged: { resolved: config.sessionContextLength, measured: final.contextLength } } : {}),
   };
 }
 
@@ -266,6 +323,20 @@ export function assistantNoteTelemetry(note: ContinuityNote | null, enabled: boo
     reviewClaimCount: note?.reviewClaims?.length || 0,
     statusCounts,
   };
+}
+
+/** The model-facing observation of a repeated identical failure. Advisory only. */
+export function repeatedFailureFact(failure: { toolName: string; errorCode: string; count: number }) {
+  return `Runtime evidence observation: ${failure.toolName} failed with `
+    + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
+    + "change the path, scope or budget the error names, or report the item as unverified.";
+}
+
+/** The model-facing observation of a read cycle with no new coverage. */
+export function stagnationFact(stagnation: { cycleLength: number; reacquisition: boolean }) {
+  return `Runtime evidence observation: a ${stagnation.cycleLength}-round read cycle repeated with no new source/archive range. `
+    + (stagnation.reacquisition ? "Some ranges restored evidence absent from the input; repeated restoration is not new source coverage. " : "The returned observations repeat previously seen evidence. ")
+    + "Use the returned evidence; request only a missing range or a necessary fresh version. This observation does not prove review completion.";
 }
 
 export class ToolRoundStagnationDetector {

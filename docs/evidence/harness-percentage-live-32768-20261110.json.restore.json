@@ -1,0 +1,16 @@
+{
+  "originalIdentifier": "swift-1.5-qwen3.8-27b",
+  "originalContextLength": 84224,
+  "originalParallel": 4,
+  "restored": true,
+  "testStatus": 0,
+  "error": null,
+  "recoverySnapshot": "C:\\Users\\sster\\AppData\\Local\\Temp\\harness-load-restore-1794319521402.json",
+  "addedDefaultFields": [
+    {
+      "key": "llm.load.vllm.autoFit",
+      "value": false
+    }
+  ],
+  "restorationVerification": "All prior fields retained; backend-added defaults recorded separately."
+}

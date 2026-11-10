@@ -279,5 +279,9 @@ test("Git subprocess limits are configurable and clamped", t => {
 // 17,024 since the line-range patch form and build staticPrecheck: the first
 // replaces stale-oldText OCCURRENCE_MISMATCH rounds, the second failed builds.
 test("published catalog stays inside the per-round schema budget", () => {
-  assert.ok(JSON.stringify(toolDefinitions()).length <= 17_024);
+  const definitions = toolDefinitions();
+  // Stage 2 adds one bounded rules schema; the pre-existing surface keeps its budget.
+  assert.ok(JSON.stringify(definitions.filter(tool => tool.name !== "project_rules")).length <= 17_024);
+  assert.ok(JSON.stringify(definitions.find(tool => tool.name === "project_rules")).length <= 2048);
+  assert.ok(JSON.stringify(definitions).length <= 17_024 + 2049);
 });

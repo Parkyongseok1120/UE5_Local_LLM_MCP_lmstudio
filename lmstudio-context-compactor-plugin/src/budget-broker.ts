@@ -1,8 +1,9 @@
 import {
   MIN_WORKING_SPACE_TOKENS, PINNED_WORKING_SET_MIN_CHARS, PINNED_WORKING_SET_SHARE, POST_TOOL_REQUEST_TOKENS,
-  SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO, UTF8_BYTES_PER_TOKEN_ESTIMATE, ENVELOPE_TOKENS,
-  UNKNOWN_SIZE_MARGIN_TOKENS, type ContextMeasurement, type DirectConfig
+  SCALED_TARGET_RATIO, SCALED_TRIGGER_RATIO, UTF8_BYTES_PER_TOKEN_ESTIMATE, ENVELOPE_TOKENS, MIN_FINAL_OUTPUT_TOKENS,
+  UNKNOWN_SIZE_MARGIN_TOKENS, type ContextBudgetMode, type ContextMeasurement, type DirectConfig
 } from "./execution-contracts";
+import { PERCENT_FIELDS } from "./config-defaults";
 import type { RemoteToolLike } from "./tool-capability-registry";
 import { RUNTIME_DATA_SHARE } from "./execution-contracts";
 import { localObservationTools, capabilityFor, needsReadReservation } from "./tool-capability-registry";
@@ -10,6 +11,7 @@ import { operationCapabilities } from "./tool-capability-core.js";
 import { READ_RESULT_CONTRACTS } from "./generated-tool-contract";
 import { telemetryFingerprint } from "./evidence-telemetry";
 import { decodeEnvelope } from "./tool-result-semantics.js";
+import type { ReadBudgetDenialCode } from "./read-budget-denial";
 const { ARCHIVE_READ_CONTRACT } = require("./evidence-read-contract.js");
 export type RetryMinimum = { field: string; value: number };
 function retryScope(tool: RemoteToolLike, args: Record<string, unknown>) {
@@ -30,8 +32,76 @@ export type Watermarks = {
   blockingComponent: string | null;
   nextActionFit: boolean; minimumReadResultTokens: number;
   workingInputScaling: "auto" | "fixed";
+  /** The mode that produced these numbers, the target and trigger it asked
+   * for, and why the applied ones differ (percentage mode). */
+  budgetMode: ContextBudgetMode; requestedTargetTokens: number; requestedTriggerTokens: number;
+  budgetAdjustments: string[];
 };
 const tokens = (n: number) => Math.max(0, Math.trunc(Number.isFinite(n) ? n : 0));
+const share = (contextLength: number, percent: number) => Math.floor(tokens(contextLength) * percent / 100);
+
+type BudgetConfig = Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
+  & Partial<Pick<DirectConfig, "workingInputScaling" | "contextBudgetMode" | "contextTargetPercent" | "contextTriggerPercent">>;
+
+/** The target and trigger shares. A target at or above the trigger cannot work, so both fall back to the defaults. */
+export function budgetShares(config: Partial<Pick<DirectConfig, "contextTargetPercent" | "contextTriggerPercent">>) {
+  const target = config.contextTargetPercent ?? PERCENT_FIELDS.contextTargetPercent.default;
+  const trigger = config.contextTriggerPercent ?? PERCENT_FIELDS.contextTriggerPercent.default;
+  return target < trigger ? { target, trigger, invalid: false }
+    : { target: PERCENT_FIELDS.contextTargetPercent.default, trigger: PERCENT_FIELDS.contextTriggerPercent.default, invalid: true };
+}
+
+/** The output floor of percentage mode: a reasoning model needs room to think
+ * before it writes (a recorded final report spent 7,586 tokens on reasoning),
+ * but never more than a quarter of a small context. */
+const OUTPUT_FLOOR_TOKENS = 4096, OUTPUT_FLOOR_SHARE = 25, SAFETY_FLOOR_TOKENS = 512;
+
+export type SessionBudget = {
+  mode: ContextBudgetMode; contextLength: number; contextLengthSource: "model" | "configured_fallback";
+  outputReserveTokens: number; safetyMarginTokens: number;
+  /** Percentage mode only: what was asked for, in percent and in tokens of this context. */
+  requested: { targetPercent: number; triggerPercent: number; outputPercent: number; safetyPercent: number;
+    targetTokens: number; triggerTokens: number; outputTokens: number; safetyTokens: number; outputMaxTokens: number } | null;
+  adjustments: string[];
+};
+
+/** The one place the session output reserve and safety margin are derived
+ * (revised plan 2026-11-10, D2/D3). Legacy modes return the configured
+ * tokens unchanged. The saved percentages are never rewritten by a clamp. */
+export function resolveSessionBudget(config: Pick<DirectConfig, "contextBudgetMode" | "contextBudgetRequested" | "maxOutputReserve"
+  | "safetyMarginTokens" | "contextTargetPercent" | "contextTriggerPercent" | "contextOutputPercent" | "contextSafetyPercent"
+  | "contextOutputMaxTokens">, contextLength: number, contextLengthSource: SessionBudget["contextLengthSource"]): SessionBudget {
+  const C = tokens(contextLength);
+  if (config.contextBudgetMode !== "percentage") return { mode: config.contextBudgetMode, contextLength: C, contextLengthSource,
+    outputReserveTokens: config.maxOutputReserve, safetyMarginTokens: config.safetyMarginTokens, requested: null,
+    adjustments: config.contextBudgetRequested === "percentage" ? ["percentage_unsupported_with_legacy_working_context"] : [] };
+  const shares = budgetShares(config), adjustments: string[] = shares.invalid ? ["invalid_target_trigger_defaults"] : [];
+  const outputTokens = share(C, config.contextOutputPercent), safetyTokens = share(C, config.contextSafetyPercent);
+  let output = outputTokens;
+  const floor = Math.min(OUTPUT_FLOOR_TOKENS, share(C, OUTPUT_FLOOR_SHARE));
+  if (output < floor) { output = floor; adjustments.push("output_floor"); }
+  if (output > config.contextOutputMaxTokens) { output = config.contextOutputMaxTokens; adjustments.push("output_cap"); }
+  output = Math.max(MIN_FINAL_OUTPUT_TOKENS, output);
+  const safety = Math.max(SAFETY_FLOOR_TOKENS, safetyTokens);
+  if (safety > safetyTokens) adjustments.push("safety_floor");
+  return { mode: "percentage", contextLength: C, contextLengthSource, outputReserveTokens: output, safetyMarginTokens: safety,
+    requested: { targetPercent: shares.target, triggerPercent: shares.trigger, outputPercent: config.contextOutputPercent,
+      safetyPercent: config.contextSafetyPercent, targetTokens: share(C, shares.target), triggerTokens: share(C, shares.trigger),
+      outputTokens, safetyTokens, outputMaxTokens: config.contextOutputMaxTokens }, adjustments };
+}
+
+/** The configuration the execution runs with: in percentage mode the resolved
+ * output reserve and safety margin replace the configured tokens, so every
+ * existing reader of those two values follows the session budget. */
+export function applySessionBudget<T extends Pick<DirectConfig, "maxOutputReserve" | "safetyMarginTokens" | "outputRecoveryMaxTokens" | "outputRecoveryFollowsReserve">>(
+  config: T, budget: SessionBudget): T & { sessionContextLength: number } {
+  if (budget.mode !== "percentage") return { ...config, sessionContextLength: budget.contextLength };
+  return { ...config, sessionContextLength: budget.contextLength, maxOutputReserve: budget.outputReserveTokens,
+    safetyMarginTokens: budget.safetyMarginTokens,
+    // Numeric equality does not imply inheritance: the user may have set that cap explicitly.
+    outputRecoveryMaxTokens: config.outputRecoveryFollowsReserve
+      ? budget.outputReserveTokens : config.outputRecoveryMaxTokens };
+}
 
 /** Budget allowances for model input, not backend slot/cache counters.
  * Byte-derived result reservations are estimates; only the next fully templated
@@ -49,10 +119,13 @@ export class BudgetBroker {
   private observeMetadataFloor(tool: RemoteToolLike, args: Record<string, unknown>, envelope: ReturnType<typeof decodeEnvelope>) {
     if (readResultContract(tool, args).field !== "byteBudget") return;
     const value = envelope.value as Record<string, unknown> | undefined;
-    const minimum = "minimum" in envelope.retry ? envelope.retry.minimum : undefined;
+    // Only a successful response separates metadata from body. A failure's
+    // retry minimum can include a long first line of that one file; it stays
+    // a request-scoped retry floor (observeResult) and never becomes the
+    // provider-wide metadata cost (revised plan §E: one 10,414 B line made
+    // every small file of the provider unreadable).
     const bytes = envelope.ok && typeof value?.content === "string"
-      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES
-      : envelope.errorCode === "OUTPUT_LIMIT_EXCEEDED" && minimum?.field === "byteBudget" ? Number(minimum.value) : 0;
+      ? Buffer.byteLength(JSON.stringify({ ...value, content: "" }), "utf8") + PROVIDER_RESPONSE_RESERVE_BYTES : 0;
     const key = metadataScope(tool);
     if (bytes > (this.metadataFloors.get(key) || 0)) this.metadataFloors.set(key, bytes);
   }
@@ -96,8 +169,7 @@ export class BudgetBroker {
     if (!observed || readResultContract(tool, args).field !== "byteBudget" || (scoped && scoped.value >= observed)) return scoped;
     return { field: "byteBudget", value: observed };
   };
-  constructor(readonly config: Pick<DirectConfig, "workingInputTargetTokens" | "workingInputTriggerTokens" | "safetyMarginTokens">
-    & Partial<Pick<DirectConfig, "workingInputScaling">>) { }
+  constructor(readonly config: BudgetConfig) { }
   watermarks(measured: ContextMeasurement, mandatoryFloorTokens = 0, hasReadTools = true, minimumReadTokens = 2048): Watermarks {
     const contextLength = tokens(measured.contextLength);
     const requiredGenerationReserve = tokens(measured.outputReserve);
@@ -111,20 +183,35 @@ export class BudgetBroker {
       ? Math.max(minimumReadResultTokens, Math.min(4096, Math.floor(hardInputCeiling / 8))) : 0;
     const requiredPostToolOverhead = hasReadTools ? Math.min(requiredGenerationReserve, POST_TOOL_REQUEST_TOKENS) : 0;
     const safeTrigger = Math.max(0, hardInputCeiling - reservedToolResultTokens - requiredPostToolOverhead);
+    const percentage = this.config.contextBudgetMode === "percentage";
     // Configured trigger/target are floors in "auto" mode, so a larger loaded
     // context keeps proportionally more conversation before compaction.
     const scaled = this.config.workingInputScaling !== "fixed";
-    const trigger = scaled ? Math.max(tokens(this.config.workingInputTriggerTokens), Math.floor(hardInputCeiling * SCALED_TRIGGER_RATIO))
-      : tokens(this.config.workingInputTriggerTokens);
-    const target = scaled ? Math.max(tokens(this.config.workingInputTargetTokens), Math.floor(hardInputCeiling * SCALED_TARGET_RATIO))
-      : tokens(this.config.workingInputTargetTokens);
+    const shares = budgetShares(this.config);
+    // Percentage mode asks for shares of the whole context length. Auto and
+    // fixed keep their token settings (scaled against the usable input in auto).
+    const trigger = percentage ? share(contextLength, shares.trigger)
+      : scaled ? Math.max(tokens(this.config.workingInputTriggerTokens), Math.floor(hardInputCeiling * SCALED_TRIGGER_RATIO))
+        : tokens(this.config.workingInputTriggerTokens);
+    const target = percentage ? share(contextLength, shares.target)
+      : scaled ? Math.max(tokens(this.config.workingInputTargetTokens), Math.floor(hardInputCeiling * SCALED_TARGET_RATIO))
+        : tokens(this.config.workingInputTargetTokens);
     const effectiveHighWaterTokens = Math.min(trigger, safeTrigger);
-    const configuredLowWaterTokens = Math.min(target, Math.floor(effectiveHighWaterTokens * 0.75));
+    // Percentage mode keeps the requested target unless it would leave less
+    // than one tool result between target and trigger: an explicit
+    // re-compaction gap in place of the fixed 0.75 of high water.
+    const configuredLowWaterTokens = percentage ? Math.min(target, Math.max(0, effectiveHighWaterTokens - reservedToolResultTokens))
+      : Math.min(target, Math.floor(effectiveHighWaterTokens * 0.75));
     // Compacting to the bare mandatory floor leaves no room for the next result
     // and causes immediate re-compaction. Keep working space when it fits.
-    const workingSpaceLowWater = scaled && mandatoryFloorTokens > 0
+    const workingSpaceLowWater = (scaled || percentage) && mandatoryFloorTokens > 0
       ? Math.min(effectiveHighWaterTokens, tokens(mandatoryFloorTokens) + MIN_WORKING_SPACE_TOKENS) : 0;
     const effectiveLowWaterTokens = Math.max(configuredLowWaterTokens, tokens(mandatoryFloorTokens), workingSpaceLowWater);
+    const budgetAdjustments = !percentage ? [] : [
+      ...(effectiveHighWaterTokens < trigger ? ["tool_result_reserve"] : []),
+      ...(configuredLowWaterTokens < target ? ["hysteresis"] : []),
+      ...(tokens(mandatoryFloorTokens) > configuredLowWaterTokens ? ["mandatory_floor"]
+        : effectiveLowWaterTokens > configuredLowWaterTokens ? ["working_space"] : [])];
     const projectedNextInput = measured.inputTokens + reservedToolResultTokens + requiredPostToolOverhead;
     return {
       contextLength, configuredTargetTokens: this.config.workingInputTargetTokens,
@@ -133,6 +220,8 @@ export class BudgetBroker {
       effectiveHighWaterTokens, hardInputCeiling, reservedToolResultTokens, requiredPostToolOverhead,
       projectedNextInput, preDispatchCompaction: hasReadTools && projectedNextInput > hardInputCeiling,
       minimumReadResultTokens, workingInputScaling: scaled ? "auto" : "fixed",
+      budgetMode: percentage ? "percentage" : scaled ? "legacy_auto" : "absolute",
+      requestedTargetTokens: target, requestedTriggerTokens: trigger, budgetAdjustments,
       nextActionFit: measured.inputTokens + requiredPostToolOverhead + minimumReadResultTokens <= hardInputCeiling,
       targetUnreachable: mandatoryFloorTokens > configuredLowWaterTokens,
       blockingComponent: mandatoryFloorTokens > configuredLowWaterTokens ? "mandatory_objective_evidence_and_template" : null
@@ -164,7 +253,7 @@ export class BatchReservation {
   get used() { return [...this.entries.values()].reduce((n, e) => n + (e.state === 'released' ? 0 : e.tokens), 0); }
   get available() { return Math.max(0, this.capacity - this.used); }
   get exceeded() { return this.used > this.capacity || [...this.entries.values()].some(e => e.overrun); }
-  denialReason(id: string, minimum: number): string | null {
+  denialReason(id: string, minimum: number): ReadBudgetDenialCode | null {
     if (this.closed) return "batch_closed";
     if (this.entries.has(id)) return "duplicate_reservation";
     if (this.exceeded) return "returned_result_overrun";
@@ -276,6 +365,8 @@ export function minimumReadResultTokens(tools: RemoteToolLike[], archiveRequired
 
 /** The smallest default byteBudget an adaptive default shrinks to. */
 const DEFAULT_READ_FLOOR_BYTES = 8192;
+/** A read with any of these selects part of a file, so it is not a whole-file read. */
+const WHOLE_FILE_SELECTORS = ["startLine", "endLine", "cursor", "offset", "offsetBytes", "startOffset", "nextOffset", "maxBytes"];
 
 /** Conservative response estimate, never source availability or authority. */
 export function estimateReadResponseBytes(hint: { sizeBytes: number | null; totalLines: number | null } | null,
@@ -306,7 +397,7 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const requestedWindow = Number(args[field ?? ""] ?? contract.defaultValue);
   const requiredMinimum = field ? { field, value: contract.minimum } : undefined;
   if (contract.minimum > contract.maximum) return { allowed: false, arguments: args, reservedTokens: 0,
-    bounded: field !== null, denialReason: "minimum_exceeds_published_limit", requiredMinimum,
+    bounded: field !== null, denialReason: "minimum_exceeds_published_limit" as const, requiredMinimum,
     limit: { field, requested: requestedWindow, effective: 0, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" } };
   // Known responses use the same allowance as receive(). Preserve the published
   // request window; the actual returned size, not that ceiling, is reserved.
@@ -333,9 +424,18 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
   const ceilingFromHint = Number.isSafeInteger(estimatedBytes) && estimatedBytes! > 0
     ? Math.max(contract.minimum, Math.ceil(estimatedBytes! * 1.25)) : Infinity;
+  // An explicit budget below the estimated whole response of a whole-file
+  // read is raised to that estimate when it fits this batch's share and the
+  // published maximum; otherwise the request stands. A budget is a floor when
+  // the whole file fits (revised plan §E: 18 files were cut and re-read).
+  const modelRequested = field !== null && args[field] !== undefined ? tokens(Number(args[field])) : undefined;
+  const wholeFile = field === "byteBudget" && tool.name === "read_file" && modelRequested !== undefined
+    && Number.isSafeInteger(estimatedBytes) && estimatedBytes! > modelRequested
+    && !WHOLE_FILE_SELECTORS.some(key => args[key] !== undefined)
+    && estimatedBytes! <= contract.maximum && estimatedBytes! <= share;
   const requested = field ? Math.min(tokens(args[field] === undefined
     ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : Number(args[field])), ceilingFromHint) : 3072;
+    : wholeFile ? estimatedBytes! : Number(args[field])), ceilingFromHint) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;
@@ -348,7 +448,8 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   return {
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,
     reservedTokens: reserved, bounded: field !== null,
-    limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes" }
+    limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes",
+      ...(wholeFile ? { modelRequested, raisedTo: "whole_file_estimate" } : {}) }
 };
 }
 
@@ -360,7 +461,19 @@ export function readBudgetFeedback(trace: Array<Record<string, unknown>>): strin
       denial: call.budgetDenialReason || null, delivered: call.readResultSize || null }];
   }).slice(0, 4);
   return limits.length ? "Runtime read-result budget facts: " + JSON.stringify(limits)
-    + ". Limits bound the full response, not source body length. Keep the requested page budget stable while advancing the returned cursor; do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
+    + ". Limits bound the full response, not source body length. For a whole-file read, omit byteBudget: the host sizes it from a listed file size when it has one, otherwise from its adaptive default. Keep a page budget only while paging one file by its returned cursor, and do not subtract previously read content. Consume delivered peers before retrying a denied read in a later round." : "";
+}
+
+/** A round shows the read budget no longer constrains reads: a bounded read
+ * ran at its requested size and no read in the round was denied or lowered.
+ * One success beside a denied peer is not a resolution. */
+export function readBudgetResolved(trace: Array<Record<string, unknown>>): boolean {
+  const limited = (call: Record<string, unknown>) => {
+    const limit = call.readResultLimit as { field?: string; requested?: number; effective?: number } | undefined;
+    return Boolean(call.budgetDenialReason) || call.validationState === "denied_batch_budget"
+      || Boolean(limit?.field) && limit!.requested !== limit!.effective;
+  };
+  return !trace.some(limited) && trace.some(call => Boolean((call.readResultLimit as { field?: string } | undefined)?.field));
 }
 
 export type GenerationBudget = {
@@ -398,23 +511,4 @@ export function resolveGenerationBudget(options: {
   };
 }
 
-/** What a denied read tells the model: why, that delivered results are kept,
- * and the one next step. A denial means even the contract minimum does not
- * fit this batch, so no smaller limit is offered for the same batch. The
- * numbers are byte-derived allowances, not exact model tokens. */
-export function readBudgetDenialMessage(reason: string,
-  allowance?: { availableTokens: number; minimumTokens: number; capacityTokens: number }) {
-  const head = `Shared read-result budget unavailable (${reason}).`;
-  const kept = "Results already returned in this round are kept.";
-  const room = allowance ? ` About ${allowance.availableTokens} of ${allowance.capacityTokens} estimated tokens remain; this read needs at least ${allowance.minimumTokens}.` : "";
-  if (reason === "held_reservations_insufficient") {
-    return `${head} Parallel reads in this batch hold the allowance.${room} ${kept} Request this read again by itself in the next round.`;
-  }
-  if (reason === "remaining_capacity_insufficient") {
-    return `${head} The model input has no room for another result.${room} ${kept} Use them first; request this read alone in a later round.`;
-  }
-  if (reason === "returned_result_overrun") {
-    return `${head} A returned result exceeded its reservation, so the input is remeasured before more reads. ${kept} Use them first.`;
-  }
-  return `${head} ${kept} Split the read batch; use delivered results before requesting more.`;
-}
+export { readBudgetDenialMessage } from "./read-budget-denial";

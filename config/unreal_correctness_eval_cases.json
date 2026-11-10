@@ -1,6 +1,6 @@
 {
   "description": "UE correctness evaluation (contracts, lifetime, subsystems, threading, claims). Scored by scripts/evaluate_unreal_review_answers.py --case-set config/unreal_correctness_eval_cases.json. Build success, runtime behaviour and answer quality are recorded separately.",
-  "contractRevision": "unreal_contracts@7",
+  "contractRevision": "unreal_contracts@8",
   "protocol": {
     "conditions": {
       "baseline": "main v1.4.0 (f48b958) without contract guidance or S3 rules",
@@ -996,6 +996,45 @@
           "penalty": 3.0,
           "patterns": [
             "21\\s*개\\s*(?:의\\s*)?(?:소스\\s*)?파일(?:을|를)?\\s*(?:모두\\s*)?(?:확인했|검토했)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "server_rpc_owning_connection",
+      "origin": "Engine/Source/Runtime/Engine/Private/NetDriver.cpp:8242 (ShouldCallRemoteFunction)",
+      "engineVersion": "5.7",
+      "contractIds": [
+        "ue.net.server-rpc-owning-connection"
+      ],
+      "category": [
+        "engine_semantics"
+      ],
+      "prompt": "이 컴포넌트의 ServerSetADS는 아무 클라이언트나 호출할 수 있는가? 소유 연결 규칙과 서버가 따로 검증해야 할 것을 구분하라.",
+      "files": [
+        {
+          "path": "Source/Combat/Private/WeaponFireComponent.cpp",
+          "content": "UFUNCTION(Server, Reliable)\nvoid ServerSetADS(bool bNewADS);\n// The component lives on a character possessed by one player's controller.\nvoid UWeaponFireComponent::ServerSetADS_Implementation(bool bNewADS) { SetADS(bNewADS); }\n"
+        }
+      ],
+      "expected_findings": [
+        {
+          "id": "server_rpc_owning_connection",
+          "points": 3.0,
+          "diagnosis": [
+            "(소유\\s*연결|owning\\s*connection|bNetOwner)",
+            "(ShouldCallRemoteFunction|소유자?만|only\\s+the\\s+owning)",
+            "(검증|validat)"
+          ]
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "server_rpc_owning_connection_false_claim",
+          "penalty": 3.0,
+          "patterns": [
+            "(?:아무|어떤|모든)\\s*클라이언트(?:든|나|라도)[^.\\n]{0,40}(?:호출|보낼|실행)",
+            "\\bany\\s+client\\s+can\\s+(?:call|send|invoke)"
           ]
         }
       ]

@@ -2,7 +2,7 @@ import {
   type PredictionLoopHandlerController
 } from "@lmstudio/sdk";
 import { directConfigSchematics } from "./direct-config";
-import { NUMERIC_FIELDS, REPORT_REVIEW_DEFAULT, type NumericField } from "./config-defaults";
+import { NUMERIC_FIELDS, PERCENT_FIELDS, REPORT_REVIEW_DEFAULT, type NumericField, type PercentField } from "./config-defaults";
 import { designGuidanceMode, designGuidanceDelivery } from "./design-guidance";
 import { DEFAULT_CONTEXT_MANAGEMENT_MODE, type AuditCompletionMode, type ContextManagementMode, type DirectConfig, type InputAvailabilityMode, type OutputRecoveryMode, type StagnationAction, type GenerationRepetitionAction, type WorkingInputScaling } from "./execution-contracts";
 import {
@@ -14,6 +14,14 @@ export function numeric(value: unknown, fallback: number, min: number, max: numb
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+/** A share of the context length, kept to one decimal place. numeric() would cut it to an integer. */
+export function percent(value: unknown, fallback: number, min: number, max: number): number {
+  if (value === null || value === undefined || typeof value === "boolean" || typeof value === "string" && !value.trim()) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return fallback;
+  return Math.round(parsed * 10) / 10;
 }
 
 export function stagnationAction(value: unknown): StagnationAction {
@@ -59,6 +67,10 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
   const maxOutputReserve = read("maxOutputReserve");
   const configuredRecoveryMaxTokens = read("outputRecoveryMaxTokens");
   const workingInputTargetTokens = read("workingInputTargetTokens");
+  const share = (key: PercentField) => percent(config.get(key), PERCENT_FIELDS[key].default, PERCENT_FIELDS[key].min, PERCENT_FIELDS[key].max);
+  const workingContextMode = contextManagementMode(config.get("contextManagementMode"));
+  const scaling = workingInputScaling(config.get("workingInputScaling"));
+  const contextBudgetRequested = config.get("contextBudgetMode") === "percentage" ? "percentage" : "legacy";
   return {
     projectEngine,
     projectIdentity: String(config.get("projectIdentity") || "").trim().slice(0, 4096),
@@ -66,11 +78,19 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     designGuidanceDelivery: designGuidanceDelivery(config.get("designGuidanceDelivery")),
     designGuidanceMaxTokens: read("designGuidanceMaxTokens"),
     observeOnly: config.get("observeOnly") === true,
-    contextManagementMode: contextManagementMode(config.get("contextManagementMode")),
+    contextManagementMode: workingContextMode,
     workingInputTargetTokens,
     workingInputTriggerTokens: Math.max(workingInputTargetTokens,
       read("workingInputTriggerTokens")),
-    workingInputScaling: workingInputScaling(config.get("workingInputScaling")),
+    workingInputScaling: scaling,
+    contextBudgetRequested,
+    contextBudgetMode: contextBudgetRequested === "percentage" && workingContextMode !== "legacy" ? "percentage"
+      : scaling === "fixed" ? "absolute" : "legacy_auto",
+    contextTargetPercent: share("contextTargetPercent"),
+    contextTriggerPercent: share("contextTriggerPercent"),
+    contextOutputPercent: share("contextOutputPercent"),
+    contextSafetyPercent: share("contextSafetyPercent"),
+    contextOutputMaxTokens: read("contextOutputMaxTokens"),
     toolResultProjectionChars: read("toolResultProjectionChars"),
     semanticHandoff: config.get("semanticHandoff") === true,
     semanticSummaryMaxTokens: read("semanticSummaryMaxTokens"),
@@ -85,6 +105,7 @@ export function readConfig(ctl: PredictionLoopHandlerController): DirectConfig {
     reportReviewMode: config.get("reportReviewMode") === "off" ? "off" : REPORT_REVIEW_DEFAULT,
     reasoningRecoveryMode: outputRecoveryMode(config.get("reasoningRecoveryMode")),
     outputRecoveryMaxTokens: configuredRecoveryMaxTokens > 0 ? configuredRecoveryMaxTokens : maxOutputReserve,
+    outputRecoveryFollowsReserve: configuredRecoveryMaxTokens === 0,
     outputRecoverySeconds: read("outputRecoverySeconds"),
     safetyMarginTokens: read("safetyMarginTokens"),
     assumedContextLength: read("assumedContextLength"),

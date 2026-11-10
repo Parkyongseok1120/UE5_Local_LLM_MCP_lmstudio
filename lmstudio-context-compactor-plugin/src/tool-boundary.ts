@@ -2,7 +2,8 @@ import type { LLMActionOpts, PredictionLoopHandlerController } from "@lmstudio/s
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readBudgetDenialMessage, reserveReadResult, type BatchReservation, type RetryMinimum } from "./budget-broker";
+import { reserveReadResult, type BatchReservation, type RetryMinimum } from "./budget-broker";
+import { deferredReadDenial, readBudgetDenialMessage, type ReadBudgetDenialCode } from "./read-budget-denial";
 import { repeatRequestKey, telemetryFingerprint } from "./evidence-telemetry";
 import type { DirectConfig } from "./execution-contracts";
 import { type OutputLimitStage } from "./execution-contracts";
@@ -175,9 +176,10 @@ export function createToolGuard(options: {
           budgetDenialReason: reservation.denialReason, budgetAtDenial: batchReservation?.snapshot(), readResultLimit: reservation.limit,
           ...("allowance" in reservation ? { budgetAllowance: reservation.allowance } : {}) });
         const minimum = "requiredMinimum" in reservation ? reservation.requiredMinimum : undefined;
-        deny(readBudgetDenialMessage(String(reservation.denialReason), "allowance" in reservation ? reservation.allowance : undefined)
+        const code = reservation.denialReason as ReadBudgetDenialCode;
+        deny(readBudgetDenialMessage(code, "allowance" in reservation ? reservation.allowance : undefined)
           + (minimum ? ` Required minimum: ${minimum.field}=${minimum.value}.` : ""),
-          ["held_reservations_insufficient", "remaining_capacity_insufficient"].includes(String(reservation.denialReason)));
+          deferredReadDenial(code));
         return;
       }
       const present = reservation.arguments.repeatReceipt === undefined

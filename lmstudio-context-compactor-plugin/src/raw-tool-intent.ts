@@ -170,6 +170,12 @@ export type RawToolIntentClassification = {
   unsafeUnknownNames: Array<string>;
 };
 
+/** The tool names of a raw intent as debug events report them. */
+export function rawIntentTelemetry(intent: RawToolIntentClassification) {
+  return { rawToolIntentNames: intent.names, unknownRawToolNames: intent.unknownNames,
+    registeredButWithheldRawToolNames: intent.registeredButWithheldNames, registeredUnsafeRawToolNames: intent.registeredUnsafeNames };
+}
+
 export function rawToolIntentNames(text: string): Array<string> {
   // An unclosed opening tag still names the tool the model meant to call.
   if (!hasUnexecutedRawToolSyntax(text)) return [];

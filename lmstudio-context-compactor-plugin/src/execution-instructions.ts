@@ -1,5 +1,6 @@
 
 
+import type { FinalizationTrigger } from "./execution-contracts";
 /** Fixed text (the system prefix stays reusable): the per-round data slots are
  * assistant-role messages, and a model that reads them as its own earlier
  * replies starts its answer with a copy (2026-10-25 run: 18 visible echoes). */
@@ -35,6 +36,7 @@ export const REPORT_REVIEW_INSTRUCTION = [
   "For every missing working-note item, include only what the returned evidence confirms; otherwise state its exclusion reason.",
   "Correct each engine-contract conflict or explicitly downgrade that named claim to unverified. Name the identifier or contract id in each correction.",
   "Cleared rows are rejected working judgments: do not re-verify or revive them. No tool calls.",
+  "If a scope item says a no-defect conclusion exceeds what was read, limit that conclusion to the files actually read and list the named files and directories under 미확인 범위.",
 ].join(" ");
 
 export const REPETITION_RECOVERY_INSTRUCTION = [
@@ -106,6 +108,32 @@ export const READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION = [
   "Request a small useful batch, consume returned results before another batch, and never request writes, builds, mutations, or project changes.",
   "When the missing evidence is resolved or the bounded recovery is exhausted, provide the best evidence-based report and mark remaining scope unresolved.",
 ].join(" ");
+
+export const RESEARCH_LIMIT_FINAL_INSTRUCTION = [
+  "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",
+  "The configured research round limit has been reached, so no further tool calls are available in this response.",
+  "Do not request or imply another tool call.",
+  "Using only the evidence already present in this input, provide the final report now.",
+  "Start with confirmed conclusions, key evidence, verification results, and unresolved scope; list files or areas that were not read as unverified rather than as clean.",
+  "Clearly separate confirmed findings, counterevidence, and unresolved items.",
+].join(" ");
+
+export const FINAL_REPORT_CORRECTION_INSTRUCTION = [
+  "The previous final-report attempt printed tool-call text instead of a report. That text was not executed and tools remain unavailable.",
+  "Write the report in prose now from the evidence and working notes already in this input; put anything still unread under unresolved scope.",
+].join(" ");
+
+/** The instruction of a final-phase round, chosen from what ended research. */
+export function finalPhaseInstruction(trigger: FinalizationTrigger | null, options: { reviewing: boolean; bounded: boolean;
+  correction: string | null }): string[] {
+  const base = options.reviewing ? REPORT_REVIEW_INSTRUCTION : trigger === "output_recovery" ? OUTPUT_RECOVERY_FINAL_INSTRUCTION
+    : ["context_budget", "context_working_set_exhausted", "mutation_blocked_by_context"].includes(trigger || "")
+      ? CONTEXT_BUDGET_FINAL_INSTRUCTION
+      : ["research_recovery_complete", "research_recovery_exhausted", "research_no_new_evidence", "research_repetition"].includes(trigger || "")
+        ? RESEARCH_RECOVERY_FINAL_INSTRUCTION
+        : trigger === "research_round_limit" && !options.bounded ? RESEARCH_LIMIT_FINAL_INSTRUCTION : BOUNDED_AUDIT_FINAL_INSTRUCTION;
+  return options.correction ? [base, FINAL_REPORT_CORRECTION_INSTRUCTION] : [base];
+}
 
 export const RESEARCH_RECOVERY_FINAL_INSTRUCTION = [
   "phase=FINAL_REPORT_ONLY; tools_available=false; research_must_not_continue=true; missing_evidence_must_be_reported_as_unresolved=true; do_not_emit_tool_syntax=true.",

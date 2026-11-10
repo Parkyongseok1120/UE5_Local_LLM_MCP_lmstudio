@@ -32,7 +32,8 @@
       "git_log",
       "git_changed_files",
       "git_diff_file",
-      "git_read_file"
+      "git_read_file",
+      "project_rules"
     ],
     "configuration": [
       "unreal_set_active_project",

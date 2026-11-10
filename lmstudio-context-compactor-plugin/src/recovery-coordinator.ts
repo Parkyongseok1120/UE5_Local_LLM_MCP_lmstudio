@@ -216,8 +216,34 @@ export function archiveOnlyRecoveryInstruction(tools: Array<RemoteToolLike>): st
 
 export type FreshToolPlanningRetryDecision = { eligible: boolean; reason: string };
 
+/** The configured round limit for this execution; 0 means no round limit. */
+export function researchRoundLimit(config: { maxResearchRounds: number; auditResearchRounds: number }, bounded: boolean) {
+  return bounded ? config.auditResearchRounds : config.maxResearchRounds;
+}
+
+/** Whether another tool-allowed prediction may start. Checked once at the
+ * entry of every non-final round, so no recovery or replan branch can step
+ * past it. `used` counts tool-allowed predictions already started. */
+export function researchLimitTrigger(used: number, limit: number, deadlineAt: number | null, now = Date.now())
+  : "research_round_limit" | "research_time_limit" | null {
+  if (deadlineAt !== null && now >= deadlineAt) return "research_time_limit";
+  return limit > 0 && used >= limit ? "research_round_limit" : null;
+}
+
+/** A one-time notice that the round limit is near. It names the point it was
+ * issued at, because it is not refreshed as rounds pass. */
+export function researchRoundNotice(used: number, limit: number): string | null {
+  if (!(limit > 0)) return null;
+  const remaining = limit - used, window = Math.min(limit, Math.max(5, Math.ceil(limit * 0.2)));
+  if (remaining <= 0 || remaining > window) return null;
+  return `Runtime evidence observation: when ${used} research rounds were complete, ${remaining} of the ${limit}-round limit remained. `
+    + "Prepare the report from the current evidence and state what stays unverified; tool use ends at the limit.";
+}
+
 export function freshToolPlanningRetryDecision(options: {
   boundedAudit: boolean;
+  /** A research limit ended this execution's tool budget. */
+  toolsClosed?: boolean;
   observeOnly: boolean;
   planningAllowed: boolean;
   attempts: number;
@@ -239,6 +265,7 @@ export function freshToolPlanningRetryDecision(options: {
   actualResultCount: number;
 }): FreshToolPlanningRetryDecision {
   if (options.boundedAudit) return { eligible: false, reason: "bounded_mode" };
+  if (options.toolsClosed) return { eligible: false, reason: "research_limit_reached" };
   if (options.observeOnly) return { eligible: false, reason: "observe_only" };
   if (!options.planningAllowed) return { eligible: false, reason: "final_report_repair_forbidden" };
   if (options.attempts >= 1) return { eligible: false, reason: "already_retried" };

@@ -5,7 +5,7 @@ import { FINDING, REJECTED } from "./review-patterns.js";
 import { type EvidenceBundle, ReviewEvidenceIndex } from "./review-evidence";
 import { mentionsSubject } from "./review-subject";
 const { pathKey } = require("./read-ledger.js") as { pathKey(value: string): string };
-import { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
+import { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE, DELIVERED_REPORT_HEADER, DELIVERED_REPORT_END } from "./review-patterns.js";
 export { REVIEW_REGISTER_HEADER, REVIEW_REGISTER_GUIDANCE } from "./review-patterns.js";
 export { ReviewEvidenceIndex } from "./review-evidence";
 const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text.js") as {
@@ -13,7 +13,8 @@ const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text
 };
 
 export type ReviewRow = { identifier: string; status: "found" | "cleared" | "needs_recheck"; source: "reasoning" | "visible";
-  round: number; evidence: string; bundle?: EvidenceBundle };
+  round: number; evidence: string; bundle?: EvidenceBundle; sourcePath?: string; sourceLocation?: string; references?: string[];
+  contextOwner?: string; relatedDisposition?: { identifier: string; evidence: string } };
 
 /** Excerpt chars the rendered register carries in all. */
 const MAX_EXCERPT_CHARS = 6000;
@@ -56,6 +57,17 @@ const NOT_A_SUBJECT = new Set(["this", "self", "Super", "GameMode", "GameState",
 const OPAQUE_ID = /^(?=.*\d)(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9_-]{20,}$/u;
 const global = (pattern: RegExp) => new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
 const FINDING_ALL = global(FINDING);
+const CITED_PATH = /([\w./\\-]+\.(?:h|hpp|cpp|cc|cs|ini))\s*[:(]\s*\d+/u;
+function rejected(text: string): boolean {
+  const caveat = text.replace(/\bnot\s+a\s+(?:bug|defect|problem)\b|(?:버그|결함)\s*아님/giu, "");
+  return !/\b(?:not|never|cannot|can't|unresolved|incorrect|may|might|could|will|would|should|if|unless|only|but)\b|\?|미해결|기각되지|아님|아니|않|경우|조건|다만|하지만|예정|계획/iu.test(caveat)
+    && (REJECTED.test(text) || /\b(?:resolved|cleared|no\s+leak|not\s+a\s+problem)\b/iu.test(text));
+}
+function plainRetraction(row: ReviewRow): boolean {
+  const name = row.identifier.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`^\\s*(?:[-*]\\s*)?${name}(?:\\(\\))?\\s+(?:is\\s+(?:now\\s+)?(?:not a (?:bug|defect|problem)|resolved|cleared|correct|fine)|(?:기각|철회)(?:합니다|됨|되었습니다)?)[.!]?\\s*$`, "iu")
+    .test(row.evidence.replace(/[`*]/gu, ""));
+}
 
 type Named = { index: number; name: string };
 function namesIn(line: string): { spans: Named[]; bare: Named[] } {
@@ -82,23 +94,27 @@ function subjectAt(names: { spans: Named[]; bare: Named[] }, at: number): string
 
 /** Each judgment of a line as [subject, status]: one per finding keyword, its
  * sentence deciding the status. A line that only rejects clears its leading
- * subject ("**Issue 9: `TakeDamage` — ... not a bug"). */
-function judgments(line: string): Array<[string, ReviewRow["status"]]> {
-  const names = namesIn(line), out = new Map<string, ReviewRow["status"]>();
-  if (!FINDING.test(line)) {
-    const subject = REJECTED.test(line) ? names.spans[0]?.name || names.bare[0]?.name : null;
-    return subject ? [[subject, "cleared"]] : [];
-  }
+ * subject ("**Issue 9: `TakeDamage` — ... not a bug"). A later sentence about
+ * the same subject replaces an earlier one ("bug: ... Later verification: not a bug"). */
+function judgments(line: string): Array<[string, ReviewRow["status"], string]> {
+  const out = new Map<string, [ReviewRow["status"], string]>(), lineNames = namesIn(line);
   let offset = 0;
   for (const sentence of line.split(SENTENCE_BREAK)) {
     const start = line.indexOf(sentence, offset); offset = start + sentence.length;
-    const rejected = REJECTED.test(sentence);
+    const names = namesIn(sentence);
+    const isRejected = rejected(sentence);
+    if (!FINDING.test(sentence)) {
+      const subject = isRejected ? names.spans[0]?.name || names.bare[0]?.name || lineNames.spans[0]?.name : null;
+      if (subject) { out.delete(subject); out.set(subject, ["cleared", sentence]); }
+      continue;
+    }
     for (const match of sentence.matchAll(FINDING_ALL)) {
-      const subject = subjectAt(names, start + match.index!);
-      if (subject && !out.has(subject)) out.set(subject, rejected ? "cleared" : "found");
+      const subject = isRejected ? subjectAt(names, match.index!) || subjectAt(lineNames, start + match.index!)
+        : subjectAt(lineNames, start + match.index!);
+      if (subject) { out.delete(subject); out.set(subject, [isRejected ? "cleared" : "found", isRejected ? sentence : line]); }
     }
   }
-  return [...out];
+  return [...out].map(([identifier, [status, text]]) => [identifier, status, text]);
 }
 
 /** Execution-owned working notes. Neither a proof ledger nor an authority source. */
@@ -114,18 +130,63 @@ export class ReviewRegister {
         : [["reasoning", raw.slice(0, raw.indexOf(REASONING_SEPARATOR))], ["visible", visible]];
       for (const [source, text] of parts) for (const line of stripInternalDataEcho(text, privateParts).split(/\r?\n/u)) {
         if (/^\s*(?:Runtime |\[Prior assistant|\[Delivered report|[-*] \[(?:found|cleared)\]|↳ )/u.test(line)) continue;
-        for (const [identifier, status] of judgments(line))
-          this.record({ identifier, status, source, round, evidence: line.trim().slice(0, 240) });
+        for (const [identifier, status, text] of judgments(line)) {
+          const names = namesIn(text);
+          const citation = CITED_PATH.exec(text);
+          this.record({ identifier, status, source, round, evidence: text.trim().slice(0, 240),
+            sourcePath: citation?.[1], sourceLocation: citation?.[0],
+            contextOwner: /\b[Ii]n\s+`?([A-Z][A-Za-z0-9_]*)`?\b/u.exec(text)?.[1],
+            references: [...new Set([...names.spans, ...names.bare].map(item => item.name).concat(
+              [...text.matchAll(CODE_SPAN)].flatMap(span => [...span[1].matchAll(/\b[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*/gu)].map(m => m[0]))))].slice(0, 64) }, text);
+        }
       }
     }
   }
 
   private claimKey(row: ReviewRow): string {
-    const path = /([\w./\\-]+\.(?:h|hpp|cpp|cc|cs|ini))\s*[:(]\s*\d+/u.exec(row.evidence)?.[1];
-    return `${row.identifier}\u0000${path ? pathKey(path) : "unqualified"}`;
+    const path = row.sourcePath || CITED_PATH.exec(row.evidence)?.[1];
+    return `${row.identifier}\u0000${path ? pathKey(path) : row.contextOwner ? `owner:${row.contextOwner}` : "unqualified"}`;
   }
 
-  private record(row: ReviewRow) {
+  private record(row: ReviewRow, fullEvidence: string) {
+    if (row.status === "cleared") {
+      // An explicit member retraction can name a call in an earlier claim
+      // filed under its caller. Co-occurrence is not proof that their claims
+      // are equivalent, so preserve this as an identity question, never clear.
+      const related = [...this.entries.values(), ...this.retired.values()].filter(other => {
+        if (other.status === "cleared" || other.identifier === row.identifier || !other.references?.includes(row.identifier)) return false;
+        const path = other.sourcePath || other.bundle?.path;
+        if (!path) return false;
+        if (row.sourcePath) return pathKey(row.sourcePath) === pathKey(path);
+        const owner = path.replace(/\\/gu, "/").split("/").pop()!.replace(/\.[^.]+$/u, "");
+        if (row.contextOwner) return row.contextOwner === owner;
+        return namesIn(fullEvidence).spans.some(name => name.name === owner)
+          || new RegExp(`\\b${owner.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "u").test(fullEvidence);
+      });
+      for (const other of related) {
+        other.status = "needs_recheck";
+        other.relatedDisposition = { identifier: row.identifier, evidence: row.evidence };
+        other.round = row.round;
+      }
+    }
+    // A retraction that names no file reaches the file-qualified claims of the
+    // same subject: one such claim is that claim; several are ambiguous and
+    // need a recheck rather than staying confirmed or being cleared wholesale.
+    if (row.status !== "found" && !row.sourcePath) {
+      let qualified = [...this.entries.values(), ...this.retired.values()].filter(other => other.identifier === row.identifier
+        && other.status !== "cleared" && !this.claimKey(other).endsWith("\u0000unqualified"));
+      const scoped = qualified.filter(other => {
+        const owner = other.sourcePath?.replace(/\\/gu, "/").split("/").pop()?.replace(/\.[^.]+$/u, "");
+        if (row.contextOwner) return owner === row.contextOwner;
+        return owner && new RegExp(`\\b${owner.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "u").test(fullEvidence);
+      });
+      if (row.contextOwner || scoped.length) qualified = scoped;
+      const unambiguous = Boolean(row.contextOwner || scoped.length || plainRetraction(row));
+      for (const other of qualified) {
+        other.status = qualified.length === 1 && unambiguous ? row.status : "needs_recheck"; other.round = row.round;
+        if (!unambiguous) other.relatedDisposition = { identifier: row.identifier, evidence: row.evidence };
+      }
+    }
     // Reinsertion keeps the bounded register ordered by latest observation.
     const key = this.claimKey(row);
     this.entries.delete(key); this.retired.delete(key);
@@ -143,7 +204,7 @@ export class ReviewRegister {
    * never fresh support for an old found/cleared judgment. */
   attach(index: ReviewEvidenceIndex) {
     for (const row of [...this.entries.values(), ...this.retired.values()]) {
-      row.bundle ||= index.bundleFor(row.identifier, row.evidence) ?? undefined;
+      row.bundle ||= index.bundleFor(row.identifier, `${row.sourceLocation || ""} ${row.evidence}`) ?? undefined;
       const current = row.bundle?.path ? index.shaOf(pathKey(row.bundle.path), row.bundle.sourceKey) : null;
       if (row.bundle) {
         if (index.superseded(row.bundle) || current && current !== row.bundle.sha) row.status = "needs_recheck";
@@ -161,7 +222,7 @@ export class ReviewRegister {
       if (!size || excerptChars + size > MAX_EXCERPT_CHARS) return false;
       excerptChars += size; return true;
     }));
-    return this.rows.flatMap(row => [`- [${row.status}] ${row.identifier} (${row.source}, round ${row.round}): ${row.evidence}`,
+    return this.rows.flatMap(row => [`- [${row.status}] ${row.identifier} (${row.source}, round ${row.round}): ${reviewRowText(row)}`,
       ...(row.bundle ? [bundleLine(row.bundle, withExcerpt.has(row))] : [])]);
   }
 
@@ -173,6 +234,13 @@ export class ReviewRegister {
   findings(): TextFinding[] {
     return this.rows.filter(row => row.status === "found").map(row => ({ label: row.identifier,
       severity: /\bP[0-3]\b/u.exec(row.evidence)?.[0] || "unrated", text: row.evidence }));
+  }
+  /** The open review candidates at their latest status: found or needing a
+   * recheck, including rows the bounded register pushed out of the model
+   * input. Read-only; a renderer does not judge them again or count them as
+   * confirmed defects. */
+  candidates(): ReviewRow[] {
+    return [...this.retired.values(), ...this.rows].filter(row => row.status !== "cleared");
   }
   /** Found rows the answer does not name, including ones the bounded register
    * already pushed out of the model input. */
@@ -188,25 +256,58 @@ export class ReviewRegister {
 }
 
 /** Header of the delivered report a review supplement follows. */
-export const DELIVERED_REPORT_HEADER = "[Delivered report — already shown to the user; write only what follows it]";
+export { DELIVERED_REPORT_HEADER };
 
 export function deliveredReportFact(answer: string): string {
   return `${DELIVERED_REPORT_HEADER}
 ${answer.trim()}
-[End delivered report]`;
+${DELIVERED_REPORT_END}`;
 }
 
 export function reportReviewFact(missing: readonly ReviewRow[], contracts: readonly { factId: string; statement: string }[]): string {
   return ["Runtime evidence observation: report review obligations (working notes, not verified facts)",
-    ...missing.flatMap(row => [`- Missing ${row.identifier}: ${row.evidence}${row.status === "needs_recheck"
+    ...missing.flatMap(row => [`- Missing ${row.identifier}: ${reviewRowText(row)}${row.status === "needs_recheck"
       ? ` [needs_recheck; observed sha ${row.bundle?.sha || "unknown"}; newer source cannot validate this old judgment]` : ""}`,
       ...(row.bundle ? [bundleLine(row.bundle, true)] : [])]),
     ...contracts.map(gap => `- Engine contract ${gap.factId}: ${gap.statement}`)].join("\n");
 }
 
-export function reportReviewNotice(missing: readonly ReviewRow[], cause: "budget" | "empty" = "budget"): string | null {
-  const why = cause === "empty" ? "검토 보완 호출이 내용을 생성하지 않았습니다." : "입력 예산 때문에 검토 보완을 생성하지 못했습니다.";
+export function reportReviewNotice(missing: readonly ReviewRow[], cause: "budget" | "empty" | "duplicate" = "budget"): string | null {
+  const why = cause === "duplicate" ? "중복된 출력을 제외한 뒤 새로 전달된 검토 보완 내용이 없습니다."
+    : cause === "empty" ? "검토 보완에서 새로 전달된 본문이 없습니다." : "입력 예산 때문에 검토 보완을 생성하지 못했습니다.";
   const where = (row: ReviewRow) => row.bundle?.lines ? ` (${row.bundle.path.split("/").pop()}:${row.bundle.lines[0]})` : "";
-  return missing.length ? `\n\n[보고 검토 · 누락] ${why} 다음 작업 메모는 보고에서 다뤄지지 않았으며, 확인된 결함으로 간주할 수 없습니다.\n`
-    + missing.map(row => `- ${row.identifier}${where(row)}: ${row.evidence}`).join("\n") : null;
+  return missing.length ? `\n\n[보고 검토 · 누락] ${why} 다음 작업 메모의 최종 처리 상태를 연결하지 못했습니다. 확인된 결함으로 간주할 수 없습니다.\n`
+    + missing.map(row => `- ${row.identifier}${where(row)}: ${reviewRowText(row)}`).join("\n") : null;
+}
+
+function reviewRowText(row: ReviewRow, maxChars?: number): string {
+  if (maxChars !== undefined) {
+    if (!row.relatedDisposition) return row.evidence.slice(0, maxChars);
+    const prefix = `판단 연결 미확인 · 관련 정정(${row.relatedDisposition.identifier.slice(0, 40)}). 원가설(미검증): `;
+    const separator = " / 정정: ";
+    const each = Math.max(0, Math.floor((maxChars - prefix.length - separator.length) / 2));
+    const excerpt = (text: string) => text.length <= each ? text : text.slice(0, Math.max(0, each - 1)) + "…";
+    return prefix + excerpt(row.evidence) + separator + excerpt(row.relatedDisposition.evidence);
+  }
+  return row.relatedDisposition
+    ? `판단 연결 미확인. 원래 미검증 가설: ${row.evidence} 관련 정정(${row.relatedDisposition.identifier}): ${row.relatedDisposition.evidence}`
+    : row.evidence;
+}
+
+/** Open review candidates at the head of a partial report: working notes,
+ * newest first, never counted or presented as confirmed defects. Bounded in
+ * rows and characters; what does not fit is counted, not dropped silently. */
+export function reviewCandidateLines(rows: readonly ReviewRow[], maxRows = 12, maxChars = 2400): string[] {
+  if (!rows.length) return [];
+  const shown: string[] = [];
+  let chars = 0;
+  for (const row of [...rows].reverse()) {
+    const where = row.bundle?.path ? ` (${row.bundle.path.split("/").pop()}${row.bundle.lines ? `:${row.bundle.lines[0]}` : ""}`
+      + `${row.bundle.sha ? ` @${row.bundle.sha.slice(0, 8)}` : ""})` : "";
+    const line = `- ${row.identifier}${where} [${row.status === "found" ? "미검증 발견" : "재확인 필요"}]: ${reviewRowText(row, 160)}`;
+    if (shown.length >= maxRows || chars + line.length > maxChars) break;
+    shown.push(line); chars += line.length;
+  }
+  const omitted = rows.length - shown.length;
+  return ["미검증 검토 후보 (작업 메모이며 확인된 결함이 아님):", ...shown, ...(omitted > 0 ? [`- 외 ${omitted}개는 길이 제한으로 생략`] : []), ""];
 }

@@ -212,7 +212,7 @@ test('E01 duplicate/orphan callbacks cannot become native success observations',
 
 test('SDK guard denial is failed evidence and cannot continue research recovery',()=>{
   const manager=new EvidenceManager(null,[tool]);
-  const denied=manager.observe(history({error:'Shared read-result budget exhausted.'}).getMessagesArray());
+  const denied=manager.observe(history({error:'Shared read-result budget unavailable (held_reservations_insufficient). Parallel reads in this batch hold the allowance.'}).getMessagesArray());
   assert.equal(denied.progressed,false);assert.equal(denied.errorCount,1);
   assert.equal(completedRequestFingerprints(history({error:'Denied'})).size,0);
   const {RecoveryCoordinator}=require('../dist/recovery-coordinator');

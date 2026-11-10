@@ -124,6 +124,10 @@ function archivePageFacts(value) {
   return { ...read, bodyVerified, partialPage: value.bodyComplete !== true, chars: Number(value.returnedContentChars) || 0 };
 }
 
+/** Bounds of one execution's listing inventory: directories and file names. */
+const MAX_LISTED_DIRECTORIES = 64, MAX_LISTED_FILES = 512;
+function emptyListings(executionId) { return { executionId, overflow: false, directories: new Map(), files: new Map() }; }
+
 class ReadLedger {
   constructor() { this.reset(); }
 
@@ -137,6 +141,59 @@ class ReadLedger {
     this.returnedContracts = [];
     this.sourceObservations = new Map();
     this.counters = { redundantRereads: 0, duplicatedChars: 0, archiveRepages: 0, deliveries: 0 };
+    this.listings = emptyListings("");
+    // Set once a bounded store dropped an entry: an absent read is then unknown, not unread.
+    this.itemsEvicted = false;
+  }
+
+  /** One trusted directory listing of an execution (revised plan 2026-11-07 §B).
+   * A new execution starts a new inventory. Re-observing a listing is
+   * idempotent; pages are merged but a multi-page union is never complete,
+   * since a changing directory has no snapshot to make the union whole. */
+  recordListing(executionId, directoryKey, facts, fileKey) {
+    if (!facts || typeof directoryKey !== "string" || typeof fileKey !== "function") return;
+    if (this.listings.executionId !== executionId) this.listings = emptyListings(executionId);
+    const listings = this.listings;
+    let directory = listings.directories.get(directoryKey);
+    if (!directory) {
+      if (listings.directories.size >= MAX_LISTED_DIRECTORIES) { listings.overflow = true; return; }
+      directory = { path: facts.path, offsets: [], wholeResponse: false, directories: [], files: 0 };
+      listings.directories.set(directoryKey, directory);
+    }
+    directory.offsets = [...new Set([...directory.offsets, facts.offset])].slice(0, 64);
+    directory.wholeResponse ||= facts.complete;
+    directory.directories = [...new Set([...directory.directories, ...facts.directories])].slice(0, MAX_LISTED_FILES);
+    for (const file of facts.files) {
+      const key = fileKey(file.name);
+      if (typeof key !== "string" || listings.files.has(key)) continue;
+      if (listings.files.size >= MAX_LISTED_FILES) { listings.overflow = true; break; }
+      listings.files.set(key, { path: `${facts.path}/${file.name}`, directory: directoryKey });
+      directory.files++;
+    }
+  }
+
+  /** What one execution's listings name and how far each listed file was
+   * read. Derived from the read entries; a returned listing or body is not a
+   * semantic review. null for another execution's or no inventory. */
+  inventory(executionId) {
+    const listings = this.listings;
+    if (!executionId || listings.executionId !== executionId || !listings.directories.size) return null;
+    return { overflow: listings.overflow,
+      directories: [...listings.directories.values()].map(directory => ({ path: directory.path,
+        complete: directory.wholeResponse && directory.offsets.length === 1, subdirectories: directory.directories, files: directory.files })),
+      files: [...listings.files].map(([sourceKey, file]) => ({ path: file.path, sourceKey, ...this.coverageOf(sourceKey) })) };
+  }
+
+  /** complete: the latest version's returned ranges reach its end. partial:
+   * some of it returned. unread: never returned. unknown: an evicted or
+   * invalidated record leaves the state unprovable. */
+  coverageOf(sourceKey) {
+    const latest = [...this.items.values()].filter(entry => entry.sourceKey === sourceKey)
+      .sort((left, right) => right.sequence - left.sequence)[0];
+    if (!latest) return { coverage: this.itemsEvicted || this.returnedFactsIncomplete ? "unknown" : "unread" };
+    if (this.sourceObservation(sourceKey)?.invalidated) return { coverage: "unknown", basis: "invalidated_after_read" };
+    const whole = latest.complete || Number.isSafeInteger(latest.totalLines) && covers(latest.lineRanges, [1, latest.totalLines]);
+    return { coverage: whole ? "complete" : "partial", lines: latest.lineRanges.slice(0, 8), totalLines: latest.totalLines ?? null };
   }
 
   get size() { return this.items.size; }
@@ -251,7 +308,7 @@ class ReadLedger {
         scope:spans.every(r=>r.executionId&&r.executionId===executionId)?"execution":"conversation"};
     });
     return {files:projected,contractIds:new Set(this.returnedContracts.map(r=>r.id)),
-      complete:!this.returnedFactsIncomplete,
+      complete:!this.returnedFactsIncomplete,listed:this.inventory(executionId),
       scope:projected.some(f=>f.scope==="conversation") || this.returnedContracts.some(r=>!r.executionId||r.executionId!==executionId)?"conversation":"execution"};
   }
 
@@ -324,7 +381,7 @@ class ReadLedger {
     entry.sequence = ++this.#sequence;
     this.items.delete(id); this.items.set(id, entry);
     this.counters.deliveries += 1;
-    while (this.items.size > MAX_ENTRIES) this.items.delete(this.items.keys().next().value);
+    while (this.items.size > MAX_ENTRIES) { this.items.delete(this.items.keys().next().value); this.itemsEvicted = true; }
     return entry;
   }
 
@@ -426,7 +483,9 @@ class ReadLedger {
       events: this.events.slice(-MAX_EVENTS), counters: { ...this.counters },
       returnedText:this.returnedText,returnedContracts:this.returnedContracts,returnedSpans:this.returnedSpans,returnedFactsIncomplete:this.returnedFactsIncomplete,
       sourceObservations:[...this.sourceObservations].map(([key,value])=>[key,{...value,historical:true}]),
-      sizeHints: [...this.sizeHints].slice(-MAX_RESULT_SIZES) };
+      sizeHints: [...this.sizeHints].slice(-MAX_RESULT_SIZES), itemsEvicted: this.itemsEvicted,
+      listings: { executionId: this.listings.executionId, overflow: this.listings.overflow,
+        directories: [...this.listings.directories], files: [...this.listings.files] } };
   }
 
   /** Restore a persisted ledger in place (owners keep their reference). The
@@ -466,6 +525,21 @@ class ReadLedger {
     }
     if (Array.isArray(value.events)) this.events = value.events.filter(item => item && typeof item.type === "string").slice(-MAX_EVENTS);
     for (const key of Object.keys(this.counters)) if (Number.isSafeInteger(value.counters?.[key])) this.counters[key] = value.counters[key];
+    this.itemsEvicted = value.itemsEvicted === true;
+    // Restored for the same execution only; recordListing replaces it for a new one.
+    const listed = value.listings;
+    if (listed && typeof listed.executionId === "string" && Array.isArray(listed.directories) && Array.isArray(listed.files)) {
+      this.listings = emptyListings(listed.executionId);
+      this.listings.overflow = listed.overflow === true;
+      for (const row of listed.directories.slice(0, MAX_LISTED_DIRECTORIES))
+        if (Array.isArray(row) && typeof row[0] === "string" && typeof row[1]?.path === "string") this.listings.directories.set(row[0], {
+          path: row[1].path, offsets: (Array.isArray(row[1].offsets) ? row[1].offsets : []).filter(Number.isSafeInteger).slice(0, 64),
+          wholeResponse: row[1].wholeResponse === true, files: Number.isSafeInteger(row[1].files) ? row[1].files : 0,
+          directories: (Array.isArray(row[1].directories) ? row[1].directories : []).filter(name => typeof name === "string").slice(0, MAX_LISTED_FILES) });
+      for (const row of listed.files.slice(0, MAX_LISTED_FILES))
+        if (Array.isArray(row) && typeof row[0] === "string" && typeof row[1]?.path === "string" && typeof row[1]?.directory === "string")
+          this.listings.files.set(row[0], { path: row[1].path, directory: row[1].directory });
+    }
     return true;
   }
 }

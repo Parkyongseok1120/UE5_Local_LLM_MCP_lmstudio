@@ -20,6 +20,7 @@ import { architectureEnabled, selectArchitectureContext, ARCHITECTURE_BASELINE }
 import { projectArchitectureEvidence } from "./architecture-observation";
 import { renderArchitectureContext } from "./architecture-input";
 import type {ArchitectureBinding,ArchitectureSnapshot,ArchitectureInputRefs,PatternCard} from "./architecture-contracts";
+import { sumProjectionStats } from "./input-composition";
 
 /** Older reasoning a projection round keeps, newest first, when no
  * pastReasoningTokens budget is configured. */
@@ -62,6 +63,7 @@ type RoundInputOptions = {
   getRuntimeFacts?: (history: Chat) => RuntimeFactEntry[];
   /** Data blocks this execution already sent (owned by the prediction loop). */
   shownDataBlocks?: ShownDataBlocks;
+  retiredFacts?: () => readonly string[];
   finalizationTrigger: string | null;
   projectionApplied: boolean; executionId: string; modelInputId: string; roundIndex: number;
 };
@@ -118,7 +120,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     roundScopeInstructions, getRoundOutputReserve: () => roundOutputReserve, modelInputId,
     noteEnabled, getNote: () => activeNote, historicalAvailabilityLedger, preProjectionHistory, postProjectionHistory,
     getRuntimeFacts: options.getRuntimeFacts, measurementCache: contextManager.measurementCache,
-    shownDataBlocks: options.shownDataBlocks, consolidateDataBlocks: () => rewritingInput || compacted,
+    shownDataBlocks: options.shownDataBlocks, retiredFacts: options.retiredFacts, consolidateDataBlocks: () => rewritingInput || compacted,
     deferReferenceData: () => referenceSelectionPending,
     runtimeDataAllowanceChars: contextManager.broker.runtimeDataAllowanceChars(contextManager.broker.watermarks(before,
       0, roundTools.some(hasReadCapability), minimumReadBudget(roundTools))) });
@@ -214,6 +216,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         ...pinMetadata,pinnedWorkingSetMaxChars: pinnedChars },
       config.toolResultProjectionChars);
     let projected = project(pinnedWorkingSetMaxChars);
+    const projectionPasses = [projected.stats];
     if (projected.changed) {
       workingHistory = projected.history; rewritingInput = true;
       assembledInput = await assembleModelInput(workingHistory);
@@ -224,6 +227,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     for (const pinBudget of [Math.floor(pinnedWorkingSetMaxChars / 2), Math.floor(pinnedWorkingSetMaxChars / 4), 0]) {
       if (!contextManager.shouldProjectEvidence(assembledInput.measurement, hasReadTools, minimumReadBudget(roundTools))) break;
       const released = project(pinBudget);
+      projectionPasses.push(released.stats);
       pinnedWorkingSetFinalChars = pinBudget;
       pinsReleased = pinBudget === 0;
       if (released.changed) {
@@ -255,7 +259,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     if (config.showDebugInfo) ctl.debug({ event: "working_context_projection", executionId, roundIndex,
       changed, reason: "measured_input_pressure", archiveFailed: projected.archiveFailed === true,
       reasoningBounded, beforeInputTokens, inputTokens: assembledInput.measurement.inputTokens,
-      pinnedWorkingSetMaxChars, pinnedWorkingSetFinalChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact });
+      pinnedWorkingSetMaxChars, pinnedWorkingSetFinalChars, pinsReleased, deepenLowWater, exact: assembledInput.measurement.exact,
+      projectionStats: sumProjectionStats(projectionPasses) });
   }
   const baseResult = () => ({ activeNote, semanticSummaryCooldownUntilRound });
   const measurePressure = async () => {
@@ -305,7 +310,8 @@ export async function prepareRoundInput(options: RoundInputOptions) {
         executionId, roundIndex, changed: projected.changed, reason: preserve ? projected.reason : "aggregate_prompt_budget_projection",
         archiveFailed: projected.archiveFailed === true, candidateInputTokens: assembledInput.measurement.inputTokens,
         candidateRemainingTokens: assembledInput.measurement.remainingTokens, candidateExact: assembledInput.measurement.exact,
-        fit: assembledInput.measurement.remainingTokens >= 0, rawThresholdChars: preserve, archive: workingContext.archive.stats });
+        fit: assembledInput.measurement.remainingTokens >= 0, rawThresholdChars: preserve, archive: workingContext.archive.stats,
+        projectionStats: sumProjectionStats([projected.stats]) });
       if (assembledInput.measurement.remainingTokens >= 0) break;
     }
   }
@@ -333,8 +339,11 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   }
   // A round that rewrites its adopted input near high water reaches the
   // low-water target in the same rewrite (plan B2; see deepenLowWater).
+  // Guidance that was admitted before comes back after a compaction.
+  const retainedGuidance = options.guidanceRetention?.kept ?? options.guidanceRetention?.dropped;
+  const reservedOptionalTokens = Math.min(config.designGuidanceMaxTokens, Math.max(0, retainedGuidance?.tokens ?? 0));
   let lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+    pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
     force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
   const acceptLow = () => {
     if (!lowWater.changed) return;
@@ -363,7 +372,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     // contract; the summary completion itself never authorizes dispatch.
     if (activeNote !== priorNote) {
       lowWater = await contextManager.enforceLowWater(workingHistory, assembleModelInput, {
-        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata,
+        pinnedWorkingSetMaxChars:pinnedWorkingSetFinalChars,pinMetadata, reservedOptionalTokens,
         force: compacted, deepen: deepenLowWater, keepLastAssistantAnswer: options.turnStart, hasReadTools, minimumReadTokens: minimumReadBudget(roundTools) });
       assembledInput = lowWater.assembled; acceptLow();
     }
@@ -479,7 +488,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
-        admissionWater: reuse || topicBacked ? "high" : "low" });
+        admissionWater: compacted ? "low" : reuse || topicBacked ? "high" : "low",
+        // Reuse the floor-aware target of this compaction, including for unknown-size references.
+        ...(compacted ? { appliedLowWaterTokens: lowWater.telemetry?.effectiveLowWaterTokens } : {}) });
     assembledInput = guidance.assembled;
     selectedReference = { instruction: guidance.selectedInstruction, referenceData: guidance.selectedReferenceData };
     architectureInputRefs=architectureVariants.find(view=>guidance.selectedReferenceData?.includes(view.text))?.issued;
@@ -599,6 +610,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     compacted, compactionAppliedCount, compactionAppliedModes, compactionCheckpoint, compactionRetention,
     lowWater, rewriteCauses: [...rewriteCauses], projectionApplied, projectionExhausted, pressure, roundOutputReserve, outputCapSource, assembleRecoveryCandidate, measureOriginalProfile,
     mandatoryFloorMeasurement: lowWater.floorMeasurement,
-    mandatoryFloorExceedsTarget: Boolean(lowWater.floorMeasurement?.exact
-      && lowWater.floorMeasurement.inputTokens > config.workingInputTargetTokens) };
+    // Against the target this round applied (see targetTelemetry), not the raw configured number.
+    // Without telemetry no exact floor was measured, so nothing exceeds anything.
+    mandatoryFloorExceedsTarget: lowWater.telemetry?.mandatoryFloorException === true };
 }

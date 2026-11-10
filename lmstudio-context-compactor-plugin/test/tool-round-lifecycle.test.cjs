@@ -122,7 +122,9 @@ test('a denied read states its allowance and one next step without offering a li
   assert.doesNotMatch(text,/byteBudget\s*[<≤]/);
   // A fresh batch has room for the same read again: the advice is reachable.
   assert.equal(reserveReadResult(new BatchReservation(14252),'d',tool,{byteBudget:8192}).allowed,true);
-  assert.match(readBudgetDenialMessage('batch_closed'),/Split the read batch/);
+  // Host lifecycle states are not blamed on the read's size (revised plan §A).
+  assert.match(readBudgetDenialMessage('batch_closed'),/host batch state, not a problem with the read's size/);
+  assert.match(text,/not the task's read budget/);
 });
 
 test('mixed guard outcomes preserve the allowed and denied counts', () => {

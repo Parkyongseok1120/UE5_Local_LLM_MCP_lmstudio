@@ -1,0 +1,39 @@
+{
+  "sourceSha256": "c5df5e730e33f5fcfb2e42073704dcb88c1bed7d39adc6b790fb2d31822389df",
+  "scope": "Model-expressed disposition tracking only; model judgments are not ground truth about the game.",
+  "passages": [
+    {
+      "step": 514,
+      "text": "- **Potential issue (P2)**: `TickServer` lines 111–114: calls `Red->GetCharacterMovement()->DisableMovement()` — but never re-enables movement! If the benchmark runs and then ends, both characters remain with movement disabled for the rest of the match. Let me check Finish() in the remaining lines (201–302) to see if it restores movement.\n- Also `Red->SetActorLocation` / `Blue->SetActorLocation` — teleports players during a live match. This is by design as a benchmark, but the DisableMovement leak is a real concern."
+    },
+    {
+      "step": 545,
+      "text": "- `Finish()` calls `FPlatformMisc::RequestExit(false)` — terminates the process. So the leak of `DisableMovement` and the health modification (MaxHealth=10000) are not a problem in practice, because the process exits immediately after benchmark completion. This is a CI-style harness that always terminates the game. Therefore, the DisableMovement concern is downgraded to P3/informational: state restoration is unnecessary because the process exits. Good counter-evidence — this is exactly why we check the termination path."
+    },
+    {
+      "step": 676,
+      "text": "- RewindBenchmarkComponent's DisableMovement not re-enabled: Finish() calls FPlatformMisc::RequestExit(false) — process terminates, so no leak. Cleared!\nWait — I should double-check this last one. Round 32 flagged \"DisableMovement is never re-enabled\" as P2 in CombatScenarioComponent.cpp:210 (TickServer). Then round 34 noted that Finish() calls RequestExit. But the DisableMovement at line 210 of CombatScenarioComponent — does the scenario component also terminate? The scenario component is a live experiment harness; if it ends without terminating, movement stays disabled. Let me check: in RewindBenchmarkComponent (the FPS benchmark), Finish → RequestExit(false) so no problem. But UCombatScenarioComponent::TickServer at line 210 — that's the live scenario. Does its Stopping stage re-enable movement? The round 34 note was truncated: \"Finish() calls FPlatformMisc::RequestExit(false) — terminates the pr…\" — this was about RewindBenchmarkComponent. For CombatScenarioComponent, I need to verify whether movement is re-enabled on stop."
+    },
+    {
+      "step": 708,
+      "text": "`RestoreParticipants()` restores the following: transform, movement mode (via SetMovementMode — this re-enables movement), vitals, control rotation, trigger/ADS state, ammo, rewind history. In other words, the scenario component properly cleans up. The earlier P2 concern about `DisableMovement` in CombatScenarioComponent is resolved — it's restored via snapshot on stop.\nOne subtle point: if a participant dies during the scenario, RestoreParticipants skips that pawn (`PS->Health->IsDead()` → continue) — meaning dead pawns don't get their transform/movement restored. But they're dead anyway; on respawn a new pawn is spawned (RespawnComponent), so no problem.\nAlso `EndPlay` at line 391 — let me check whether it calls RestoreParticipants or UnbindFire for cleanup when the component is destroyed mid-scenario. I'll read lines 391–414."
+    },
+    {
+      "step": 724,
+      "text": "EndPlay cleanup is complete: UnbindFire, re-enabling input, RestoreParticipants on the authority side. The scenario component's lifecycle is properly managed — the earlier P2 concern about DisableMovement has been resolved (cleared).\n- RewindBenchmarkComponent's DisableMovement/MaxHealth=10000 not restored: Finish() → FPlatformMisc::RequestExit(false) terminates the process — no leak\n- CombatScenarioComponent lifecycle: RestoreParticipants() restores transform/movement/vitals/ammo/history; EndPlay unbinds fire, re-enables input, and restores participants on authority side — complete cleanup"
+    },
+    {
+      "step": 725,
+      "text": "`EndPlay`가 `UnbindFire`, 입력 복원, 권위 측 `RestoreParticipants()`까지 모두 처리합니다. 시나리오 컴포넌트의 수명 관리도 완전합니다. 이제 전체 검토 결과를 정리하겠습니다.\n| `RewindBenchmarkComponent`의 `DisableMovement`/MaxHealth=10000 미복원 | **기각** — `Finish()`가 `FPlatformMisc::RequestExit(false)`로 프로세스 종료, 리크 없음 |\n| `CombatScenarioComponent`의 이동·체력·탄약 변경 미복원 | **기각** — `RestoreParticipants()`가 트랜스폼/이동모드/생존상태/탄약/리와인 히스토리 복원, `EndPlay`에서 권위 측 자동 호출 + 입력 재활성화 |"
+    }
+  ],
+  "sourceObservation": {
+    "ok": true,
+    "path": "project://Source/Latency_MultiCombat/Private/Components/CombatScenarioComponent.cpp",
+    "sha256": "3f8a1d4144cd46246232f5d8a2204aa1b47ff0165683693b010c35a86f05d3a2",
+    "startLine": 210,
+    "endLine": 210,
+    "totalLines": 414,
+    "content": "210\tvoid UCombatScenarioComponent::TickServer()"
+  }
+}

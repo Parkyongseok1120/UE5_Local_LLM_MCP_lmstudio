@@ -94,7 +94,9 @@ provider: tool.pluginIdentifier || "local", name: tool.name, scope: capabilitySc
 export function isObservationOnlyToolCall(tool: RemoteToolLike, request: Pick<ToolCallRequest, "name" | "arguments">) {
   return resolveCapability(tool, request).effect === "read";
 }
-const REVIEW_REQUEST = /검토|감사|리뷰|분석|점검|조사|찾아|확인해|설명|평가|진단|\b(?:review|audit|analy[sz]e|inspect|find|explain|assess|diagnose|investigate)\b/iu;
+// "…위반하는 것들 … 찾을것" asked for an audit and was classified explain
+// (conversation 1793984074550): every form of 찾-, and the defect nouns.
+const REVIEW_REQUEST = /검토|감사|리뷰|분석|점검|조사|찾(?:아|을|기|는|으)|문제점|위반|결함|확인해|설명|평가|진단|\b(?:review|audit|analy[sz]e|inspect|find|explain|assess|diagnose|investigate)\b/iu;
 const CHANGE_REQUEST = /수정|고쳐|고치|구현|추가해|추가하|변경|바꿔|바꾸|적용|리팩|삭제|지워|만들어|작성해|생성|패치|개선해|빌드|컴파일|실행|돌려|커밋|푸시|\b(?:fix|implement|change|modify|edit|apply|refactor|delete|remove|create|write|add|patch|build|compile|run|execute|commit|push|rename)\b/iu;
 const NO_CHANGE = /(?:코드\s*)?(?:수정|변경)하지\s*(?:말고|마|않고)|바꾸지\s*(?:말고|마|않고)|(?:do not|don't)\s+(?:edit|change|modify)\b[^.,]*|without\s+(?:changing|editing|modifying)\b[^.,]*|no\s+(?:code\s+)?changes/giu;
 

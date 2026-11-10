@@ -56,14 +56,20 @@ test("e: the floor is provider-scoped size data, never a scope-specific retry fl
   b.observeResult(read, { path: "project://A.cpp" }, returned("x"));
   assert.ok(b.retryMinimum(range, { path: "project://B.cpp", startLine: 1, endLine: 5 }), "same provider readers share the floor");
   assert.equal(b.retryMinimum(other, { path: "project://B.cpp" }), undefined, "another provider does not inherit it");
-  // A provider-declared minimum raises it; a higher scope-specific retry floor still wins for its own scope.
+  const shared = b.retryMinimum(read, { path: "project://D.cpp" }).value;
+  // A failure's minimum can hold one file's long first line (revised plan §E:
+  // 10,414 B). It is that request's retry floor, never the provider's metadata cost.
   const big = { ok: false, errorCode: "OUTPUT_LIMIT_EXCEEDED", retry: { allowed: true, mode: "different_arguments",
-    minimum: { field: "byteBudget", value: 9000 } }, value: {} };
+    minimum: { field: "byteBudget", value: 10414 } }, value: {} };
   b.observeResult(read, { path: "project://C.cpp" }, big, [read]);
-  assert.equal(b.retryMinimum(read, { path: "project://D.cpp" }).value, 9000);
+  assert.equal(b.retryMinimum(read, { path: "project://C.cpp" }).value, 10414);
+  assert.equal(b.retryMinimum(read, { path: "project://D.cpp" }).value, shared);
+  const small = reserveReadResult(new BatchReservation(4000, 0), "small", read,
+    { path: "project://D.cpp", byteBudget: 4096 }, undefined, b.retryMinimum(read, { path: "project://D.cpp", byteBudget: 4096 }));
+  assert.equal(small.allowed, true, "a small file that fits 4,096 B is not denied by another file's long line");
   // Failures and bodiless results never lower it.
   b.observeResult(read, { path: "project://E.cpp" }, { ok: false, errorCode: "TOOL_FAILED", retry: { allowed: false, mode: "none" }, value: {} });
-  assert.equal(b.retryMinimum(read, { path: "project://D.cpp" }).value, 9000);
+  assert.equal(b.retryMinimum(read, { path: "project://D.cpp" }).value, shared);
 });
 
 test("f: a budget deferral is shown as deferred, other denials stay canceled", () => {

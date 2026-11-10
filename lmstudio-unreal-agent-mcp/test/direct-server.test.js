@@ -25,6 +25,20 @@ function payloadOf(result) {
   return result.structuredContent;
 }
 
+test("Unreal shared rules route observes project AGENTS without exposing arbitrary parent files", async t => {
+  const f = fixture(t);
+  const projectRoot = path.dirname(f.projectFile);
+  fs.writeFileSync(path.join(projectRoot, "AGENTS.md"), "# Unreal\nPreserve Blueprint defaults.\n");
+  const index = payloadOf(await f.runtime.callTool("project_rules", { project: f.projectFile }));
+  assert.equal(index.kind, "project_rules"); assert.equal(index.totalRules, 1);
+  const rule = index.rules[0];
+  const body = payloadOf(await f.runtime.callTool("project_rules", { project: f.projectFile,
+    action: "read", ruleId: rule.ruleId, version: rule.version, section: "Unreal" }));
+  assert.match(body.content, /Preserve Blueprint defaults/u);
+  const rejected = payloadOf(await f.runtime.callTool("project_rules", { project: f.projectFile, path: "../foreign-agent-state" }));
+  assert.notEqual(rejected.status, "observed");
+});
+
 function fixture(t, envOverrides = {}) {
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "unreal-direct-server-"));
   const projectRoot = path.join(workspaceRoot, "DirectFixture");

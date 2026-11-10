@@ -72,7 +72,15 @@ function main() {
     ...Object.fromEntries(require("../../shared-tool-core/workspace").workspaceToolDefinitions().map(t=>[t.name,"read"])) };
   if (!require("node:util").isDeepStrictEqual(unity, manifest.unityToolEffects)) throw Error("Unity server effects differ from stable manifest");
   const content = renderContract(manifest);
-  const outputs = [[output, content], [path.join(pluginRoot, "src/generated-tool-capability-data.js"), renderData(manifest)]];
+  const crossLanguagePath = path.resolve(pluginRoot, "../config/tool_contract.json");
+  const crossLanguage = JSON.parse(fs.readFileSync(crossLanguagePath, "utf8").replace(/^﻿/, ""));
+  const readNames = new Set(Object.entries({ ...manifest.agentToolEffects, ...manifest.ragToolEffects })
+    .filter(([, effect]) => effect === "read").map(([name]) => name));
+  const priorReadNames = crossLanguage.sideEffectClasses.read_only;
+  crossLanguage.sideEffectClasses.read_only = [...priorReadNames.filter(name => readNames.has(name)),
+    ...[...readNames].filter(name => !priorReadNames.includes(name)).sort()];
+  const outputs = [[output, content], [path.join(pluginRoot, "src/generated-tool-capability-data.js"), renderData(manifest)],
+    [crossLanguagePath, JSON.stringify(crossLanguage, null, 2) + "\n"]];
   for (const [output, content] of outputs) {
   if (process.argv.includes("--check")) {
     if (!fs.existsSync(output) || fs.readFileSync(output, "utf8").replace(/\r\n/g, "\n") !== content)

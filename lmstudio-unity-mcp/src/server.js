@@ -31,7 +31,7 @@ const PERMISSION_STEPS = {
 // Tools that answer without a running Editor.
 const OFFLINE_TOOLS = new Set(["read_file", "list_directory", "search_files", "structured_data_read", "patch_file", "unity_symbols",
   "create_file", "structured_data_patch", "unity_git", "unity_static_validate", "workspace_status", "git_status", "git_log",
-  "git_changed_files", "git_diff_file", "git_read_file", "unity_status"]);
+  "git_changed_files", "git_diff_file", "git_read_file", "project_rules", "unity_status"]);
 const READ_OBSERVATION_ERRORS = new Set([
   "ENOENT", "not_found", "EACCES", "EPERM", "EIO", "NOT_FOUND", "NOT_A_FILE", "FILE_TOO_LARGE",
   "BINARY_FILE", "READ_CHANGED_DURING_CALL", "unsupported_encoding", "response_budget_exceeded",
@@ -145,7 +145,7 @@ function createRuntime(env = process.env, injectedBridge) {
       bounded({ ...responseScope, status: "outcome_unknown",
         delivery: { status: "truncated", reason: "response_budget_exceeded", bodyOmitted: true } }, (args.byteBudget ?? DEFAULT_BYTE_BUDGET) - 128);
       let result;
-      if (workspaceEnabled && (name === "workspace_status" || name.startsWith("git_"))) result = await workspace(name, args, { signal });
+      if (workspaceEnabled && (name === "workspace_status" || name === "project_rules" || name.startsWith("git_"))) result = await workspace(name, args, { signal });
       else if (name === "unity_symbols" && args.action === "source") {
         // The declaration's lines, read through the same file policy as read_file.
         const located = symbols.locate(args);

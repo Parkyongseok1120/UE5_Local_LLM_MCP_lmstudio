@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "engine": "unreal",
-  "revision": 7,
+  "revision": 8,
   "description": "Single source for Unreal engine facts and project policies used by the static validators, the engine_local symbol lookup and the generated model guidance. Data only: analysis logic stays in the Python validators. Evidence paths are relative to the installed engine root.",
   "validatedEngineVersions": [
     "5.7",
@@ -835,6 +835,74 @@
         "\\bClient\\s*RPC",
         "UFUNCTION\\(\\s*Client\\b",
         "\\bClient\\w*[^.\\n]{0,80}(?:\\ball\\s+(?:connected\\s+|relevant\\s+)?(?:clients|players)\\b|\\bbroadcast|모든\\s*(?:연결된\\s*)?(?:클라이언트|플레이어)|브로드캐스트)"
+      ]
+    },
+    {
+      "id": "ue.net.server-rpc-owning-connection",
+      "revision": 1,
+      "kind": "engine_fact",
+      "topic": "networking",
+      "applicability": {
+        "engineVersions": [
+          "5.7",
+          "5.8"
+        ],
+        "types": [
+          "AActor",
+          "UActorComponent"
+        ]
+      },
+      "statement": "On a server, a Server RPC that arrives from a client executes only when it came on the connection that owns the target actor (the actor's net connection or a child connection of it): UNetDriver::ShouldCallRemoteFunction requires RepFlags.bNetOwner on a server. An actor component's RPC uses its owner actor's callspace. A client therefore cannot get a Server RPC executed on an actor owned by another connection or with no owning connection; 'any client can call this Server RPC' is false for actor and component RPCs on the legacy replication path. Ownership says who may call, not whether the arguments or the game state make the call valid.",
+      "preconditions": [
+        "A UFUNCTION(Server) RPC on an AActor or UActorComponent, sent by a client and received by a server through the NetDriver/ActorChannel replication path."
+      ],
+      "exceptions": [
+        "Iris replication and custom NetDrivers are not covered by these references.",
+        "A Server RPC called on the server itself runs locally.",
+        "Ownership does not validate argument values, timing, ammunition or other gameplay rules; those still need server checks."
+      ],
+      "evidenceRefs": [
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/NetDriver.cpp",
+          "symbol": "UNetDriver::ShouldCallRemoteFunction",
+          "lines": {
+            "5.7": 8242,
+            "5.8": 8452
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/DataReplication.cpp",
+          "symbol": "FObjectReplicator::ReceivedRPC",
+          "lines": {
+            "5.7": 1387,
+            "5.8": 1391
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/DataChannel.cpp",
+          "symbol": "UActorChannel::ProcessBunchInternal",
+          "lines": {
+            "5.7": 3361,
+            "5.8": 3394
+          }
+        },
+        {
+          "path": "Engine/Source/Runtime/Engine/Private/Components/ActorComponent.cpp",
+          "symbol": "UActorComponent::GetFunctionCallspace",
+          "lines": {
+            "5.7": 1219,
+            "5.8": 1258
+          }
+        }
+      ],
+      "guidanceRefs": [
+        "unreal-networking.md#engine-defaults"
+      ],
+      "claimMarkers": [
+        "\\bServer\\s*RPC[^.\\n]{0,60}(?<!not\\s)(?<!no\\s)\\b(?:any|every)\\s+(?:connected\\s+)?clients?\\b",
+        "(?<!not\\s)(?<!no\\s)\\b(?:any|every)\\s+(?:connected\\s+)?client\\b[^.\\n]{0,60}\\bServer\\w*",
+        "\\bServer\\s*RPC[^.\\n]{0,60}(?:아무|어떤|모든|어느)\\s*(?:연결된\\s*)?클라이언트(?![가이]?\\s*아니)",
+        "^(?=[\\s\\S]*\\bServer\\w*)[\\s\\S]*?(?:아무|어떤|어느)\\s*(?:연결된\\s*)?클라이언트(?:든|나|라도)[^.\\n]{0,40}(?:RPC|호출|보낼)"
       ]
     },
     {

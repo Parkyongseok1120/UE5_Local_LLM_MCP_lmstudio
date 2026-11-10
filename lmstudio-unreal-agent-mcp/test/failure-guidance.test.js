@@ -232,8 +232,10 @@ test("a read cut before the file or requested range ends names the exact continu
   const { runtime, buildCs } = fixture(t);
   const first = await call(runtime, "read_file", { path: "project://Source/Game/Game.Build.cs", offsetBytes: 0, byteBudget: 2048 });
   assert.equal(first.hasMore, true);
+  // A successful page's hint names where to continue, not the budget that cut it;
+  // the next page uses the caller's choice or the provider default.
   assert.deepEqual(first.suggestion, { tool: "read_file",
-    args: { path: "project://Source/Game/Game.Build.cs", byteBudget: 2048, offsetBytes: first.nextOffsetBytes } });
+    args: { path: "project://Source/Game/Game.Build.cs", offsetBytes: first.nextOffsetBytes } });
   const second = await call(runtime, first.suggestion.tool, first.suggestion.args);
   assert.equal(second.ok, true);
   assert.equal(second.offsetBytes, first.nextOffsetBytes);
@@ -243,7 +245,7 @@ test("a read cut before the file or requested range ends names the exact continu
     { path: "project://Source/Game/Game.Build.cs", startLine: 1, endLine: lines, byteBudget: 2048 });
   assert.equal(cut.truncated, true);
   assert.deepEqual(cut.suggestion, { tool: "read_file_range", args: { path: "project://Source/Game/Game.Build.cs",
-    startLine: cut.endLine + 1, endLine: lines, byteBudget: 2048 } });
+    startLine: cut.endLine + 1, endLine: lines } });
   const whole = await call(runtime, "read_file_range", { path: "project://Source/Game/Lines.h", startLine: 1, endLine: 10 });
   assert.equal(whole.moreLinesInFile, true);
   assert.equal(whole.suggestion, undefined);

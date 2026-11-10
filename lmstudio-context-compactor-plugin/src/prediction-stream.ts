@@ -6,6 +6,7 @@ import type {
 import { InternalDataOutputFilter } from "./internal-data-output";
 import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol, hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { ChatMessage } from "@lmstudio/sdk";
+import { DELIVERED_REPORT_HEADER as FRAME_OPEN, DELIVERED_REPORT_END as FRAME_CLOSE } from "./review-patterns.js";
 const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 
 type SplitVisibleAnswer = (text: string) => {
@@ -40,131 +41,116 @@ export type StreamedAssistant = {
 
 const FOOTER_MARKER = "\n<!-- direct-continuity-note-v";
 
-// A long report echo may fix a typo while repeating it (conversation
-// 1793526507401: "해armless"→"harmless" at 14% showed the report twice). Only
-// long prefixes tolerate edits; each edit must resynchronize on this many chars.
-const ECHO_EDIT_MIN_PREFIX = 200, ECHO_EDIT_SHARE = 0.02, ECHO_EDIT_WINDOW = 8, ECHO_ANCHOR = 8;
-
-/** Greedy alignment of normalized echo text against the delivered prefix.
- * `i` is consumed echo, `j` covered prefix; "pending" needs more echo text. */
-function alignEcho(prefix: string, current: string, maxEdits: number, final: boolean) {
-  let i = 0, j = 0, edits = 0;
-  while (i < current.length && j < prefix.length) {
-    if (current[i] === prefix[j]) { i++; j++; continue; }
-    // The end of the prefix is where a real delta starts; do not edit across it.
-    if (prefix.length - j <= ECHO_ANCHOR) return { i, j, state: "diverged" as const };
-    let pending = false, step: [number, number, number] | null = null;
-    for (let k = 1; k <= ECHO_EDIT_WINDOW && edits + k <= maxEdits && !step; k++) {
-      for (const [di, dj] of [[k, k], [k, 0], [0, k]]) {
-        if (i + di + ECHO_ANCHOR > current.length) { pending ||= !final; continue; }
-        if (current.slice(i + di, i + di + ECHO_ANCHOR) === prefix.slice(j + dj, j + dj + ECHO_ANCHOR)) { step = [di, dj, k]; break; }
-      }
-    }
-    if (!step) return { i, j, state: pending ? "pending" as const : "diverged" as const };
-    i += step[0]; j += step[1]; edits += step[2];
-  }
-  return { i, j, state: j >= prefix.length ? "complete" as const : "consistent" as const };
-}
-
-// A review may instead rewrite the whole report with a section inserted in the
-// middle (conversation 1793532481549: a new "### 6." at 71%). An echo that
-// covered this much of the report before diverging is held to the end; when the
-// output still contains most report lines, only its new lines are shown.
-const REWRITE_MIN_CHARS = 80, REWRITE_MIN_SHARE = 0.2, REWRITE_MIN_COVERAGE = 0.8, SAME_LINE_RATIO = 0.9;
-const lineKey = (line: string) => line.replace(/\s+/gu, " ").trim();
-/** One line edited in place (a fixed typo or word) still counts as the same line. */
-function sameLine(a: string, b: string): boolean {
-  if (a === b) return true;
-  const longest = Math.max(a.length, b.length);
-  if (longest < 12 || Math.abs(a.length - b.length) > longest * (1 - SAME_LINE_RATIO)) return false;
-  let start = 0, end = 0;
-  while (start < a.length && start < b.length && a[start] === b[start]) start++;
-  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
-  return (start + end) / longest >= SAME_LINE_RATIO;
-}
-
 /** A supplement may echo a delivered answer before producing its actual delta.
- * Hold only a possible prefix; unrelated replies and short partial matches pass. */
+ * Hold only a possible prefix; unrelated replies and short partial matches pass.
+ * The echo can be the whole data block the report was shown in, its header and
+ * end line included (conversation 1794306949131, round 52): both lines are
+ * stripped, so the block is recognized as the echo it is. */
 export class DeliveredPrefixEchoFilter {
   private buffer = "";
   private passthrough = false;
-  private rewriting = false;
   private readonly prefix: string;
-  private readonly deliveredLines: string[];
-  private readonly maxEdits: number;
+  private readonly literalWhitespace: boolean;
   duplicateSuppressed = false;
   suppressedChars = 0;
   constructor(deliveredPrefix = "") {
+    this.literalWhitespace = /^\s*(?:```|~~~)|^(?: {4}|\t)\S/mu.test(deliveredPrefix);
     this.prefix = this.normalize(deliveredPrefix);
-    this.deliveredLines = deliveredPrefix.split(/\r?\n/u).map(lineKey).filter(Boolean);
-    this.maxEdits = this.prefix.length >= ECHO_EDIT_MIN_PREFIX ? Math.floor(this.prefix.length * ECHO_EDIT_SHARE) : 0;
   }
-  private normalize(value: string) { return value.replace(/\s+/gu, " ").trim(); }
+  /** Canonicalize prose whitespace, preserving inline-code and fenced-code
+   * characters. Offsets use this same mapping when removing an exact echo. */
+  private canonical(value: string): { text: string; ends: number[] } {
+    let text = "", pendingSpace = -1, ticks = 0;
+    const ends: number[] = [];
+    const append = (part: string, end: number) => { text += part; ends.push(end); };
+    for (let i = 0; i < value.length;) {
+      const c = value[i];
+      if (this.literalWhitespace) {
+        if (c === "\r" && value[i + 1] === "\n") { append("\n", i + 2); i += 2; }
+        else { append(c, i + 1); i++; }
+        continue;
+      }
+      if (!ticks && /\s/u.test(c)) { pendingSpace = ++i; continue; }
+      if (pendingSpace >= 0) { if (text) append(" ", pendingSpace); pendingSpace = -1; }
+      if (c === "`") {
+        let count = 1; while (value[i + count] === "`") count++;
+        ticks = ticks === count ? 0 : ticks || count;
+        for (let n = 0; n < count; n++) append("`", ++i);
+      } else { append(c, ++i); }
+    }
+    // Literal mode only ignores whitespace around the whole framed report.
+    if (this.literalWhitespace) {
+      const from = text.length - text.trimStart().length, to = text.trimEnd().length;
+      return { text: text.slice(from, to), ends: ends.slice(from, to) };
+    }
+    return { text, ends };
+  }
+  private normalize(value: string) { return this.canonical(value).text; }
+  /** null until the start of the output shows whether it copies the frame header. */
+  private framed: boolean | null = null;
+  private stripFrameHeader(final: boolean): boolean {
+    if (this.framed !== null) return true;
+    const head = this.buffer.trimStart();
+    if (!final && head.length < FRAME_OPEN.length && FRAME_OPEN.startsWith(head)) return false;
+    this.framed = head.startsWith(FRAME_OPEN);
+    if (this.framed) {
+      const cut = this.buffer.length - head.length + FRAME_OPEN.length;
+      this.duplicateSuppressed = true; this.suppressedChars += cut; this.buffer = this.buffer.slice(cut);
+    }
+    return true;
+  }
   push(text: string): string {
     if (this.passthrough || !this.prefix) return this.release(text);
     this.buffer += text;
-    if (this.rewriting) return "";
-    const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, false);
-    if (aligned.state === "pending" || aligned.state === "consistent") return "";
-    if (aligned.j < this.prefix.length * 0.9) {
-      if (this.maxEdits && aligned.j >= Math.max(REWRITE_MIN_CHARS, this.prefix.length * REWRITE_MIN_SHARE)) {
-        this.rewriting = true; return "";
-      }
-      this.passthrough = true; return this.drain();
+    if (!this.stripFrameHeader(false)) return "";
+    const current = this.normalize(this.buffer);
+    if (this.prefix.startsWith(current)) return "";
+    // Only an exact, complete report followed by a separated continuation is
+    // removable. Insertions, edits, deletions and reordering keep their context.
+    const end = this.canonical(this.buffer).ends[this.prefix.length - 1];
+    if (current.startsWith(this.prefix) && end !== undefined && /^[ \t]*\r?\n/u.test(this.buffer.slice(end))) {
+      this.passthrough = true; return this.cutEcho(this.prefix.length);
     }
-    this.passthrough = true;
-    return this.cutEcho(aligned.i);
+    this.passthrough = true; return this.drain();
   }
-  /** A held rewrite: its new lines when it still contains most of the report, else all of it. */
-  private rewriteDelta(): string {
-    const lines = this.buffer.split(/\r?\n/u);
-    const known = (line: string) => this.deliveredLines.some(delivered => sameLine(delivered, line));
-    const keys = lines.map(lineKey);
-    const covered = this.deliveredLines.filter(delivered => keys.some(key => key && sameLine(delivered, key))).length;
-    if (covered < this.deliveredLines.length * REWRITE_MIN_COVERAGE) return this.drain();
-    const runs: string[][] = [];
-    let run: string[] | null = null;
-    lines.forEach((line, index) => {
-      const key = keys[index];
-      if (key && !known(key)) { (run ||= (runs.push([]), runs[runs.length - 1])).push(line); return; }
-      if (!key && run) run.push(line); else run = null;
-    });
-    const delta = runs.map(block => block.join("\n").trim()).filter(Boolean).join("\n\n");
-    this.duplicateSuppressed = true; this.suppressedChars += this.buffer.length - delta.length; this.buffer = "";
-    if (!delta) return "";
-    return `\n\n${/^#{1,6}\s*검토 보완/mu.test(delta) ? "" : "## 검토 보완\n"}${delta}`;
-  }
-  /** Map a normalized echo length back to the original text, preserving the delta. */
   private cutEcho(matched: number): string {
-    let normalized = 0, cut = this.buffer.length, started = false;
-    for (const match of this.buffer.matchAll(/\s+|\S+/gu)) {
-      const whitespace = /^\s/u.test(match[0]);
-      if (whitespace && !started) continue;
-      const length = whitespace ? 1 : match[0].length;
-      if (normalized + length > matched) { cut = match.index! + (whitespace ? 0 : matched - normalized); break; }
-      normalized += length; started = true;
-    }
-    if (cut > 0 && /[\uDC00-\uDFFF]/u.test(this.buffer[cut] || "") && /[\uD800-\uDBFF]/u.test(this.buffer[cut - 1])) cut--;
+    const cut = this.canonical(this.buffer).ends[matched - 1] || 0;
     this.duplicateSuppressed = true; this.suppressedChars += cut;
     this.buffer = this.buffer.slice(cut);
-    this.heldSpace = true;
+    this.heldSpace = true; this.closing = true;
     return this.drain();
   }
   // Whitespace right after a suppressed echo is shown only with the delta it
   // precedes; alone it would deliver an empty supplement.
   private heldSpace = false;
   private space = "";
-  private release(text: string): string {
+  /** Right after a suppressed echo the frame's end line may follow; it is dropped too. */
+  private closing = false;
+  private release(text: string, final = false): string {
     if (!this.heldSpace) return text;
-    if (/^\s*$/u.test(text)) { this.space += text; return ""; }
-    this.heldSpace = false; const out = this.space + text; this.space = ""; return out;
+    this.space += text;
+    let body = this.space.trimStart();
+    if (this.closing && body) {
+      if (!final && body.length < FRAME_CLOSE.length && FRAME_CLOSE.startsWith(body)) return "";
+      this.closing = false;
+      if (body.startsWith(FRAME_CLOSE)) {
+        this.suppressedChars += this.space.length - body.length + FRAME_CLOSE.length;
+        this.space = body = body.slice(FRAME_CLOSE.length);
+        if (!body.trim()) return "";
+      }
+    }
+    if (!body) {
+      if (final) { this.suppressedChars += this.space.length; this.space = ""; }
+      return "";
+    }
+    this.heldSpace = false; const out = this.space; this.space = ""; return out;
   }
   finish(): string {
-    if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain()); }
+    if (this.passthrough || !this.prefix) { this.passthrough = true; return this.release(this.drain(), true); }
     this.passthrough = true;
-    if (this.rewriting) return this.rewriteDelta();
-    const aligned = alignEcho(this.prefix, this.normalize(this.buffer), this.maxEdits, true);
-    return aligned.j >= this.prefix.length * 0.9 ? this.cutEcho(aligned.i) : this.drain();
+    this.stripFrameHeader(true);
+    const out = this.normalize(this.buffer) === this.prefix ? this.cutEcho(this.prefix.length) : this.drain();
+    return out + this.release("", true);
   }
   private drain() { const text = this.buffer; this.buffer = ""; return this.release(text); }
 }
@@ -235,6 +221,7 @@ export class PredictionStreamRenderer {
     const messages = captured.messages.map(message => this.visibleMessage(message));
     const observations = captured.messages.filter(m => m.isAssistantMessage() && m.getText()).map(m => this.consumeMessage(m));
     return { ...captured, messages, unexecutedToolIntent, presentation: {
+      generatedVisibleChars: captured.messages.filter(m => m.isAssistantMessage()).reduce((n, m) => n + visibleAssistantText(m.getText()).length, 0),
       deliveredChars: messages.filter(m => m.isAssistantMessage()).reduce((n, m) => n + m.getText().length, 0),
       suppressedInternalProtocol: observations.some(o => o.suppressedProtocol),
       incompleteInternalProtocol: observations.some(o => o.incompleteProtocol),
