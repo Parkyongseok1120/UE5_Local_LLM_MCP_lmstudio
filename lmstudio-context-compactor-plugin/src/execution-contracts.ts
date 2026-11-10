@@ -11,12 +11,13 @@ export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
 export const RUNTIME_DATA_SHARE = 0.10;
 export type RuntimeFactKey = "budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
   | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger" | "round_limit";
+  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger" | "round_limit" | "project_rules";
 /** Events that end an until_cleared fact. A key with no event lives for the
  * execution (the runtime fact store is created per execution). */
 export type RuntimeFactEvent = "read_budget_resolved" | "research_progress" | "final_delivery";
 type RuntimeFactRule = { priority: 0 | 1 | 2; maxChars: number; lifetime: "until_cleared" | "round"; clearOn?: readonly RuntimeFactEvent[] };
 export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, RuntimeFactRule>> = {
+  project_rules: { priority: 0, maxChars: 400, lifetime: "until_cleared" },
   mutation_focus: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
   report_now: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
   // A round whose reads returned without a limit, denial or cut.

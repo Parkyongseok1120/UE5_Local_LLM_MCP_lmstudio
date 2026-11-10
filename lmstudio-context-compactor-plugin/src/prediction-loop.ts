@@ -23,6 +23,7 @@ import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
 import { RuntimeFactStore } from "./runtime-fact-store";
 import { sessionBudgetConfig } from "./session-budget";
+import { PROJECT_RULES_UNCHECKED, projectRuleFact } from "./project-rule-facts";
 import { NotePersistence } from "./note-persistence";
 import { reportReviewObligations } from "./report-scope";
 import { sealAndRelease } from "./terminal-persistence";
@@ -271,6 +272,7 @@ export function createPredictionLoopHandler(
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
     const runtimeFacts = new RuntimeFactStore();
+    if (modelTools.some(tool => tool.name === "project_rules")) runtimeFacts.set("project_rules", PROJECT_RULES_UNCHECKED);
     // The single reasoning retry is for a repeated reasoning block, not an output limit.
     let repetitionRecoveryActive = false;
     // Consecutive tool rounds that returned no new path, version or range,
@@ -903,6 +905,8 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         const interruption = transaction.interruptionMessage(runtimeToolTrace.values());
         if (interruption) workingHistory.append(interruption);
         const budgetFeedback = readBudgetFeedback([...runtimeToolTrace.values()]);
+        const ruleFact = projectRuleFact(captured.messages);
+        if (ruleFact) runtimeFacts.set("project_rules", ruleFact);
         if (budgetFeedback && !config.observeOnly) runtimeFacts.set("budget", budgetFeedback);
         else if (readBudgetResolved([...runtimeToolTrace.values()])) runtimeFacts.onEvent("read_budget_resolved");
         evidenceManager.observeRoundReferences(workingHistory, captured.messages, scope, executionId,

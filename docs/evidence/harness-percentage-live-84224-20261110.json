@@ -1,0 +1,411 @@
+{
+  "kind": "live_model_percentage_budget_eval",
+  "buildId": "ef-build-v2-8beb001bf466a17b2fb6b4acd74aa48a5cbce5c8a29e00505a6928e930859f9d",
+  "model": {
+    "type": "llm",
+    "modelKey": "swift-1.5-qwen3.8-27b",
+    "format": "gguf",
+    "displayName": "Swift 1.5 Qwen3.8 27B",
+    "path": "ukisai/Swift-1.5-Qwen3.8-27B-GGUF/Swift-1.5-Qwen3.8-27B-Q4_K_S.gguf",
+    "sizeBytes": 17291120448,
+    "paramsString": "27B",
+    "architecture": "qwen35",
+    "quantization": {
+      "name": "Q4_K_S",
+      "bits": 4
+    },
+    "identifier": "swift-1.5-qwen3.8-27b",
+    "instanceReference": "2Iu+4jtIvX4j8lJ+crHyxQlY",
+    "vision": true,
+    "trainedForToolUse": true,
+    "maxContextLength": 262144,
+    "contextLength": 84224
+  },
+  "loadedContextLength": 84224,
+  "elapsedMs": 17302,
+  "calls": [
+    {
+      "maxTokens": 8422,
+      "toolNames": [
+        "evidence_first_read_context"
+      ],
+      "stats": [
+        {
+          "stopReason": "eosFound",
+          "tokensPerSecond": 46.726132178636064,
+          "timeToFirstTokenSec": 1.3793330000000001,
+          "totalTimeSec": 15.97502,
+          "promptTokensCount": 1205,
+          "predictedTokensCount": 683,
+          "totalTokensCount": 1888,
+          "totalDraftTokensCount": 876,
+          "acceptedDraftTokensCount": 390,
+          "rejectedDraftTokensCount": 486
+        }
+      ],
+      "reasoningFragments": 304
+    }
+  ],
+  "error": null,
+  "visible": "관찰(소스로 확인된 것):\n- 코드에서 `[SerializeField] float speed = 4;`로 기본값이 4임을 확인할 수 있다.\n- 씬/인스펙터에 저장된 값은 7로, 직렬화 상태가 코드 기본값과 다름을 확인할 수 있다.\n- `Update()` 안에 매 프레임 `speed = 4;`를 쓰는 문장이 존재한다.\n\n한계:\n- 런타임 플레이를 하지 않았으므로 실제 실행 시 speed가 몇인지 확인되지 않는다.\n- 해당 컴포넌트가 활성화되어 있는지, 스크립트가 enabled인지, 객체가 씬에 실제로 붙어 있는지도 이 자료만으로는 확정할 수 없다.\n- 다른 코드, 이벤트, 인스펙터 자동 변경, 리셋/초기화 로직이 speed를 다시 바꿀 가능성도 배제할 수 없다.\n\n작성 값(speed=7)을 덮어쓸 수 있는 것:\n- `Update()`의 `speed = 4;`가 실행되면, 컴포넌트가 활성화된 상태에서 첫 프레임 이후 7은 4로 대체된다.\n- 코드 기본값 4는 저장된 직렬화 값이 없을 때만 의미 있고, 이미 7으로 저장되어 있으면 로드 시 자동으로 4가 되지는 않는다.\n\n런타임 검증 필요 사항:\n- Play 모드 진입 후 `Awake/Start` 시점과 첫 `Update` 이후 speed 값을 확인해야 한다.\n- 컴포넌트 enabled/active 상태와 다른 수정 로직 유무를 함께 봐야 한다.\n\n다음 검증 단계:\n- 임시 로그를 넣어 로드 직후와 Update 1회 후 speed를 출력하고, Play 모드에서 실제 값 변화를 관찰한다.\n\nREPORT-END",
+  "reportEndPresent": true,
+  "events": [
+    {
+      "event": "context_budget",
+      "mode": "percentage",
+      "contextLength": 84224,
+      "contextLengthSource": "model",
+      "outputReserveTokens": 8422,
+      "safetyMarginTokens": 1684,
+      "requested": {
+        "targetPercent": 55,
+        "triggerPercent": 75,
+        "outputPercent": 10,
+        "safetyPercent": 2,
+        "targetTokens": 46323,
+        "triggerTokens": 63168,
+        "outputTokens": 8422,
+        "safetyTokens": 1684,
+        "outputMaxTokens": 16384
+      },
+      "adjustments": []
+    },
+    {
+      "event": "direct_context_measurement",
+      "executionId": "a2354df0-c320-486e-93c1-6ead7e9b3255",
+      "modelInputId": "a2354df0-c320-486e-93c1-6ead7e9b3255:prediction-1",
+      "roundIndex": 0,
+      "compacted": false,
+      "compactionAppliedCount": 0,
+      "compactionAppliedModes": [],
+      "observeOnly": false,
+      "exactMeasurement": true,
+      "contextLengthSource": "model",
+      "promptMeasurementSource": "templated_model_count",
+      "templatedInputChars": 5416,
+      "messageCount": 2,
+      "inputTokens": 1205,
+      "remainingTokens": 72913,
+      "toolSchemaChars": 2564,
+      "toolSchemaTokens": 564,
+      "toolSchemaTokenMeasurement": "exact",
+      "finalExactMeasurement": true,
+      "finalContextLengthSource": "model",
+      "finalPromptMeasurementSource": "templated_model_count",
+      "finalTemplatedInputChars": 5416,
+      "finalInputTokens": 1205,
+      "finalToolSchemaChars": 2564,
+      "finalToolSchemaTokens": 564,
+      "finalToolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "2acf611019234e49a3bef72db159717dbeb2d4ab5d79d7c2508c06548ceba4fd",
+      "actToolSurfaceFingerprint": "2acf611019234e49a3bef72db159717dbeb2d4ab5d79d7c2508c06548ceba4fd",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "5627d1e2151db7c83ce72acef4ac8181aaea3caef3da8a229c3cae0e157fb230",
+      "outputReserve": 8422,
+      "requestedMaxTokens": 8422,
+      "appliedMaxTokens": 8422,
+      "capSource": "configured",
+      "budgetMode": "explicit",
+      "finalRemainingTokens": 72913,
+      "finalFit": true,
+      "finalMessageCount": 2,
+      "postCompactionInputTokens": null,
+      "postCompactionRemainingTokens": null,
+      "postHistoryTokens": 171,
+      "postProjectionTokens": 171,
+      "postCompactionTokens": 171,
+      "postMetadataTokens": 424,
+      "runtimeDataTokens": 253,
+      "postToolSchemaTokens": 1205,
+      "finalExactInputTokens": 1205,
+      "stageFingerprints": {
+        "history": "9e66bd3403bf34f010eeac0376ca08ac39f3bd5b0fe3060ec83ad280733ae1d6",
+        "projection": "9e66bd3403bf34f010eeac0376ca08ac39f3bd5b0fe3060ec83ad280733ae1d6",
+        "compaction": "9e66bd3403bf34f010eeac0376ca08ac39f3bd5b0fe3060ec83ad280733ae1d6",
+        "metadata": "ae904dcefa99f62616ed77682345e9b8cd01d341d9ab53da80d82c355389661e",
+        "final": "5627d1e2151db7c83ce72acef4ac8181aaea3caef3da8a229c3cae0e157fb230"
+      },
+      "measurementCost": {
+        "measurementCalls": 3,
+        "measurementMs": 26,
+        "templateCalls": 3,
+        "tokenCountCalls": 4,
+        "contextLengthCalls": 3,
+        "cacheHits": 8,
+        "scope": "round_input_assembler",
+        "cacheScope": "execution_model_handle"
+      },
+      "availabilityMetadataTokens": 0,
+      "runtimeDataCurrentChars": 0,
+      "runtimeDataSupersededChars": 0,
+      "runtimeContext": {
+        "effectiveContextTokens": "unknown",
+        "cachedPrefixTokens": "unknown",
+        "source": "sdk_stats_unavailable"
+      },
+      "workingContext": {
+        "mode": "deterministic",
+        "inputTargetTokens": 18000,
+        "inputTriggerTokens": 22000,
+        "appliedTargetTokens": 46323,
+        "appliedTriggerTokens": 63168,
+        "targetMet": true,
+        "runtimeDataChars": 0,
+        "mandatoryFloorTokens": 1205,
+        "mandatoryFloorExceedsTarget": false,
+        "projectionApplied": false,
+        "restoredWindowApplied": false,
+        "windowCommitted": true,
+        "windowCommitSkippedReason": null,
+        "archive": {
+          "captured": 0,
+          "reads": 0,
+          "returnedChars": 0,
+          "unavailable": 0
+        },
+        "semanticCost": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "exact": true
+      },
+      "assistantNote": {
+        "protocol": "disabled",
+        "state": "absent",
+        "itemCount": 0,
+        "reviewClaimCount": 0,
+        "statusCounts": {
+          "open": 0,
+          "resolved": 0,
+          "superseded": 0
+        }
+      },
+      "projectEngine": "unknown",
+      "projectScopeSource": "ambiguous",
+      "availableUnityTools": 0,
+      "availableUnrealTools": 0,
+      "visibleToolCount": 1,
+      "visibleToolNames": [
+        "evidence_first_read_context"
+      ],
+      "fullToolCount": 1,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "recoveryToolRounds": 0,
+      "finalizationPending": false,
+      "finalizationTrigger": null,
+      "finalizationAttempts": 0,
+      "auditCompletionPhase": "off",
+      "attachmentCount": 0,
+      "inputAvailability": {
+        "mode": "observe",
+        "verificationBoundary": "final_sdk_chat",
+        "hostInputVerification": "unknown",
+        "entries": [],
+        "omittedEntryCount": 0,
+        "entryListComplete": true,
+        "metrics": {
+          "currentRawObservationCount": 0,
+          "unverifiableRawObservationCount": 0
+        },
+        "metadataChars": 0,
+        "availabilityMetadataTokens": 0,
+        "metadataTokenMeasurement": "prompt_delta"
+      }
+    },
+    {
+      "event": "direct_round_observation",
+      "executionId": "a2354df0-c320-486e-93c1-6ead7e9b3255",
+      "modelInputId": "a2354df0-c320-486e-93c1-6ead7e9b3255:prediction-1",
+      "roundIndex": 0,
+      "finishReason": "eosFound",
+      "predictionStats": {
+        "stopReason": "eosFound",
+        "promptTokensCount": 1205,
+        "predictedTokensCount": 683,
+        "totalTokensCount": 1888
+      },
+      "predictionUsage": {
+        "fragmentCount": 653,
+        "reasoningTokensCount": 304,
+        "visibleTokensCount": 348,
+        "visibleChars": 767,
+        "rawToolIntentCandidate": false,
+        "rawToolIntentFirstFragment": null,
+        "rawToolIntentFirstVisibleChar": null,
+        "structuralTokensCount": 0,
+        "toolArgumentChars": 0,
+        "toolArgumentTokensCount": null,
+        "unattributedTokensCount": 31,
+        "sdkToolRequestStartedCount": 0,
+        "sdkToolRequestNamedCount": 0,
+        "sdkToolRequestEndedCount": 0,
+        "sdkToolRequestFinalizedCount": 0,
+        "sdkToolRequestFailureCount": 0
+      },
+      "renderedOutput": {
+        "deliveredChars": 767,
+        "suppressedInternalProtocol": false,
+        "incompleteInternalProtocol": false,
+        "duplicateSuppressedChars": 0
+      },
+      "callPurpose": "research",
+      "roundModelElapsedMs": 17098,
+      "modelPrefillMs": 2491,
+      "modelGenerationElapsedMs": 14607,
+      "executionCost": {
+        "modelCalls": 1,
+        "promptTokens": 1205,
+        "predictedTokens": 683,
+        "elapsedMs": 17098,
+        "promptProcessingMs": 2491,
+        "generationElapsedMs": 14607,
+        "unknownPromptProcessingCalls": 0,
+        "unknownUsageCalls": 0,
+        "summary": {
+          "summaryCalls": 0,
+          "summaryPromptTokens": 0,
+          "summaryPredictedTokens": 0,
+          "summaryMs": 0,
+          "unknownUsageCalls": 0
+        },
+        "executionElapsedMs": 17211,
+        "modelCallsIncludingSummary": 1,
+        "unknownUsageCallsIncludingSummary": 0,
+        "knownPromptTokensIncludingSummary": 1205,
+        "knownPredictedTokensIncludingSummary": 683,
+        "elapsedMsIncludingSummary": 17098
+      },
+      "requestedMaxTokens": 8422,
+      "appliedMaxTokens": 8422,
+      "capSource": "configured",
+      "contextLength": 84224,
+      "inputTokens": 1205,
+      "remainingTokens": 72913,
+      "toolSchemaChars": 2564,
+      "toolSchemaTokens": 564,
+      "toolSchemaTokenMeasurement": "exact",
+      "toolSchemaFingerprint": "2acf611019234e49a3bef72db159717dbeb2d4ab5d79d7c2508c06548ceba4fd",
+      "actToolSurfaceFingerprint": "2acf611019234e49a3bef72db159717dbeb2d4ab5d79d7c2508c06548ceba4fd",
+      "toolSurfaceMatchesMeasured": true,
+      "templatedInputFingerprint": "5627d1e2151db7c83ce72acef4ac8181aaea3caef3da8a229c3cae0e157fb230",
+      "finalizationPending": false,
+      "finalizationAttempts": 0,
+      "recoveryEpisodeStarted": false,
+      "recoveryProfileActive": false,
+      "recoveryAttempts": 0,
+      "reasoningRecoveryAttempts": 0,
+      "reasoningRecoveryDecision": {
+        "eligible": false,
+        "reason": "not_reasoning_limit"
+      },
+      "recoveryToolRounds": 0,
+      "recoveryPaginationRounds": 0,
+      "recoveryNoProgressRounds": 0,
+      "recoveryProgress": {
+        "observationOnly": false,
+        "newResultCount": 0,
+        "newResponseFingerprintCount": 0,
+        "newSuccessfulObservationCount": 0,
+        "newSourceUnits": 0,
+        "newArchiveUnits": 0,
+        "currentInputAvailabilityGain": null,
+        "restoredWorkingEvidenceUnits": 0,
+        "usefulProgress": false,
+        "progressed": false,
+        "errorCount": 0,
+        "duplicateCount": 0,
+        "partialOverlapCount": 0,
+        "redundantRereadCount": 0,
+        "archiveRepageCount": 0,
+        "coverage": [],
+        "repeatRestoreOnly": false,
+        "noNewEvidence": false,
+        "verdict": {
+          "progressed": false,
+          "noNewEvidence": false,
+          "failedReads": 0,
+          "budgetDenied": [],
+          "mutationOutcomes": []
+        },
+        "envelopes": [],
+        "usableSourceEvidence": false
+      },
+      "fullToolCount": 1,
+      "exposedToolNames": [
+        "evidence_first_read_context"
+      ],
+      "structuredToolRequestCount": 0,
+      "sdkToolEvents": {
+        "started": 0,
+        "named": 0,
+        "ended": 0,
+        "finalized": 0,
+        "failed": 0
+      },
+      "guardAllowedCount": 0,
+      "guardDeniedCount": 0,
+      "toolCallBoundary": {
+        "state": "no_tool_request",
+        "rawToolIntent": false,
+        "structuredRequestCount": 0,
+        "sdkStartedCount": 0,
+        "sdkFinalizedCount": 0,
+        "guardAllowedCount": 0,
+        "guardDeniedCount": 0,
+        "dispatchCount": null,
+        "resultCount": 0
+      },
+      "rawToolIntentCandidate": false,
+      "finalRawToolIntent": false,
+      "rawToolIntentFirstFragment": null,
+      "rawToolIntentFirstVisibleChar": null,
+      "rawToolIntentNames": [],
+      "unknownRawToolNames": [],
+      "registeredButWithheldRawToolNames": [],
+      "registeredUnsafeRawToolNames": [],
+      "retryCandidate": null,
+      "freshToolPlanningRetry": {
+        "eligible": false,
+        "reason": "no_final_raw_tool_intent"
+      },
+      "actualDispatchCount": null,
+      "actualResultCount": 0,
+      "phase": "research",
+      "attempt": 1,
+      "continueAfterTools": false,
+      "modelInputToolResultCount": 0,
+      "calls": [],
+      "results": [],
+      "outputBatchReservation": {
+        "callCount": 0,
+        "publicReadCallCount": 0,
+        "requestedByteBudget": 0,
+        "requestedMaxChars": 0,
+        "unknownReturnLimitCallCount": 0,
+        "actualResultChars": 0,
+        "actualResultBytes": 0,
+        "actualResultCount": 0
+      },
+      "workingContextExposure": [],
+      "toolTrace": {
+        "runtime": [],
+        "captured": {
+          "executionId": "a2354df0-c320-486e-93c1-6ead7e9b3255",
+          "modelInputId": "a2354df0-c320-486e-93c1-6ead7e9b3255:prediction-1",
+          "roundIndex": 0,
+          "requests": [],
+          "results": []
+        }
+      },
+      "modelNoteLifecycle": "absent"
+    }
+  ],
+  "limits": [
+    "Synthetic fixture; host controller simulated; real model template/tokenization/inference.",
+    "No installed plugin GUI, editor playthrough or original audit-session replay was tested."
+  ]
+}

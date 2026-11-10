@@ -20,8 +20,8 @@ export function numeric(value: unknown, fallback: number, min: number, max: numb
 export function percent(value: unknown, fallback: number, min: number, max: number): number {
   if (value === null || value === undefined || typeof value === "boolean" || typeof value === "string" && !value.trim()) return fallback;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, Math.round(parsed * 10) / 10));
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) return fallback;
+  return Math.round(parsed * 10) / 10;
 }
 
 export function stagnationAction(value: unknown): StagnationAction {

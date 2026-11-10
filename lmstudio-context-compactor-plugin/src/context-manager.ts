@@ -649,12 +649,14 @@ export class ContextManager {
     candidates: ReadonlyArray<{ ids: readonly string[]; instruction: string; referenceData?: string; dataIds?: readonly string[] }>,
     assemble: (instruction: string, referenceData?: string) => Promise<AssembledInput>,
     options: { maxAddedTokens: number; hasReadTools: boolean; minimumReadTokens: number; guardAbort: () => void;
-      admissionWater?: "low" | "high" }) {
+      admissionWater?: "low" | "high"; appliedLowWaterTokens?: number }) {
     const requestedIds = candidates[0]?.ids || [];
     const requestedDataIds = candidates[0]?.dataIds || [];
     const admissionWater = options.admissionWater === "high" ? "high" : "low";
     const ceiling = (water: ReturnType<BudgetBroker["watermarks"]>) =>
-      admissionWater === "high" ? water.effectiveHighWaterTokens : water.effectiveLowWaterTokens;
+      options.appliedLowWaterTokens !== undefined
+        ? Math.min(options.appliedLowWaterTokens, water.effectiveHighWaterTokens)
+        : admissionWater === "high" ? water.effectiveHighWaterTokens : water.effectiveLowWaterTokens;
     let reason = "no_candidates";
     let attempts = 0;
     const result = (assembled: AssembledInput, selectedIds: readonly string[] = [], addedTokens = 0, selectedDataIds: readonly string[] = [],
@@ -663,7 +665,8 @@ export class ContextManager {
       telemetry: { requestedIds, selectedIds, omittedIds: requestedIds.filter(id => !selectedIds.includes(id)),
         requestedDataIds, selectedDataIds, omittedDataIds: requestedDataIds.filter(id => !selectedDataIds.includes(id)),
         reason, attempts, addedTokens, baseInputTokens: base.measurement.inputTokens,
-        finalInputTokens: assembled.measurement.inputTokens, admissionWater },
+        finalInputTokens: assembled.measurement.inputTokens, admissionWater,
+        ...(options.appliedLowWaterTokens !== undefined ? { appliedLowWaterTokens: options.appliedLowWaterTokens } : {}) },
     });
     if (!candidates.length) return result(base);
     if (!Number.isFinite(options.maxAddedTokens) || options.maxAddedTokens <= 0) {

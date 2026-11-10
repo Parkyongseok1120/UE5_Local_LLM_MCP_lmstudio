@@ -101,8 +101,9 @@ test("at the recorded 84,224 context the defaults land beside the legacy numbers
 test("shares are validated without rewriting what the user saved", () => {
   assert.equal(percent("55.26", 55, 10, 90), 55.3);
   assert.equal(percent("abc", 55, 10, 90), 55);
-  assert.equal(percent(150, 55, 10, 90), 90);
-  assert.equal(percent(-3, 55, 10, 90), 10);
+  assert.equal(percent(150, 55, 10, 90), 55);
+  assert.equal(percent(-3, 55, 10, 90), 55);
+  assert.equal(percent(100, 55, 10, 90), 55);
   const inverted = percentage({ contextTargetPercent: 80, contextTriggerPercent: 60 });
   assert.equal(inverted.contextTargetPercent, 80);
   assert.deepEqual(budgetShares(inverted), { target: 55, trigger: 75, invalid: true });
@@ -200,6 +201,54 @@ test("percentage reasoning recovery grows from the session reserve and ignores t
     ["research", "reasoning_recovery"]);
 });
 
+test("percentage bounded finalization takes the lower of the session and audit caps", async () => {
+  for (const [contextLength, expected] of [[32768, 4096], [131072, 6000]]) {
+    const calls = [];
+    const model = { identifier: "percentage-bounded", async getContextLength() { return contextLength; },
+      async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 100; },
+      async act(_chat, tools, options) {
+        calls.push(options.maxTokens);
+        if (calls.length === 1) {
+          options.onPredictionCompleted({ stats: { stopReason: "maxPredictedTokensReached", promptTokensCount: 100,
+            predictedTokensCount: options.maxTokens } });
+          return;
+        }
+        assert.deepEqual(tools, []);
+        options.onMessage(ChatMessage.create("assistant", "Partial audit report: evidence is incomplete."));
+        options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 100, predictedTokensCount: 20 } });
+      } };
+    const ctl = fakeController(Chat.from([{ role: "user", content: "Audit the project." }]), model,
+      { contextManagementMode: "deterministic", contextBudgetMode: "percentage", auditCompletionMode: "bounded",
+        auditFinalMaxTokens: 6000, reportReviewMode: "off" },
+      [{ name: "read_file", pluginIdentifier: "mcp/unreal-agent", description: "Read source", parametersJsonSchema: { type: "object" } }]);
+    await handlePredictionLoop(ctl);
+    assert.deepEqual(calls, [contextLength === 32768 ? 4096 : 13107, expected]);
+    assert.equal(ctl.debugValues.find(e => e.event === "bounded_audit_finalization").toolCount, 0);
+  }
+});
+
+test("a smaller measured context limits dispatch and the next execution re-resolves the reserve", async () => {
+  let contextReads = 0;
+  const calls = [];
+  const model = { identifier: "percentage-context-change", async getContextLength() { return ++contextReads === 1 ? 131072 : 32768; },
+    async applyPromptTemplate(chat) { return chat.toString(); }, async countTokens() { return 22000; },
+    async act(_chat, _tools, options) {
+      calls.push(options.maxTokens);
+      assert.ok(22000 + options.maxTokens + 2621 <= 32768, "dispatch obeys the newly measured limit");
+      options.onMessage(ChatMessage.create("assistant", "Report."));
+      options.onPredictionCompleted({ stats: { stopReason: "eosFound", promptTokensCount: 22000, predictedTokensCount: 20 } });
+    } };
+  const settings = { contextManagementMode: "deterministic", contextBudgetMode: "percentage", reportReviewMode: "off", designGuidanceMode: "off" };
+  const ctl = fakeController(Chat.from([{ role: "user", content: "Report available evidence." }]), model, settings);
+  await handlePredictionLoop(ctl);
+  assert.ok(calls.length > 0);
+  const measurement = ctl.debugValues.find(e => e.event === "direct_context_measurement");
+  assert.deepEqual(measurement.workingContext.contextLengthChanged, { resolved: 131072, measured: 32768 });
+  const next = await sessionBudgetConfig(configOf(settings), model, () => {});
+  assert.equal(next.maxOutputReserve, 4096);
+  assert.equal(next.safetyMarginTokens, 655);
+});
+
 // D5: what returns after a compaction is counted before the compaction.
 const { WorkingContext } = require("../src/working-context.js");
 const { ContextManager, createInputAssembler } = require("../dist/context-manager");
@@ -250,11 +299,12 @@ test("percentage compaction leaves room for the guidance that returns, so the ro
   assert.ok(reserved.low.finalExactInputTokens <= reserved.low.compactionTargetTokens);
   assert.equal(reserved.guidance.reason, "sticky_kept");
   assert.ok(reserved.result.finalMeasurement.inputTokens <= reserved.low.effectiveLowWaterTokens, "target share met with the guidance in");
-  // The same round without a known size (nothing to reserve) ends above the target: the outcome the legacy runs recorded.
+  // An unknown size cannot be reserved: reject the optional reference if it would undo this compaction.
   const unreserved = await round(config, prose(w.effectiveHighWaterTokens + 2000, 40), kept(undefined));
   assert.equal(unreserved.low.reservedOptionalTokens, 0);
-  assert.equal(unreserved.guidance.reason, "sticky_kept");
-  assert.ok(unreserved.result.finalMeasurement.inputTokens > unreserved.low.effectiveLowWaterTokens);
+  assert.equal(unreserved.guidance.reason, "sticky_dropped");
+  assert.equal(unreserved.guidance.appliedLowWaterTokens, unreserved.low.effectiveLowWaterTokens);
+  assert.ok(unreserved.result.finalMeasurement.inputTokens <= unreserved.low.effectiveLowWaterTokens);
 });
 
 test("the reservation neither starts a cut nor changes the legacy modes", async () => {

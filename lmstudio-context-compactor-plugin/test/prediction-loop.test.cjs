@@ -3211,7 +3211,8 @@ test("initial raw tool output records the provider boundary when the measured st
   assert.equal(first.outputLimitStage, undefined);
 });
 
-test("no-progress recovery delivers a safe partial report without task completion", async () => {
+for (const percentageBudget of [false, true]) test(`no-progress recovery delivers a safe partial report without task completion (percentage=${percentageBudget})`, async () => {
+  const caps = [];
   const history = Chat.from([{ role: "user", content: "Investigate Git changed files and report only verified evidence." }]);
   const definition = workspaceToolDefinitions().find(tool => tool.name === "git_changed_files");
   const tool = { name: definition.name, description: definition.description,
@@ -3219,6 +3220,7 @@ test("no-progress recovery delivers a safe partial report without task completio
   let calls = 0;
   const model = exactCountingModel(async (chat, tools, options) => {
     calls += 1;
+    caps.push(options.maxTokens);
     if (calls === 1) {
       options.onMessage(ChatMessage.create("assistant",
         "<tool_call><function=git_diff></function></tool_call>"));
@@ -3245,7 +3247,9 @@ test("no-progress recovery delivers a safe partial report without task completio
     options.onMessage(ChatMessage.create("assistant", "The available evidence is incomplete; the investigation did not make verified progress."));
     options.onPredictionCompleted?.({ stats: { stopReason: "eosFound", predictedTokensCount: 35 } });
   });
+  if (percentageBudget) model.getContextLength = async () => 131072;
   const ctl = fakeController(history, model, { contextManagementMode: "hybrid",
+    ...(percentageBudget ? { contextBudgetMode: "percentage" } : {}),
     softRemainingTokens: 1000, hardRemainingTokens: 500,
   }, [tool]);
   await handlePredictionLoop(ctl);
@@ -3254,6 +3258,8 @@ test("no-progress recovery delivers a safe partial report without task completio
   assert.equal(partial.reportDelivered, true);
   assert.equal(partial.taskCompleted, false);
   assert.equal(partial.reason, "research_no_progress");
+  // The existing unbounded recovery report policy grants twice the session cap when headroom fits.
+  if (percentageBudget) assert.deepEqual(caps, [13107, 4096, 26214]);
   assert.match(ctl.blocks.at(-1).text, /부분 조사 보고 \(미완료\)/u);
   assert.match(ctl.blocks.at(-1).text, /invalid_cursor/u);
   const finalization = ctl.debugValues.find(value => value.event === "research_recovery_finalization");

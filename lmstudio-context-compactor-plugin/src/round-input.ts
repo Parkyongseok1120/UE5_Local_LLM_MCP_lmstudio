@@ -488,7 +488,9 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       (instruction, referenceData) => assembleModelInput(workingHistory, { instructions: [...roundScopeInstructions, instruction], referenceData }),
       { maxAddedTokens: config.designGuidanceMaxTokens, hasReadTools: roundTools.some(hasReadCapability),
         minimumReadTokens: minimumReadBudget(roundTools), guardAbort: () => ctl.guardAbort(),
-        admissionWater: reuse || topicBacked ? "high" : "low" });
+        admissionWater: compacted ? "low" : reuse || topicBacked ? "high" : "low",
+        // Reuse the floor-aware target of this compaction, including for unknown-size references.
+        ...(compacted ? { appliedLowWaterTokens: lowWater.telemetry?.effectiveLowWaterTokens } : {}) });
     assembledInput = guidance.assembled;
     selectedReference = { instruction: guidance.selectedInstruction, referenceData: guidance.selectedReferenceData };
     architectureInputRefs=architectureVariants.find(view=>guidance.selectedReferenceData?.includes(view.text))?.issued;
