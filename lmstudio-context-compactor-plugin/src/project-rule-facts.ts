@@ -9,9 +9,18 @@ export function projectRuleFact(messages: readonly ChatMessage[]): string | null
   let fact: string | null = null;
   for (const message of messages) for (const result of message.getToolCallResults()) {
     const name = requests.get(result.toolCallId);
+    if (name === "set_active_project" || name === "unreal_set_active_project") {
+      fact = PROJECT_RULES_UNCHECKED;
+      continue;
+    }
     if (name !== "project_rules" && name !== "workspace_status") continue;
     const value = decodeToolResultRecord(result.content).value;
-    if (!value || value.status !== "observed" || value.kind !== name || typeof value.workspaceIdentity !== "string") continue;
+    // A failed re-observation cannot leave the old hash looking current. This
+    // also covers malformed/denied responses and a missing workspace identity.
+    if (!value || value.status !== "observed" || value.kind !== name || typeof value.workspaceIdentity !== "string") {
+      fact = PROJECT_RULES_UNCHECKED;
+      continue;
+    }
     const rules = name === "workspace_status" ? value.rules : value;
     if (!rules || typeof rules.setHash !== "string" || !Number.isSafeInteger(rules.totalRules)) {
       fact = PROJECT_RULES_UNCHECKED;

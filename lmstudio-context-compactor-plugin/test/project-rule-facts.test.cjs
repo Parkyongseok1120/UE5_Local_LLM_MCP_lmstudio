@@ -27,6 +27,24 @@ test("new versions and project identities retire the old rule hint without retir
   assert.equal(isRetiredFact(changed, facts.retiredTexts), true); assert.equal(isRetiredFact(switched, facts.retiredTexts), false);
   assert.equal(new RuntimeFactStore().has("project_rules"), false, "no cross-execution restoration");
 });
+
+test("failed rule re-observation and project switching retire the old verified hash", () => {
+  for (const [name, result] of [
+    ["project_rules", { status: "error", errorCode: "snapshot_changed" }],
+    ["project_rules", { status: "not_applied", errorCode: "rule_not_in_scope" }],
+    ["workspace_status", { status: "error", errorCode: "project_scope_mismatch" }],
+    ["set_active_project", { ok: true, activeProject: "other.uproject" }],
+    ["unreal_set_active_project", { ok: true }],
+  ]) {
+    const store = new RuntimeFactStore();
+    const old = projectRuleFact(exchange(payload())); store.set("project_rules", old);
+    const update = projectRuleFact(exchange(result, name));
+    assert.equal(update, PROJECT_RULES_UNCHECKED, name);
+    store.set("project_rules", update);
+    assert.equal(store.get("project_rules"), PROJECT_RULES_UNCHECKED);
+    assert.equal(isRetiredFact(old, store.retiredTexts), true);
+  }
+});
 test("the handler requests rules with design guidance off and records the provider index as a short runtime fact", async () => {
   const definition = workspaceToolDefinitions().find(tool => tool.name === "project_rules");
   const returned = payload(); delete returned.content;

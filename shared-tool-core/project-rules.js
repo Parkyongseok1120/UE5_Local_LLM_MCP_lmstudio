@@ -112,6 +112,25 @@ async function projectRules(binding, git, args = {}, request = {}) {
     }
     if (end < start || start > Math.max(1, rule.lines.length)) fail("invalid_arguments", "Requested lines are outside the observed document");
     end = Math.min(end, rule.lines.length);
+    const fragment = column => {
+      const chars = Array.from(rule.lines[start - 1]);
+      if (column >= chars.length && !(column === 0 && chars.length === 0)) fail("invalid_arguments", "Column is outside the requested source line");
+      const renderFragment = stop => ({ ...base, action: "read", rule: rule.metadata, startLine: start, endLine: start,
+        content: chars.slice(column, stop).join(""), contentFormat: "line_fragment",
+        lineFragment: { unit: "unicode_codepoints", startColumn: column, endColumnExclusive: stop, totalColumns: chars.length },
+        hasMore: stop < chars.length || start < end,
+        nextStartLine: stop < chars.length ? start : start < end ? start + 1 : null,
+        nextStartColumn: stop < chars.length ? stop : start < end ? 0 : null, requestedEndLine: end });
+      let low = column + 1, high = chars.length, best = chars.length === 0 ? renderFragment(0) : null;
+      while (low <= high) {
+        const stop = Math.floor((low + high) / 2), value = renderFragment(stop);
+        if (Buffer.byteLength(JSON.stringify(value)) <= budget) { best = value; low = stop + 1; }
+        else high = stop - 1;
+      }
+      if (!best) fail("response_budget_exceeded", "Rule metadata and one character do not fit; increase byteBudget");
+      return bounded(best, budget);
+    };
+    if (args.startColumn !== undefined) return fragment(args.startColumn);
     let last = start - 1, content = "";
     const render = () => ({ ...base, action: "read", rule: rule.metadata, startLine: start, endLine: last, content,
       hasMore: last < end, nextStartLine: last < end ? last + 1 : null, requestedEndLine: end });
@@ -119,7 +138,7 @@ async function projectRules(binding, git, args = {}, request = {}) {
       const previous = content; content += `${i}: ${rule.lines[i - 1]}\n`; last = i;
       if (Buffer.byteLength(JSON.stringify(render())) > budget) { content = previous; last = i - 1; break; }
     }
-    if (last < start && end >= start) fail("response_budget_exceeded", "One rule line does not fit; increase byteBudget");
+    if (last < start && end >= start) return fragment(0);
     return bounded(render(), budget);
   }
   if (args.setHash !== undefined && args.setHash !== setHash) fail("snapshot_changed", "Rules changed between index pages");

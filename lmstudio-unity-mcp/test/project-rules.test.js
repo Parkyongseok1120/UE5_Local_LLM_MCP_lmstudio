@@ -52,6 +52,32 @@ test("64KB cap reports a prefix hash and read pages obey the full JSON byte budg
   const next = await f.call({ action: "read", ruleId: rule.ruleId, version: rule.version, byteBudget: 2048, startLine: page.nextStartLine });
   assert.equal(next.startLine, page.endLine + 1); assert.doesNotMatch(next.content, /�/u);
 });
+
+for (const [name, line, budget] of [["JSON escaping", '"'.repeat(40000), 65536], ["Unicode", '🙂"'.repeat(9000), 8192]]) {
+  test(`oversized source lines page losslessly within the JSON budget (${name})`, async t => {
+    const f = fixture(t); f.put("AGENTS.md", "# Rules\n" + line);
+    const index = await f.call({}); const rule = index.rules[0];
+    assert.equal(rule.truncated, false);
+    let startColumn, combined = "", pages = 0;
+    do {
+      const page = await f.call({ action: "read", ruleId: rule.ruleId, version: rule.version,
+        startLine: 2, endLine: 2, byteBudget: budget, ...(startColumn === undefined ? {} : { startColumn }) });
+      assert.equal(page.contentFormat, "line_fragment");
+      assert.ok(Buffer.byteLength(JSON.stringify(page)) <= budget);
+      assert.equal(page.lineFragment.startColumn, startColumn || 0);
+      assert.doesNotMatch(page.content, /�/u);
+      combined += page.content; pages++;
+      if (!page.hasMore) { assert.equal(page.nextStartLine, null); break; }
+      assert.equal(page.nextStartLine, 2); assert.ok(page.nextStartColumn > (startColumn || 0));
+      startColumn = page.nextStartColumn;
+      assert.ok(pages < 40, "every page must make progress");
+    } while (true);
+    assert.ok(pages > 1); assert.equal(combined, line);
+    await assert.rejects(f.call({ action: "read", ruleId: rule.ruleId, version: rule.version,
+      startLine: 2, startColumn: Array.from(line).length + 1 }), e => e.code === "invalid_arguments");
+    await assert.rejects(f.call({ startColumn: 0 }), e => e.code === "invalid_arguments");
+  });
+}
 test("non-Git lookup stays in the workspace and traversal or symlink scopes fail closed", async t => {
   const f = fixture(t, false); f.put("AGENTS.md", "# Outside\nnot applicable\n"); f.put("Game/AGENTS.md", "# Inside\nrule\n");
   const r = await f.call({}); assert.equal(r.scopeSource, "workspace_fallback"); assert.equal(r.totalRules, 1);
