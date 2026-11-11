@@ -1277,15 +1277,19 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (ctl.abortSignal.aborted) throw ctl.abortSignal.reason || captured.failure;
         const phaseTimedOut = phaseTimeoutSignal?.aborted === true;
         if (captured.toolRequestFailure) {
+          const answerShownChars = visibleCaptured.presentation.deliveredChars;
+          const failedToolName = captured.toolRequestFailure.toolName;
           const partial = deliveryController.failedToolRequest(workingHistory, captured.messages,
-            captured.finishReason === "maxPredictedTokensReached" ? "tool_arguments_output_limit" : "tool_arguments_parse_failure");
+            captured.finishReason === "maxPredictedTokensReached" ? "tool_arguments_output_limit" : "tool_arguments_parse_failure",
+            { answerShownChars, ...(failedToolName ? { toolName: failedToolName } : {}) });
           const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
           block.appendText(partial.text);
           deliveryController.recordPartialDelivery("tool_request_generation_failed");
           if (config.showDebugInfo) ctl.debug({ event: "partial_report_delivery", executionId, modelInputId,
             reportDelivered: true, taskCompleted: false, generationCompleted: false,
             evidenceCount: partial.evidenceCount, errorCount: partial.errorCount,
-            reason: "tool_request_generation_failed", failedRequestExecuted: false });
+            reason: "tool_request_generation_failed", failedRequestExecuted: false,
+            answerShownChars, failedToolName: failedToolName || null });
           ctl.createStatus({ status: "canceled", text: captured.finishReason === "maxPredictedTokensReached"
             ? "도구 인수 JSON이 생성 한도에서 잘려 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘린 요청은 자동 재실행하지 않습니다."
             : "도구 인수 JSON을 해석할 수 없어 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘못된 요청은 자동 재실행하지 않습니다." });

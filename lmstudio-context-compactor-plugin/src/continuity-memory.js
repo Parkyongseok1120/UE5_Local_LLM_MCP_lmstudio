@@ -291,11 +291,18 @@ module.exports = {
   buildContinuityMemory,
   extractPriorContinuityState,
   renderTaskProgress,
+  taskProgressView,
 };
 
-// One read-only task view for research, all finalization paths and fallback
-// reports. This does not map edits to semantic completion or schedule tools.
+// One read-only task view for research and all finalization paths. This does
+// not map edits to semantic completion or schedule tools. The rendered frame is
+// model input; user-facing reports read taskProgressView instead.
 function renderTaskProgress(messages) {
+  const view = taskProgressView(messages);
+  return view ? TASK_CONTINUITY_HEADER + "\n" + JSON.stringify(view).replace(/</g, "\\u003c") : "";
+}
+
+function taskProgressView(messages) {
   const normalized = messages.map((m, index) => ({ index,
     role: typeof m.getRole === "function" ? m.getRole() : m.role,
     text: typeof m.getText === "function" ? m.getText() : m.text,
@@ -309,10 +316,8 @@ function renderTaskProgress(messages) {
   const unresolvedItems = sameObjective ? (prior?.unresolvedItems || []).slice(-10) : [];
   const historicalUnresolvedItems = sameObjective ? [] : (prior?.unresolvedItems || []).slice(-10);
   if (!task.taskSelection && !interruptedCalls.length && !interruption.retention.omittedItemsAtLeast
-    && !unresolvedItems.length && !historicalUnresolvedItems.length) return "";
-  const view = { authority: "source_and_runtime_facts_only", completion: "not_inferred",
+    && !unresolvedItems.length && !historicalUnresolvedItems.length) return null;
+  return { authority: "source_and_runtime_facts_only", completion: "not_inferred",
     taskSelection: task.taskSelection, interruptedCalls, interruptedCallRetention: interruption.retention,
     unresolvedItems, historicalUnresolvedItems };
-  return TASK_CONTINUITY_HEADER + "\n"
-    + JSON.stringify(view).replace(/</g, "\\u003c");
 }

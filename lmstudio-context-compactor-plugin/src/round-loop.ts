@@ -40,7 +40,8 @@ export type CapturedRound = {
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
-  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null };
+  /** toolName is the provider-announced name of the unparsed call, when the SDK named it. */
+  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null; toolName?: string };
   finishReason?: string;
   predictionStats?: {
     stopReason: string;
@@ -91,6 +92,10 @@ export async function runOneToolRound(
   let failure: unknown;
   let unparsedToolRequestError: unknown;
   let unparsedArgumentChars: number | null = null;
+  // Names of calls the SDK announced and has not finalized: the name of an
+  // unparsed request is reported to the user; its fragment never is.
+  const pendingRequestNames = new Map<number, string>();
+  let unparsedToolName: string | undefined;
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
@@ -197,6 +202,7 @@ export async function runOneToolRound(
       onToolCallRequestNameReceived: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestNamedCount += 1;
+        if (typeof args[2] === "string") pendingRequestNames.set(args[1], args[2]);
         actCallbacks.onToolCallRequestNameReceived?.(...args);
       },
       onToolCallRequestEnd: (...args) => {
@@ -207,11 +213,14 @@ export async function runOneToolRound(
       onToolCallRequestFailure: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestFailureCount += 1;
+        if (unparsedToolRequestError !== undefined && args[2] === unparsedToolRequestError)
+          unparsedToolName ??= pendingRequestNames.get(args[1]);
         actCallbacks.onToolCallRequestFailure?.(...args);
       },
       onToolCallRequestFinalized: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestFinalizedCount += 1;
+        pendingRequestNames.delete(args[1]);
         actCallbacks.onToolCallRequestFinalized?.(...args);
       },
       onPredictionCompleted: (result) => {
@@ -256,6 +265,9 @@ export async function runOneToolRound(
   // A transport error or external cancellation retains precedence over a
   // parser failure. Never reclassify either as a recoverable generation.
   if (failure === undefined && unparsedToolRequestError !== undefined) failure = unparsedToolRequestError;
+  // Without a failure callback, only a single still-pending named call is unambiguous.
+  const failedName = unparsedToolName ?? (pendingRequestNames.size === 1 ? [...pendingRequestNames.values()][0] : undefined);
+  const unparsedToolNameShown = failedName && /^[A-Za-z0-9_.:-]{1,80}$/u.test(failedName) ? failedName : undefined;
 
   return {
     predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
@@ -266,7 +278,8 @@ export async function runOneToolRound(
       : finishReason === undefined ? {} : { finishReason }),
     ...(predictionStats ? { predictionStats } : {}),
     ...(unparsedToolRequestError !== undefined && failure === unparsedToolRequestError
-      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars } } : {}),
+      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars,
+        ...(unparsedToolNameShown ? { toolName: unparsedToolNameShown } : {}) } } : {}),
     predictionUsage: {
       ...predictionUsage,
       unattributedTokensCount: predictionStats?.predictedTokensCount === undefined

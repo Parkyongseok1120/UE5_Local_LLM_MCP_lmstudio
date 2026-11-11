@@ -39,7 +39,7 @@ export function outputLimitStatusText(stage:OutputLimitStage|undefined):string {
 import { hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { coverageRange, observationRecords, sourceObservationFailed } from "./evidence-manager";
 import type { RemoteToolLike } from "./tool-capability-registry";
-import { renderTaskProgress } from "./continuity-memory.js";
+import { taskProgressView } from "./continuity-memory.js";
 const { redact } = require("./evidence-archive.js") as { redact(value: string): string };
 
 export class DeliveryController {
@@ -106,7 +106,9 @@ export class DeliveryController {
   get hasPartialDelivery() { return this.observation.partialReportDelivered === true; }
   stop(reason: string) { this.observation = { ...this.observation, reason }; }
   partialReport(history: Chat, reason: string, messages: Array<ChatMessage> = [], trigger: string = reason) {
-    const report = evidenceBackedPartialReport(history, messages, reason, this.tools, this.candidates());
+    return this.withMutationNotice(evidenceBackedPartialReport(history, messages, reason, this.tools, this.candidates()), trigger);
+  }
+  private withMutationNotice<T extends { text: string }>(report: T, trigger: string): T {
     return this.objective?.requiredEffects.has("mutation") && this.objective.mutationState !== "applied"
       ? { ...report, text: `요청한 변경은 적용되지 않았습니다: ${finalizationCause(trigger)}\n\n${report.text}` } : report;
   }
@@ -119,9 +121,17 @@ export class DeliveryController {
   }
   // Terminal parse failure never repairs or retries an operation. Deliver only
   // returned observations; unfinished model claims are not report evidence.
-  failedToolRequest(history: Chat, messages: Array<ChatMessage>, reason: string) {
+  // An answer already streamed in the failing round stays the deliverable: the
+  // notice states only what ran and what did not (conversation 1794386851846:
+  // a 2,799-char plan, then a completed git_status and a cut-off validation).
+  failedToolRequest(history: Chat, messages: Array<ChatMessage>, reason: string,
+    options: { answerShownChars?: number; toolName?: string } = {}) {
+    const request = options.toolName && /^[A-Za-z0-9_.:-]{1,80}$/u.test(options.toolName)
+      ? `도구 요청 \`${options.toolName}\`` : "도구 요청";
+    if ((options.answerShownChars || 0) >= ANSWERED_ROUND_MIN_CHARS)
+      return this.withMutationNotice(answeredRoundToolFailureNotice(messages, this.tools, request, reason), reason);
     const report = this.partialReport(history, reason, messages);
-    return { ...report, text: `${report.text}\n- 도구 요청 인수를 완성하지 못해 해당 요청은 실행되지 않았습니다.\n- 실행되지 않은 요청의 검증 결과는 없으며, 반환 기록만으로 전체 조사나 원인 판단이 완료된 것은 아닙니다.` };
+    return { ...report, text: `${report.text}\n- ${request} 인수를 완성하지 못해 해당 요청은 실행되지 않았습니다.\n- 실행되지 않은 요청의 검증 결과는 없으며, 반환 기록만으로 전체 조사나 원인 판단이 완료된 것은 아닙니다.` };
   }
   limits(config: Pick<DirectConfig, "maxOutputReserve" | "auditFinalMaxTokens" | "auditFinalSeconds"
     | "outputRecoveryMaxTokens" | "outputRecoverySeconds">, bounded: boolean, trigger: FinalizationTrigger | null) {
@@ -455,24 +465,66 @@ export function classifyFinalDelivery(
   };
 }
 
+/** Visible chars that make the failing round's text the answer rather than a
+ * progress preface ("파일을 읽겠습니다."). Below it, the evidence report stands in. */
+export const ANSWERED_ROUND_MIN_CHARS = 400;
+
+type PartialReport = { text: string; evidenceCount: number; errorCount: number };
+
+/** Status for a round whose streamed answer stays the deliverable: what ran in
+ * that round and what did not. No excerpts, working notes or model-input frames. */
+export function answeredRoundToolFailureNotice(currentMessages: Array<ChatMessage>, tools: Array<RemoteToolLike>,
+  request: string, reason: string): PartialReport {
+  const { facts, errors } = returnedObservationFacts(observationRecords(currentMessages, tools,
+    { confirmedPairsOnly: tools.length > 0 }));
+  const cause = reason === "tool_arguments_output_limit" ? "인수가 출력 생성 한도에서 잘려" : "인수를 해석할 수 없어";
+  const lines = [`[응답 상태 · 미완료] 위 내용 뒤에 이어서 생성한 ${request}은(는) ${cause} 실행되지 않았습니다. 자동으로 다시 실행하지 않습니다.`];
+  if (facts.length) lines.push(`- 같은 응답에서 완료된 조회: ${facts.join("; ")}`);
+  if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);
+  lines.push("- 실행되지 않은 요청의 결과는 없습니다. 위 내용 중 그 결과에 기대거나 그 작업을 예고한 부분은 확인되지 않은 상태입니다.");
+  return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
+}
+
+/** Previous calls without a result, for the user. The continuity frame itself is model input. */
+function pendingCallLines(messages: Array<ChatMessage>): string[] {
+  const view = taskProgressView(messages) as { interruptedCalls?: Array<{ toolName?: unknown; effect?: unknown }> } | null;
+  const calls = Array.isArray(view?.interruptedCalls) ? view.interruptedCalls : [];
+  if (!calls.length) return [];
+  const unknown = calls.filter(call => call?.effect !== "not_applied").length;
+  const names = [...new Set(calls.map(call => typeof call?.toolName === "string" ? call.toolName : "")
+    .filter(name => /^[A-Za-z0-9_.:-]{1,80}$/u.test(name)))].slice(0, 6);
+  return [`- 결과를 받지 못한 이전 도구 요청 ${calls.length}건${unknown ? ` (적용 여부 불명 ${unknown}건)` : ""}${names.length ? `: ${names.join(", ")}` : ""}`];
+}
+
 export function evidenceBackedPartialReport(history: Chat, currentMessages: Array<ChatMessage>, reason: string,
-  tools: Array<RemoteToolLike> = [], candidates: readonly ReviewRow[] = []): {
-  text: string;
-  evidenceCount: number;
-  errorCount: number;
-} {
+  tools: Array<RemoteToolLike> = [], candidates: readonly ReviewRow[] = []): PartialReport {
+  // Favor the most recent returned evidence, not the oldest eight results.
+  // Normalize each paired history independently: current messages may already
+  // be committed in history. Joining both first would duplicate their call IDs.
+  const pairing = { confirmedPairsOnly: tools.length > 0 };
+  const { facts, errors, excerpts } = returnedObservationFacts([...observationRecords(history.getMessagesArray(), tools, pairing),
+    ...observationRecords(currentMessages, tools, pairing)]);
+  // Rows parsed from reasoning are working notes (conversation 1794386851846
+  // showed packet-schema deliberation as "findings"); only stated ones are shown.
+  const lines = ["부분 조사 보고 (미완료)", ...reviewCandidateLines(candidates.filter(row => row.source === "visible")), "확인된 근거:"];
+  if (facts.length) for (const fact of facts) lines.push(`- ${fact}`);
+  else lines.push("- 현재 입력에서 구조화된 성공 결과를 확인하지 못했습니다.");
+  if (excerpts.length) lines.push("", "반환된 파일 본문 발췌:", ...excerpts, "");
+  lines.push("미확인/중단 범위:");
+  lines.push(`- ${String(reason || "조사 복구가 진행되지 않음").slice(0, 240)}`);
+  if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);
+  lines.push(...pendingCallLines(history.getMessagesArray()));
+  lines.push("- 이 출력은 안전한 부분 보고이며 전체 조사 완료로 처리하지 않았습니다.");
+  return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
+}
+
+function returnedObservationFacts(records: ReturnType<typeof observationRecords>) {
   const facts: Array<string> = [];
   const errors: Array<string> = [];
   const seen = new Set<string>();
   const excerpts: Array<string> = [];
   let excerptChars = 0;
-  // Favor the most recent returned evidence, not the oldest eight results.
-  // Normalize each paired history independently: current messages may already
-  // be committed in history. Joining both first would duplicate their call IDs.
-  const pairing = { confirmedPairsOnly: tools.length > 0 };
-  const records = [...observationRecords(history.getMessagesArray(), tools, pairing),
-    ...observationRecords(currentMessages, tools, pairing)];
-  for (const record of records.reverse()) {
+  for (const record of [...records].reverse()) {
     const value = record.value;
     if (!value || typeof value !== "object") continue;
     const failed = sourceObservationFailed(value);
@@ -512,7 +564,15 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
       const range = Array.isArray(value.projectedBodyRanges)
         ? JSON.stringify(value.projectedBodyRanges) : "unknown-range";
       fact = `archived projection ${id} body range ${range}`;
-    } else if (kind === "git_observation" || value.action || value.sourceAction) {
+    } else if (kind === "git_observation") {
+      // "status workspace page 1–55" read as noise; name the command and its returned items.
+      const action = String(value.action || "status").slice(0, 80);
+      const target = typeof value.path === "string" && value.path ? ` ${value.path.slice(0, 160)}` : "";
+      const start = value.pageStart, end = value.pageEnd, total = value.total;
+      const items = start !== undefined || end !== undefined
+        ? ` (항목 ${String(start ?? "?")}–${String(end ?? "?")}${Number.isSafeInteger(total) ? `/${String(total)}` : ""})` : "";
+      fact = `git ${action}${target}${items}`;
+    } else if (value.action || value.sourceAction) {
       const action = String(value.action || value.sourceAction || "read").slice(0, 80);
       const target = String(value.path || value.sourcePath || "workspace").slice(0, 160);
       const pageStart = value.pageStart ?? value.sourcePageStart;
@@ -524,17 +584,7 @@ export function evidenceBackedPartialReport(history: Chat, currentMessages: Arra
     if (fact && !seen.has(fact)) { seen.add(fact); facts.push(fact); }
     if (facts.length >= 8) break;
   }
-  const lines = ["부분 조사 보고 (미완료)", ...reviewCandidateLines(candidates), "확인된 근거:"];
-  if (facts.length) for (const fact of facts) lines.push(`- ${fact}`);
-  else lines.push("- 현재 입력에서 구조화된 성공 결과를 확인하지 못했습니다.");
-  if (excerpts.length) lines.push("", "반환된 파일 본문 발췌:", ...excerpts, "");
-  lines.push("미확인/중단 범위:");
-  lines.push(`- ${String(reason || "조사 복구가 진행되지 않음").slice(0, 240)}`);
-  if (errors.length) lines.push(`- 도구 오류: ${errors.slice(0, 4).join(", ")}`);
-  lines.push("- 이 출력은 안전한 부분 보고이며 전체 조사 완료로 처리하지 않았습니다.");
-  const taskProgress = renderTaskProgress(history.getMessagesArray());
-  if (taskProgress) lines.push("", "보존된 요청·미확인 실행 상태:", taskProgress);
-  return { text: lines.join("\n"), evidenceCount: facts.length, errorCount: errors.length };
+  return { facts, errors, excerpts };
 }
 
 /** Pure terminal presentation. Evidence/claim owners determine the notices;
