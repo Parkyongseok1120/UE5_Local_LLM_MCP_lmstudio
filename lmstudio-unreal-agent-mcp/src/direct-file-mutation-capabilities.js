@@ -14,7 +14,7 @@ const {
 const { validateWriteTarget } = require("./write-guards");
 const { withPathLock } = require("./write-locks");
 const { readStableTextFile } = require("./direct-file-snapshot");
-const { textLineCount } = require("./direct-mutation-limits");
+const { describeExceeded, regionLimitsExceeded, textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
 const { failure, success } = require("./direct-response");
@@ -172,17 +172,22 @@ function createFileMutationCapabilities(context) {
       ? { startLine: args.startLine, endLine: args.endLine, expectedRangeSha256: args.expectedRangeSha256.toLowerCase() } : null;
     const regions = edits || [{ oldText: args.oldText ?? "", newText: args.newText }];
     const oldText = regions[0].oldText;
-    const tooLarge = regions.findIndex(({ oldText: before, newText: after }) => before.length > limits.maxPatchOldTextChars
-      || after.length > limits.maxPatchNewTextChars
-      || before.length + after.length > limits.maxPatchChars
-      || textLineCount(after) > limits.maxPatchLines);
+    const exceededByRegion = regions.map(region => regionLimitsExceeded(region, limits));
+    const tooLarge = exceededByRegion.findIndex(exceeded => exceeded.length > 0);
     const totalLines = regions.reduce((sum, region) => sum + textLineCount(region.newText), 0);
     const totalBytes = regions.reduce((sum, region) => sum + Buffer.byteLength(region.oldText) + Buffer.byteLength(region.newText), 0);
-    if (tooLarge >= 0 || (edits && (totalLines > limits.maxBundleChangedLines || totalBytes > limits.maxBundleMutationBytes))) {
+    const exceeded = tooLarge >= 0 ? exceededByRegion[tooLarge] : !edits ? [] : [
+      ...(totalLines > limits.maxBundleChangedLines ? [{ limit: "edits[] total newText lines", actual: totalLines, max: limits.maxBundleChangedLines }] : []),
+      ...(totalBytes > limits.maxBundleMutationBytes ? [{ limit: "edits[] total bytes", actual: totalBytes, max: limits.maxBundleMutationBytes }] : []),
+    ];
+    if (exceeded.length) {
+      // Name the limit that was hit: a list of every limit left the model
+      // guessing (conversation 1794393906420: 36 newText lines read as too many characters).
+      const where = tooLarge >= 0 && edits ? `edits[${tooLarge}]: ` : tooLarge >= 0 ? "" : "edits[] together: ";
       return failure(
         "PATCH_TOO_LARGE",
-        `Each region is limited to oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters and ${limits.maxPatchLines} newText lines; edits[] together to ${limits.maxBundleChangedLines} newText lines. Split the change and chain the returned fileVersionReceipt.`,
-        { retryAllowed: true, ...(tooLarge >= 0 && edits ? { details: { editIndex: tooLarge } } : {}) },
+        `${where}${describeExceeded(exceeded)}. Each region is limited to oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters and ${limits.maxPatchLines} newText lines; edits[] together to ${limits.maxBundleChangedLines} newText lines. Replace fewer lines per region; regions in one edits[] call apply together, while separate calls each apply on their own and chain the returned fileVersionReceipt.`,
+        { retryAllowed: true, details: { exceeded, ...(tooLarge >= 0 && edits ? { editIndex: tooLarge } : {}) } },
       );
     }
     assertMutationActive(requestContext.signal);
@@ -214,6 +219,7 @@ function createFileMutationCapabilities(context) {
         ...located,
         details: { ...located.details, currentSha256: read.hash,
           ...(prospective.currentRange ? { currentRange: prospective.currentRange } : {}),
+          ...(prospective.expectedRangeSource ? { expectedRangeSource: prospective.expectedRangeSource } : {}),
           ...(prospective.totalLines ? { totalLines: prospective.totalLines } : {}) } });
     }
     if (!prospective.ok) {

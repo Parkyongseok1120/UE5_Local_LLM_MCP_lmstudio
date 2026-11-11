@@ -10,7 +10,7 @@ const {
   LINE_NUMBER_PATCH_MESSAGE,
   isLineNumberPrefixedPatch,
 } = require("../../shared-tool-core/line-numbering.js");
-const { lineRangeSha256 } = require("./line-range-hash");
+const { lineRangeSha256, locateRangeSha256 } = require("./line-range-hash");
 
 function assertMutationActive(signal) {
   if (signal?.aborted) {
@@ -178,13 +178,26 @@ function calculateLineRangeReplacement({
   const rangeSha256 = lineRangeSha256(lines, startLine, endLine);
   const currentRange = { startLine, endLine, rangeSha256, totalLines: lines.length,
     text: before.slice(0, maxRangeTextChars), ...(before.length > maxRangeTextChars ? { textTruncated: true } : {}) };
-  if (rangeSha256 !== String(expectedRangeSha256 || "").toLowerCase()) {
-    return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange,
-      error: `lines ${startLine}-${endLine} no longer hash to expectedRangeSha256; currentRange holds their text now` };
+  const expected = String(expectedRangeSha256 || "").trim().toLowerCase();
+  if (rangeSha256 !== expected) {
+    // Name where the sent hash came from when it is this file's own: a wider
+    // read's range or the whole-file sha256. The edit is still refused.
+    const other = expected === sha256Buffer(raw) ? null : locateRangeSha256(lines, expected, { startLine, endLine });
+    const expectedRangeSource = expected === sha256Buffer(raw) ? { kind: "file_sha256" }
+      : other ? { kind: "other_range", startLine: other.startLine, endLine: other.endLine } : { kind: "not_in_current_file" };
+    const error = expectedRangeSource.kind === "file_sha256"
+      ? `expectedRangeSha256 is the whole-file sha256, not a range hash. Pass the rangeSha256 a read returned for exactly lines ${startLine}-${endLine}; currentRange holds it with their text.`
+      : other
+        ? `expectedRangeSha256 is the rangeSha256 of lines ${other.startLine}-${other.endLine}, but this edit names lines ${startLine}-${endLine}. A rangeSha256 proves only the exact lines it was returned for: target lines ${other.startLine}-${other.endLine}, or check currentRange.text and use currentRange.rangeSha256 for lines ${startLine}-${endLine}.`
+        : `lines ${startLine}-${endLine} do not hash to expectedRangeSha256; currentRange holds their text now`;
+    return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange, expectedRangeSource, error };
   }
-  if (before.length > maxRangeTextChars || before.length + String(newText).length > maxPatchChars) {
+  const combined = before.length + String(newText).length;
+  if (before.length > maxRangeTextChars || combined > maxPatchChars) {
     return { ok: false, errorCode: "PATCH_TOO_LARGE", currentRange,
-      error: `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}` };
+      error: before.length > maxRangeTextChars
+        ? `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}`
+        : `lines ${startLine}-${endLine} (${before.length} characters) plus newText (${String(newText).length}) total ${combined} characters; a region allows at most ${maxPatchChars} combined` };
   }
   const eol = breaks.includes("\r\n") ? "\r\n" : "\n";
   const replacement = String(newText).replace(/\r\n/g, "\n");

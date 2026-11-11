@@ -9,7 +9,7 @@ const path = require("node:path");
 
 const { createDirectRuntime } = require("../src/direct-server.js");
 const { calculateLineRangeReplacement, replaceWithCAS } = require("../src/safe-write.js");
-const { lineRangeSha256 } = require("../src/line-range-hash.js");
+const { lineRangeSha256, locateRangeSha256 } = require("../src/line-range-hash.js");
 
 const sha = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -197,4 +197,61 @@ test("apply_edit_bundle accepts line-range patches and stays atomic on a stale r
   assert.equal(f.read(B), "b1\nB2\n");
   assert.deepEqual(applied.files.find((file) => file.path === A).changeEvidence.hunks,
     [{ beforeStartLine: 2, afterStartLine: 2, before: "a2", after: "A2" }]);
+});
+
+// Conversation 1794393906420: 13 range edits sent the rangeSha256 of a wider
+// read (83-115) for a narrower edit (85-88), each with a valid version receipt.
+test("a range hash from a wider read or the whole file is named and still refused", async (t) => {
+  const body = Array.from({ length: 40 }, (_, index) => `line${index + 1}`).join("\n") + "\n";
+  const f = fixture(t, { [A]: body });
+  const wide = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 5, endLine: 30 }));
+  const call = async (args) => payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`,
+    startLine: 8, endLine: 12, newText: "x", fileVersionReceipt: wide.fileVersionReceipt, ...args }));
+
+  const narrower = await call({ expectedRangeSha256: wide.rangeSha256 });
+  assert.equal(narrower.errorCode, "RANGE_HASH_MISMATCH");
+  assert.deepEqual(narrower.expectedRangeSource, { kind: "other_range", startLine: 5, endLine: 30 });
+  assert.match(narrower.message, /rangeSha256 of lines 5-30, but this edit names lines 8-12/u);
+  assert.equal(narrower.currentRange.text, "line8\nline9\nline10\nline11\nline12");
+
+  const whole = await call({ expectedRangeSha256: wide.sha256 });
+  assert.deepEqual(whole.expectedRangeSource, { kind: "file_sha256" });
+  assert.match(whole.message, /whole-file sha256, not a range hash/u);
+
+  const unknown = await call({ expectedRangeSha256: sha("recalled after compaction") });
+  assert.deepEqual(unknown.expectedRangeSource, { kind: "not_in_current_file" });
+  assert.equal(f.read(A), body, "no diagnosis turns a refused hash into a write");
+
+  const exact = await call({ expectedRangeSha256: narrower.currentRange.rangeSha256 });
+  assert.equal(exact.ok, true, JSON.stringify(exact));
+});
+
+test("the range-hash diagnosis is bounded to nearby overlapping ranges", () => {
+  const lines = Array.from({ length: 300 }, (_, index) => `l${index}`);
+  assert.deepEqual(locateRangeSha256(lines, lineRangeSha256(lines, 50, 61), { startLine: 43, endLine: 60 }),
+    { startLine: 50, endLine: 61 }, "an overlapping read is found too");
+  assert.equal(locateRangeSha256(lines, lineRangeSha256(lines, 1, 300), { startLine: 150, endLine: 151 }), null,
+    "a range outside the window is not searched");
+  assert.equal(locateRangeSha256(lines, lineRangeSha256(lines, 1, 2), { startLine: 200, endLine: 210 }), null);
+  assert.equal(locateRangeSha256(lines, "not-a-hash", { startLine: 1, endLine: 2 }), null);
+});
+
+test("a patch over a size limit names the limit and the actual value", async (t) => {
+  const f = fixture(t, { [A]: "a\nb\n" });
+  const read = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 1, endLine: 1 }));
+  const tall = Array.from({ length: 36 }, (_, index) => `n${index}`).join("\n");
+  const failure = payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`, startLine: 1, endLine: 1,
+    expectedRangeSha256: read.rangeSha256, newText: tall, fileVersionReceipt: read.fileVersionReceipt }));
+  assert.equal(failure.errorCode, "PATCH_TOO_LARGE");
+  assert.match(failure.message, /^newText lines 36 > 32\./u);
+  assert.deepEqual(failure.exceeded, [{ limit: "newText lines", actual: 36, max: 32 }]);
+  const edits = payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`,
+    edits: [{ oldText: "a", newText: "A" }, { oldText: "b", newText: tall }], fileVersionReceipt: read.fileVersionReceipt }));
+  assert.match(edits.message, /^edits\[1\]: newText lines 36 > 32\./u);
+  assert.equal(edits.editIndex, 1);
+  const bundle = payloadOf(await f.runtime.callTool("apply_edit_bundle", { patches: [{ path: A,
+    edits: [{ oldText: "b", newText: tall }], fileVersionReceipt: read.fileVersionReceipt }] }));
+  assert.equal(bundle.ok, false);
+  assert.match(JSON.stringify(bundle), /newText lines 36 > 32/u);
+  assert.equal(f.read(A), "a\nb\n");
 });

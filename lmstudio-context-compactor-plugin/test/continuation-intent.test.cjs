@@ -51,3 +51,11 @@ test("a continuation that starts with 이제 does not supersede a numbered selec
   ];
   assert.equal(buildObjectiveContinuity(messages).taskSelection.status, "active");
 });
+
+test("a go-ahead naming the earlier plan is a continuation; a new plan request is not", () => {
+  const { looksElliptical } = require("../dist/continuity-objectives.js");
+  assert.equal(looksElliptical("쭉 해줘봐. 계획 니가 세운거 끝까지."), true);
+  assert.equal(looksElliptical("계획대로 진행해"), true);
+  for (const text of ["계획 세워봐", "니가 세운 계획 검토해줘", "계획", "니가 세운거", "계획 끝까지 다시 세워봐", "쭉 해줘봐?"])
+    assert.equal(looksElliptical(text), false, text);
+});

@@ -97,6 +97,22 @@ function textLineCount(value) {
   return String(value ?? "").split(/\r?\n/u).length;
 }
 
+// Which per-region limits one edit region exceeds, with the actual values, so
+// a rejection names the limit to fix instead of listing all of them.
+function regionLimitsExceeded({ oldText = "", newText = "" }, limits) {
+  const before = String(oldText ?? ""), after = String(newText ?? "");
+  return [
+    ["oldText characters", before.length, limits.maxPatchOldTextChars],
+    ["newText characters", after.length, limits.maxPatchNewTextChars],
+    ["combined characters", before.length + after.length, limits.maxPatchChars],
+    ["newText lines", textLineCount(after), limits.maxPatchLines],
+  ].filter(([, actual, max]) => actual > max).map(([limit, actual, max]) => ({ limit, actual, max }));
+}
+
+function describeExceeded(exceeded) {
+  return exceeded.map(({ limit, actual, max }) => `${limit} ${actual} > ${max}`).join(", ");
+}
+
 function bundleMutationUsage(bundle) {
   let bytes = 0;
   let changedLines = 0;
@@ -115,6 +131,8 @@ module.exports = {
   HARD_MUTATION_LIMITS,
   bundleMutationUsage,
   constrainMutationLimits,
+  describeExceeded,
+  regionLimitsExceeded,
   resolveMutationLimits,
   textLineCount,
 };

@@ -35,3 +35,36 @@ test("only provider-qualified paired mutation results count; prose does not", ()
   assert.deepEqual(registry.mutationOutcomes(pair({ok:false,errorCode:"STALE_READ"})), ["failed"]);
   assert.deepEqual(new ToolCapabilityRegistry([{...tool,pluginIdentifier:"mcp/unknown"}]).mutationOutcomes(pair({ok:true})), []);
 });
+
+// Conversation 1794393906420: a plan request was mutate (it named '수정'),
+// the real approval was turn 12, and "쭉 해줘봐 …" ran as explain.
+for (const [text, kind] of [
+  ["그럼 지금 수정 계획 세워봐. 단계적으로", "review"], ["수정하지 말고 계획만 세워봐", "review"],
+  ["리팩터링 계획 짜줘", "review"], ["Make a plan to fix the bug", "review"],
+  ["계획 세우고 바로 고쳐줘", "mutate"], ["수정 계획대로 진행해", "mutate"],
+  ["데이터 에셋이나 기타 에디터 건드리는거 제외하고 코드 쪽만 한번 수정해보자", "mutate"],
+  ["니가 세운 계획 검토해줘", "review"],
+]) test("plan objective: " + text, () => {
+  const objective = classifyObjective(text);
+  assert.equal(objective.kind, kind);
+  assert.equal(objective.requiredEffects.has("mutation"), kind === "mutate");
+});
+
+test("a go-ahead carries the approved edit, and runs a plan only when it approves it", () => {
+  const { executionObjective, planOnlyRequest } = require("../dist/tool-capability-registry");
+  const { Chat } = require("@lmstudio/sdk");
+  const kindAfter = (...users) => executionObjective(Chat.from(users.flatMap((content, index) =>
+    index < users.length - 1 ? [{ role: "user", content }, { role: "assistant", content: "답변" }] : [{ role: "user", content }]))
+    .getMessagesArray()).kind;
+  const plan = "그럼 지금 수정 계획 세워봐. 단계적으로";
+  const approve = "데이터 에셋이나 기타 에디터 건드리는거 제외하고 코드 쪽만 한번 수정해보자";
+  const goOn = "쭉 해줘봐. 계획 니가 세운거 끝까지.";
+  assert.equal(planOnlyRequest(plan), true);
+  assert.equal(kindAfter(plan, approve, goOn), "mutate", "the approved turn, not the plan, is carried");
+  assert.equal(kindAfter(plan, goOn), "mutate", "carrying the plan out to the end approves it");
+  assert.equal(kindAfter(plan, "진행해"), "mutate");
+  assert.equal(kindAfter(plan, "해줘"), "mutate");
+  assert.equal(kindAfter(plan, "계속"), "review", "continuing a plan keeps writing the plan");
+  assert.equal(kindAfter("코드를 수정하지 말고 RPC 계약만 검토해줘", "진행해"), "review", "an explicit no-edit review is never widened");
+  assert.equal(kindAfter("이 함수 설명해줘", "쭉 해줘봐"), "review");
+});

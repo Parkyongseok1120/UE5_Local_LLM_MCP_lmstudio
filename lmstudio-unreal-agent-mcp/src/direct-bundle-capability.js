@@ -96,7 +96,8 @@ function createBundleCapability(context) {
       if (!next.ok) {
         const error = validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
         // A stale line range answers with what is there now, as replace_in_file does.
-        if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange };
+        if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange,
+          ...(next.expectedRangeSource ? { expectedRangeSource: next.expectedRangeSource } : {}) };
         throw error;
       }
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });

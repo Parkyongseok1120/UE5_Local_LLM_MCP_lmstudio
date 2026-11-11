@@ -70,8 +70,10 @@ export function selectFollowUpGuidanceIntent(latest: { text?: string; reason: st
 
 const projectReference = /(?:해당|현재|기존|이|우리)\s*(?:프로젝트|코드베이스)|\b(?:this|our|current|existing) (?:project|codebase)\b/iu;
 const designSubject = /설계|상속|구조|컴포넌트|부모\s*클래스|자식\s*클래스|데이터\s*에셋|\b(?:architecture|design|inheritance|composition|components?|subclass(?:es)?|ownership|data assets?)\b/iu;
-const designQuestion = /잘못|문제|짚어|검토|평가|비교|대안|(?:맞|좋)을까|(?:방식|설계).{0,30}(?:아니|맞|어때)|\b(?:review|compare|assess|alternative|problem|instead|should|why)\b/iu;
-const continuation = /아까|방금|앞서|그렇다면|그렇게|대신|(?:이전|직전)\s*(?:답|판단)|\b(?:earlier|previous|you (?:said|suggested)|that approach|in that case|instead)\b/iu;
+// "적의 개수가 많을떄 이렇게 설계를 해도 돼?" (conversation 1794393906420) asked
+// whether the reviewed design holds: a permission-form judgement and "이렇게".
+const designQuestion = /잘못|문제|짚어|검토|평가|비교|대안|(?:맞|좋)을까|(?:방식|설계).{0,30}(?:아니|맞|어때)|(?:해도|하면)\s*(?:돼|되나|될까|괜찮)|\b(?:review|compare|assess|alternative|problem|instead|should|why)\b/iu;
+const continuation = /아까|방금|앞서|그렇다면|그렇게|이렇게|이런\s*식|대신|(?:이전|직전)\s*(?:답|판단)|\b(?:earlier|previous|you (?:said|suggested)|that approach|in that case|instead)\b/iu;
 const scopeSwitch = /(?:다른|새로운|새)\s*(?:프로젝트|주제)|\b(?:another|different|new) (?:project|topic)\b/iu;
 
 /** Bounded to the active branch's user turns. A past anchor needs an explicit

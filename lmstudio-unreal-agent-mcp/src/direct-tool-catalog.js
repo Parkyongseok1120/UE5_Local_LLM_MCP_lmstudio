@@ -220,7 +220,7 @@ function toolDefinitions() {
     },
     {
       name: "read_file_range",
-      description: "Read lines startLine..endLine; nextStartLine only if truncated. Hash/receipt prove version, not coverage; rangeSha256 proves the lines.",
+      description: "Read lines startLine..endLine; nextStartLine only if truncated. Hash/receipt prove version, not coverage; rangeSha256 proves exactly these lines.",
       inputSchema: schema(repeatable({
         path: { type: "string" },
         project: projectArgument(),
@@ -270,7 +270,7 @@ function toolDefinitions() {
     },
     {
       name: "replace_in_file",
-      description: `Atomic exact replacement, edits[], or startLine..endLine proven by a read's rangeSha256 (mismatch returns currentRange; empty newText deletes); ≤${L.maxPatchChars} chars/${L.maxPatchLines} new lines per region, ≤${L.maxBundleChangedLines} total lines. Requires ALLOW_WRITE=1 and version proof. Chain result receipt; no read-back needed.`,
+      description: `Atomic exact replacement, edits[], or startLine..endLine with the rangeSha256 read for exactly those lines (mismatch returns currentRange; empty newText deletes); ≤${L.maxPatchChars} chars/${L.maxPatchLines} new lines per region, ≤${L.maxBundleChangedLines} total lines. Requires ALLOW_WRITE=1 and version proof. Chain result receipt; no read-back needed.`,
       inputSchema: {
         ...schema({
           ...multiPatchArguments(),
