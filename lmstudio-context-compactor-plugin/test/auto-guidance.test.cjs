@@ -253,3 +253,39 @@ test('the default guidance allowance fits the audit selection', () => {
   const { GUIDANCE_DEFAULTS } = require('../dist/config-defaults');
   assert.ok(GUIDANCE_DEFAULTS.maxTokens >= 6144);
 });
+test("project design review carries only through related user turns in the same project", () => {
+  const { projectDesignTurnsBack } = require("../dist/guidance-topic-selection");
+  const project = "C:\\Games\\Example\\Game.uproject";
+  const anchor = "C:\\Games\\Example\n해당 프로젝트의 적 관련 설계가 잘못된 거 몇 개 짚어줘";
+  const challenge = "아까 말한 것처럼 자식 클래스로 확장하는 문제점을 어떻게 해결할 거야?";
+  const compare = "부모 BP에 컴포넌트를 부착하는 방식이라고 아까 말한 거 아니었나?";
+  const distance = (...turns) => projectDesignTurnsBack(turns, project);
+  assert.equal(distance(anchor), 0);
+  assert.equal(distance(anchor, challenge), 1);
+  assert.equal(distance(anchor, challenge, compare), 2);
+  assert.equal(distance("Compare subclass ownership in this project"), 0);
+  assert.equal(distance('Compare the design alternatives in "C:\\Games\\Example".'), 0);
+  assert.equal(distance("Review inheritance for C:/Games/Example/Game.uproject", challenge), 1);
+  assert.equal(distance('Review the design of this project using "C:\\Games\\Other".'), undefined);
+  assert.equal(projectDesignTurnsBack(['Review the design in "/Games/First Project".'], "/Games/First Project/Game.uproject"), 0);
+  for (const turns of [
+    ["언리얼에서 상속과 컴포넌트의 차이를 설명해줘"],
+    [anchor, "새로운 주제인데", compare],
+    [anchor, "다른 프로젝트의 컴포넌트는 아까 말한 방식이 맞을까?"],
+    [anchor, "참고 문서는 빼고 아까 말한 상속 문제를 비교해"],
+    [anchor, "C:\\Games\\Other\n" + challenge],
+    [anchor, '> ' + challenge],
+    [anchor, "~~~\n" + challenge + "\n~~~"],
+    [anchor, "x".repeat(4001), compare],
+    [anchor, "컴포넌트를 어떻게 쓰는지 예시로 설명해줘"],
+    [anchor, challenge, challenge, compare],
+    ["C:\\Games\\Other\n해당 프로젝트의 상속 문제를 검토해", compare],
+  ]) assert.equal(distance(...turns), undefined, turns.join(" | "));
+  const { selectConversationGuidance } = require("../dist/guidance-topic-selection");
+  const history = [anchor, challenge, compare].map(text => ({ role: "user", text, toolRequests: [], toolResults: [] }));
+  for (const reason of ["new_fork", "stale_prefix", "verified_after_conversation_changed"]) {
+    assert.equal(selectConversationGuidance(history, project, reason).projectDesignAnchor, undefined);
+  }
+  assert.equal(selectConversationGuidance(history, project, "verified").projectDesignAnchor, 2);
+  assert.equal(selectConversationGuidance(history, undefined, "verified").projectDesignAnchor, undefined);
+});

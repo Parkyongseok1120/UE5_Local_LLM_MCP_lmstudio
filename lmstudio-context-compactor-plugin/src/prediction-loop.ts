@@ -12,14 +12,14 @@ import { BudgetBroker, minimumReadResultTokens, readBudgetFeedback, readBudgetRe
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput, type GuidanceRetention } from "./round-input";
-import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
+import { core, inputAvailability, modelNotes, workingContextModule } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, finalDeliveryStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, measurementTelemetry, targetTelemetry, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
-import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
+import { selectConversationGuidance } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
 import { RuntimeFactStore } from "./runtime-fact-store";
 import { sessionBudgetConfig } from "./session-budget";
@@ -120,17 +120,9 @@ export function createPredictionLoopHandler(
       : createAttachmentContext(cleanAttachmentHistory, client);
     const focusedReferences = !config.observeOnly && config.designGuidanceMode !== "off"
       && config.designGuidanceMaxTokens > 0 && (config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto");
-    const guidanceMessages = focusedReferences && config.designGuidanceMode === "auto"
-      ? normalizeHistory(originalHistory).map((message, index) => ({ ...message, index })) : null;
-    const guidanceObjectiveOf = (messages: NonNullable<typeof guidanceMessages>) =>
-      objectiveContinuity.guidanceObjective(messages, continuityState.extractPriorContinuityState(messages));
-    // The previous request is read through the same objective owner, from the
-    // history before the latest user message.
-    const latestUserIndex = guidanceMessages ? guidanceMessages.map(m => m.role).lastIndexOf("user") : -1;
-    const earlierMessages = guidanceMessages && latestUserIndex > 0 ? guidanceMessages.slice(0, latestUserIndex) : [];
-    const guidanceObjective = guidanceMessages ? guidanceObjectiveOf(guidanceMessages) : undefined;
-    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjective!,
-      earlierMessages.some(m => m.role === "user") ? guidanceObjectiveOf(earlierMessages) : undefined) : undefined;
+    const { guidanceObjective, guidanceIntent, projectDesignAnchor } = focusedReferences && config.designGuidanceMode === "auto"
+      ? selectConversationGuidance(normalizeHistory(originalHistory), scope.engine === "unreal" ? scope.projectIdentity : undefined,
+        contextBoundary.reason) : {};
     const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
       || focusedReferences ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
@@ -454,6 +446,7 @@ export function createPredictionLoopHandler(
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
           guidanceIntent,
+          projectDesignAnchor,
           architectureObjective:guidanceObjective,
           guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
