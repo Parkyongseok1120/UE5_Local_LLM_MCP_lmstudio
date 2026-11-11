@@ -644,6 +644,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-context-compactor-plugin/src/runtime-identity.ts",
     "lmstudio-context-compactor-plugin/src/semantic-handoff.ts",
     "lmstudio-context-compactor-plugin/src/tool-boundary.ts",
+    "lmstudio-context-compactor-plugin/src/tool-argument-limits.ts",
     "lmstudio-context-compactor-plugin/src/tool-capability-registry.ts",
     "lmstudio-context-compactor-plugin/scripts/patch-lmstudio-sdk.cjs",
     "lmstudio-context-compactor-plugin/src/design-guidance.ts",
