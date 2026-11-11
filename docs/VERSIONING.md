@@ -2,16 +2,16 @@
 
 제품 전체와 각 구성 요소는 별도 버전을 사용합니다. 같은 숫자로 억지로 맞출 필요는 없습니다.
 
-현재 제품 릴리스는 **1.4.5**이며 배포 구성은 **2.1.36**입니다. 하네스·컴팩터·도구 계약 v4, 아키텍처 판단의 근거·저장 수명, 읽기 예산과 보고서 중복 출력 경계를 보완했습니다. 자세한 내용은 [1.4.5 정식 변경 사항](Release_Notes_1_4_5.md)에 있습니다.
+현재 제품 릴리스는 **1.4.6**이며 배포 구성은 **2.1.37**입니다. Muse Glimmer 30B 모델 설정을 추가하고 도구 호출 중단, 파일 편집, 검색 경로 처리를 개선했습니다. [1.4.6 정식 변경 사항](Release_Notes_1_4_6.md)
 
 | 구성 | 현재 표시 | 기준 파일 |
 |---|---|---|
-| 제품 | 1.4.5 | [installer/manifest.json](../installer/manifest.json) |
-| Node 파일·실행 서버 | 0.3.32 | [package.json](../lmstudio-unreal-agent-mcp/package.json) |
+| 제품 | 1.4.6 | [installer/manifest.json](../installer/manifest.json) |
+| Node 파일·실행 서버 | 0.3.33 | [package.json](../lmstudio-unreal-agent-mcp/package.json) |
 | Unity MCP·Editor Bridge | 1.4.0 | [MCP package.json](../lmstudio-unity-mcp/package.json), [Bridge package.json](../unity-editor-bridge/package.json) |
 | 근거 검토 서버 | 1.1.4 | [evidence_packet_contract.py](../skills/evidence-first-code-audit/scripts/evidence_packet_contract.py), [evidence_first_mcp.py](../skills/evidence-first-code-audit/scripts/evidence_first_mcp.py) |
-| 대화 압축기 | 0.4.86 / revision 133 | [package.json](../lmstudio-context-compactor-plugin/package.json), [manifest.json](../lmstudio-context-compactor-plugin/manifest.json) |
-| 압축 배포 구성 | 2.1.36 | [installer/manifest.json](../installer/manifest.json) |
+| 대화 압축기 | 0.4.87 / revision 134 | [package.json](../lmstudio-context-compactor-plugin/package.json), [manifest.json](../lmstudio-context-compactor-plugin/manifest.json) |
+| 압축 배포 구성 | 2.1.37 | [installer/manifest.json](../installer/manifest.json) |
 
 제품을 새로 배포할 때 제품 버전을 올립니다. 도구의 공개 입력·출력이나 동작이 바뀌면 해당 구성 요소 버전을 올립니다. 배포 파일 구성이나 설치 내용이 바뀌면 배포 구성 버전을 검토해야 합니다.
 

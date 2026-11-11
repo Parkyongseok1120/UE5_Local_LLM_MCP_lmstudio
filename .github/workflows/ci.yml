@@ -64,9 +64,25 @@ jobs:
       - name: Portable Direct and release pytest suites
         run: python scripts/ci/run_ci_suite.py portable_direct portable_release
 
-      - name: SAFE dry-run performs no target writes
+      - name: Windows launcher SAFE dry-run
+        if: runner.os == 'Windows'
+        shell: cmd
+        env:
+          INSTALL_NO_PAUSE: "1"
         run: >
-          python install.py --profile safe --yes --dry-run
+          call INSTALL.bat --profile safe --yes --dry-run
+          --skip-runtime-bootstrap
+          --codex-home "${{ runner.temp }}/codex-dry"
+          --lmstudio-home "${{ runner.temp }}/lmstudio-dry"
+          --state-home "${{ runner.temp }}/state-dry"
+
+      - name: Linux and macOS launcher SAFE dry-run
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PYTHON: python
+        run: >
+          ./install.sh --profile safe --yes --dry-run
           --skip-runtime-bootstrap
           --codex-home "${{ runner.temp }}/codex-dry"
           --lmstudio-home "${{ runner.temp }}/lmstudio-dry"
