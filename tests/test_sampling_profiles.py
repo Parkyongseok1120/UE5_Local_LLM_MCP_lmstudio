@@ -64,6 +64,17 @@ def test_model_alias_resolves_exact_and_embedded_model_ids():
     )
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "meta/muse-glimmer",
+        "lmstudio-community/Muse-Glimmer-30B-GGUF/Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+    ],
+)
+def test_muse_glimmer_resolves_to_its_own_profile(model_name):
+    assert sampling.resolve_profile_name_for_model(model_name) == "muse_glimmer_30b"
+
+
 def test_model_alias_does_not_override_explicit_environment_profile(monkeypatch):
     monkeypatch.setenv("UNREAL_RAG_MODEL_PROFILE", "qwen3_5_9b")
 

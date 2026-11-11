@@ -114,13 +114,14 @@ function createReadCapabilities(context) {
     const entries = [];
     for (const entry of readableEntries.slice(offset, offset + maxEntries)) {
       const candidate = path.join(resolution.absolutePath, entry.name);
-      await assertReadChildContained(candidate, resolution);
-      const childStat = await statOrNull(candidate);
+      // A link out of the root is listed by name only (not followed or stat'ed) instead of failing the listing.
+      const outsideRoot = await assertReadChildContained(candidate, resolution).then(() => false, (error) => { if (!entry.isSymbolicLink()) throw error; return true; });
+      const childStat = outsideRoot ? null : await statOrNull(candidate);
       entries.push({
         name: entry.name,
         type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
         size: childStat?.isFile() ? childStat.size : undefined,
-        modifiedAt: childStat ? childStat.mtime.toISOString() : undefined,
+        modifiedAt: childStat ? childStat.mtime.toISOString() : undefined, ...(outsideRoot ? { outsideRoot: true } : {}),
       });
     }
     const makePayload = (count) => {

@@ -12,14 +12,14 @@ import { BudgetBroker, minimumReadResultTokens, readBudgetFeedback, readBudgetRe
 import { buildCompactedHistory, ContextManager, measureContext, modelHistoryMessage, normalizeHistory, normalizeMessages, selectSoftCompaction, toolDefinitionSurface } from "./context-manager";
 import { resolveGenerationBudget } from "./context-budget";
 import { prepareRoundInput, type GuidanceRetention } from "./round-input";
-import { core, inputAvailability, modelNotes, workingContextModule, objectiveContinuity, continuityState } from "./context-ports";
+import { core, inputAvailability, modelNotes, workingContextModule } from "./context-ports";
 import { canRecoverOutputLimit, classifyFinalDelivery, classifyOutputLimitStage, DeliveryController,
   partialSearchScopeNotice, terminalReportNotices, verificationScopeNotice, outputLimitStatusText, finalDeliveryStatusText, TOOL_RETRY_EXHAUSTED_STATUS, RAW_INTENT_PARTIAL_STATUS } from "./delivery-controller";
 import { completedRequestFingerprints, EvidenceManager, observeRecoveryProgress, seedRecoveryProgress } from "./evidence-manager";
 import { assistantNoteTelemetry, messageEvidenceTelemetry, readResultSize, serializedCheckpointCounts, telemetryFingerprint, ToolRoundStagnationDetector, repeatedFailureFact, stagnationFact, measurementTelemetry, targetTelemetry, runtimeExecutionTelemetry, readLedgerTelemetry, inputAvailabilityTelemetry, SystemPrefixTelemetry } from "./evidence-telemetry";
 import { readConfig } from "./execution-config";
 import { selectDesignGuidance } from "./design-guidance";
-import { selectFollowUpGuidanceIntent } from "./guidance-topic-selection";
+import { selectConversationGuidance } from "./guidance-topic-selection";
 import { MIN_FINAL_OUTPUT_TOKENS, RESEARCH_RECOVERY_MAX_TOKENS, type ContinuityNote, type TaskObjective, type RuntimeFactEntry } from "./execution-contracts";
 import { RuntimeFactStore } from "./runtime-fact-store";
 import { sessionBudgetConfig } from "./session-budget";
@@ -120,17 +120,9 @@ export function createPredictionLoopHandler(
       : createAttachmentContext(cleanAttachmentHistory, client);
     const focusedReferences = !config.observeOnly && config.designGuidanceMode !== "off"
       && config.designGuidanceMaxTokens > 0 && (config.designGuidanceDelivery === "focused" || config.designGuidanceMode === "auto");
-    const guidanceMessages = focusedReferences && config.designGuidanceMode === "auto"
-      ? normalizeHistory(originalHistory).map((message, index) => ({ ...message, index })) : null;
-    const guidanceObjectiveOf = (messages: NonNullable<typeof guidanceMessages>) =>
-      objectiveContinuity.guidanceObjective(messages, continuityState.extractPriorContinuityState(messages));
-    // The previous request is read through the same objective owner, from the
-    // history before the latest user message.
-    const latestUserIndex = guidanceMessages ? guidanceMessages.map(m => m.role).lastIndexOf("user") : -1;
-    const earlierMessages = guidanceMessages && latestUserIndex > 0 ? guidanceMessages.slice(0, latestUserIndex) : [];
-    const guidanceObjective = guidanceMessages ? guidanceObjectiveOf(guidanceMessages) : undefined;
-    const guidanceIntent = guidanceMessages ? selectFollowUpGuidanceIntent(guidanceObjective!,
-      earlierMessages.some(m => m.role === "user") ? guidanceObjectiveOf(earlierMessages) : undefined) : undefined;
+    const { guidanceObjective, guidanceIntent, projectDesignAnchor } = focusedReferences && config.designGuidanceMode === "auto"
+      ? selectConversationGuidance(normalizeHistory(originalHistory), scope.engine === "unreal" ? scope.projectIdentity : undefined,
+        contextBoundary.reason) : {};
     const guidanceDocuments = config.observeOnly || config.designGuidanceMaxTokens <= 0
       || focusedReferences ? [] : selectDesignGuidance(config.designGuidanceMode, scope);
     const scopedRemoteTools = config.observeOnly
@@ -454,6 +446,7 @@ export function createPredictionLoopHandler(
           headroomOutputCap: reportHeadroomCap,
           guidanceDocuments,
           guidanceIntent,
+          projectDesignAnchor,
           architectureObjective:guidanceObjective,
           guidanceRetention,
           guidanceScope: config.designGuidanceMode !== "off" ? scope : undefined,
@@ -752,8 +745,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
               toolGeneration.end(modelRoundIndex, callId);
               traceCall(callId, { generationState: "generated" });
             },
-            onToolCallRequestFailure: (modelRoundIndex, callId) => {
-              toolGeneration.failure(modelRoundIndex, callId);
+            onToolCallRequestFailure: (modelRoundIndex, callId, _error, kind) => {
+              toolGeneration.failure(modelRoundIndex, callId, kind);
               traceCall(callId, { generationState: "failed", executionState: "not_executed" });
             },
             onToolCallRequestFinalized: (_roundIndex, callId, info) => {
@@ -1284,15 +1277,19 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         if (ctl.abortSignal.aborted) throw ctl.abortSignal.reason || captured.failure;
         const phaseTimedOut = phaseTimeoutSignal?.aborted === true;
         if (captured.toolRequestFailure) {
+          const answerShownChars = visibleCaptured.presentation.deliveredChars;
+          const failedToolName = captured.toolRequestFailure.toolName;
           const partial = deliveryController.failedToolRequest(workingHistory, captured.messages,
-            captured.finishReason === "maxPredictedTokensReached" ? "tool_arguments_output_limit" : "tool_arguments_parse_failure");
+            captured.finishReason === "maxPredictedTokensReached" ? "tool_arguments_output_limit" : "tool_arguments_parse_failure",
+            { answerShownChars, ...(failedToolName ? { toolName: failedToolName } : {}) });
           const block = visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" });
           block.appendText(partial.text);
           deliveryController.recordPartialDelivery("tool_request_generation_failed");
           if (config.showDebugInfo) ctl.debug({ event: "partial_report_delivery", executionId, modelInputId,
             reportDelivered: true, taskCompleted: false, generationCompleted: false,
             evidenceCount: partial.evidenceCount, errorCount: partial.errorCount,
-            reason: "tool_request_generation_failed", failedRequestExecuted: false });
+            reason: "tool_request_generation_failed", failedRequestExecuted: false,
+            answerShownChars, failedToolName: failedToolName || null });
           ctl.createStatus({ status: "canceled", text: captured.finishReason === "maxPredictedTokensReached"
             ? "도구 인수 JSON이 생성 한도에서 잘려 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘린 요청은 자동 재실행하지 않습니다."
             : "도구 인수 JSON을 해석할 수 없어 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘못된 요청은 자동 재실행하지 않습니다." });

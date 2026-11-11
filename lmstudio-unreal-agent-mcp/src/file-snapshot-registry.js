@@ -202,7 +202,9 @@ class FileSnapshotRegistry {
     return {
       ok: false,
       errorCode: "FILE_SNAPSHOT_REQUIRED",
-      message: "Pass the explicit fileVersionReceipt returned by a read or immediately preceding mutation, or a valid raw expectedHash.",
+      // A receipt from before a later write of this file fails as a version
+      // conflict, so name the latest one (write_file returns one too).
+      message: "Pass the fileVersionReceipt from the most recent read or successful write of this file (write_file and replace_in_file return one), or the file's sha256 as expectedHash. expectedRangeSha256 proves lines, not the file version.",
       malformedExpectedHash,
     };
   }

@@ -56,8 +56,11 @@ function sentenceCandidates(text) {
 // word (a path, symbol, new verb such as "실패하는 원인 찾아줘") makes it a
 // substantive request, so a new objective is never hidden behind "계속".
 const CONTINUATION_VERB_SUFFIX = "(?:해|해서|하여|해줘|해주세요|해줄래|해주라|해요|하세요|하자|할게|해봐|해라|합시다|합니다|하고|하기|중)?";
+// "쭉 해줘봐. 계획 니가 세운거 끝까지." (conversation 1794393906420) carried on
+// the approved edit; its referent words name the earlier plan, not new work.
 const CONTINUATION_KEYWORD_TOKEN = new RegExp(
-  `^(?:(?:계속|이어서|이어|마저|재개|다시|진행|계속해서)${CONTINUATION_VERB_SUFFIX}|continue|continuing|resume|proceed|ahead|going|carry)$`, "u");
+  `^(?:(?:계속|이어서|이어|마저|재개|다시|진행|계속해서)${CONTINUATION_VERB_SUFFIX}|쭉|끝까지|계획대로|넘어가(?:자|줘|봐|요)?|continue|continuing|resume|proceed|ahead|going|carry)$`, "u");
+const PRIOR_PLAN_REFERENT_TOKEN = /^(?:니가|네가|너가|계획|계획을|계획한|플랜|plan|세운|세운거|세운걸|세운대로|짠|짠거|짠걸|말한|말한거|말한대로|제안한|제안한거|해줘봐|해봐줘)$/u;
 const CONTINUATION_FILLER_TOKEN = /^(?:yes|yeah|yep|ok|okay|sure|right|please|pls|go|on|keep|do|it|the|work|task|where|you|left|off|from|with|and|then|now|네|예|응|어|음|좋아|좋아요|그래|그래요|오케이|ㅇㅇ|ㅇㅋ|이제|그럼|그러면|자|좀|그대로|아까|이전|방금|하던|하던거|하던걸|중단된|멈춘|끊긴|남은|나머지|그거|그걸|그것|그것을|거|걸|것|작업|작업을|일|조사|분석|검토|수정|점검|부분|내용|단계|을|를|도|해|해줘|해주세요|주세요|줘|하세요|하자|해봐|해요|부탁해|부탁해요|부탁합니다|진행해|진행해줘)$/u;
 const ACKNOWLEDGEMENT_ONLY = /^(?:yes|yeah|yep|ok(?:ay)?|sure|right|네|예|응|어|좋아|그래|오케이|ㅇㅇ|ㅇㅋ)$/u;
 
@@ -73,10 +76,10 @@ function classifyContinuation(text) {
   let keyword = false;
   for (const token of tokens) {
     if (CONTINUATION_KEYWORD_TOKEN.test(token)) { keyword = true; continue; }
-    if (!CONTINUATION_FILLER_TOKEN.test(token)) return { continuation: false, reason: "substantive_token" };
+    if (!CONTINUATION_FILLER_TOKEN.test(token) && !PRIOR_PLAN_REFERENT_TOKEN.test(token)) return { continuation: false, reason: "substantive_token" };
   }
   // "해줘"/"그거 해줘"/"do it" keep the prior objective even without a keyword.
-  const genericAction = tokens.some(token => /^(?:해|해줘|해주세요|하자|해봐|do|it)$/u.test(token))
+  const genericAction = tokens.some(token => /^(?:해|해줘|해주세요|하자|해봐|해줘봐|do|it)$/u.test(token))
     || /(?:^|\s)go on(?:\s|$)/u.test(tokens.join(" "));
   return keyword || genericAction
     ? { continuation: true, reason: keyword ? "continuation_keyword" : "generic_action" }

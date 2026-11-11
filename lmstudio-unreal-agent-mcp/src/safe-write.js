@@ -10,7 +10,8 @@ const {
   LINE_NUMBER_PATCH_MESSAGE,
   isLineNumberPrefixedPatch,
 } = require("../../shared-tool-core/line-numbering.js");
-const { lineRangeSha256 } = require("./line-range-hash");
+const { lineRangeSha256, locateRangeSha256 } = require("./line-range-hash");
+const { HARD_MUTATION_LIMITS } = require("./direct-mutation-limits");
 
 function assertMutationActive(signal) {
   if (signal?.aborted) {
@@ -65,11 +66,104 @@ async function fileExists(absPath) {
   }
 }
 
+// Matching runs on LF-normalized text; writing splices the original text, so
+// lines outside a match keep their own terminators (a mixed LF/CRLF file is
+// not rewritten to CRLF) and newText is inserted literally ("$&", "$$" and
+// "$`" are not replacement patterns: C# raw strings use "$$\"\"\"").
+function crlfNewlinePositions(content) {
+  const positions = [];
+  for (let at = content.indexOf("\r\n"), removed = 0; at >= 0; at = content.indexOf("\r\n", at + 2), removed++) {
+    positions.push(at - removed);
+  }
+  return positions;
+}
+
+function originalOffset(crlfPositions, normalizedIndex) {
+  let low = 0, high = crlfPositions.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (crlfPositions[middle] < normalizedIndex) low = middle + 1;
+    else high = middle;
+  }
+  return normalizedIndex + low;
+}
+
+// spans: sorted, non-overlapping { start, end, replacement } in normalized
+// coordinates. A span ending in a "\n" that was "\r\n" takes its "\r" too.
+function spliceNormalizedSpans(content, spans, { normalized, eol }) {
+  const crlfs = normalized ? crlfNewlinePositions(content) : [];
+  const at = (index) => (normalized ? originalOffset(crlfs, index) : index);
+  let updated = "", cursor = 0;
+  for (const span of spans) {
+    updated += content.slice(cursor, at(span.start)) + (normalized ? span.replacement.split("\n").join(eol) : span.replacement);
+    cursor = at(span.end);
+  }
+  return updated + content.slice(cursor);
+}
+
+// Conversation 1794427092019: after a whitespace hint the range retry dropped the
+// expectedHash its oldText call had carried and failed FILE_SNAPSHOT_REQUIRED.
+const KEEP_VERSION_PROOF = "Send the same fileVersionReceipt or expectedHash with it: a range hash proves lines, not the file version.";
+
+// "};\n \n// next" sent for "};\n\n// next" (conversation 1794402335258): a model
+// that strips "28" from the numbered blank line "28\t" keeps the tab as a space.
+// Diagnosis only; the candidate lines are reported, never edited.
+function squashLineWhitespace(text) {
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/[ \t]+/g, " ");
+}
+
+// candidateTextChars: the range-edit limit, so a candidate's text is whole
+// whenever its lines could be replaced by range.
+function whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars = HARD_MUTATION_LIMITS.maxRangeTextChars) {
+  const squashedOld = squashLineWhitespace(oldTextNorm);
+  const needle = squashedOld.trim();
+  if (needle.length < 8) return null;
+  const haystack = squashLineWhitespace(contentNorm);
+  const first = haystack.indexOf(needle);
+  if (first < 0) return null;
+  if (haystack.indexOf(needle, first + 1) >= 0) return { kind: "whitespace_only", candidates: "multiple" };
+  const leadingLines = (squashedOld.slice(0, squashedOld.length - squashedOld.trimStart().length).match(/\n/g) || []).length;
+  const startLine = haystack.slice(0, first).split("\n").length;
+  const endLine = startLine + needle.split("\n").length - 1;
+  const fileLines = contentNorm.split("\n");
+  const oldLines = oldTextNorm.split("\n").slice(leadingLines);
+  let difference = null;
+  for (let index = 0; index < oldLines.length && startLine + index <= fileLines.length; index++) {
+    const fileText = fileLines[startLine + index - 1], oldLine = oldLines[index];
+    // The first line may start mid-line and the last may end mid-line.
+    const first = index === 0, last = index === oldLines.length - 1;
+    const same = first && last ? fileText.includes(oldLine) : first ? fileText.endsWith(oldLine)
+      : last ? fileText.startsWith(oldLine) : fileText === oldLine;
+    if (!same) { difference = { oldTextLine: leadingLines + index + 1, fileLine: startLine + index, oldText: oldLine, fileText }; break; }
+  }
+  const text = fileLines.slice(startLine - 1, endLine).join("\n");
+  return {
+    kind: "whitespace_only", candidates: "one", startLine, endLine,
+    ...(difference ? { difference } : {}),
+    currentRange: { startLine, endLine, rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length,
+      text: text.slice(0, candidateTextChars), ...(text.length > candidateTextChars ? { textTruncated: true } : {}) },
+  };
+}
+
+function notFoundError(candidate, label = "oldText") {
+  if (candidate?.candidates === "multiple") {
+    return `${label} not found in target file; it matches several places only when whitespace is ignored. Copy tabs, spaces and empty lines exactly.`;
+  }
+  if (!candidate) return `${label} not found in target file`;
+  const where = candidate.difference
+    ? ` (oldText line ${candidate.difference.oldTextLine} is ${JSON.stringify(candidate.difference.oldText)}; file line ${candidate.difference.fileLine} is ${JSON.stringify(candidate.difference.fileText)})`
+    : "";
+  return `${label} matches lines ${candidate.startLine}-${candidate.endLine} only when whitespace is ignored${where}. Copy tabs, spaces and empty lines exactly, or replace lines ${candidate.startLine}-${candidate.endLine} with currentRange.rangeSha256 after checking currentRange.text. ${KEEP_VERSION_PROOF}`;
+}
+
 function calculateReplacement({
   priorContent,
   oldText,
   newText,
   expectedOccurrences,
+  // Count enforced when expectedOccurrences is omitted (replace_in_file uses 1).
+  defaultOccurrences,
+  candidateTextChars,
   normalizeLineEndings = true,
 }) {
   const raw = Buffer.isBuffer(priorContent)
@@ -79,33 +173,47 @@ function calculateReplacement({
   const content = raw.toString("utf8");
   const contentNorm = normalizeLineEndings ? content.replace(/\r\n/g, "\n") : content;
   const oldTextNorm = normalizeLineEndings ? String(oldText).replace(/\r\n/g, "\n") : String(oldText);
-  const occurrences = oldTextNorm ? contentNorm.split(oldTextNorm).length - 1 : 0;
+  // Non-overlapping, left to right: the matches split() counted before.
+  const starts = [];
+  for (let at = oldTextNorm ? contentNorm.indexOf(oldTextNorm) : -1; at >= 0;
+    at = contentNorm.indexOf(oldTextNorm, at + oldTextNorm.length)) starts.push(at);
+  const occurrences = starts.length;
   // Text copied from a numbered read ("<n>\t<text>") is a display artifact, not file content.
   if (occurrences === 0 && isLineNumberPrefixedPatch(oldTextNorm, contentNorm)) {
     return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE };
   }
-  if (expectedOccurrences !== undefined && occurrences !== expectedOccurrences) {
+  // Existing contract: zero matches are OLD_TEXT_NOT_FOUND when no count was
+  // given and an occurrence mismatch ("found 0") when one was.
+  if (occurrences === 0) {
+    const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
+    const diagnosis = whitespaceCandidate ? notFoundError(whitespaceCandidate) : "";
+    return expectedOccurrences === undefined
+      ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(whitespaceCandidate),
+        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) }
+      : { ok: false, errorCode: "OCCURRENCE_MISMATCH",
+        error: `occurrence mismatch: expected ${expectedOccurrences}, found 0${diagnosis ? `; ${diagnosis}` : ""}`,
+        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
+  }
+  const expected = expectedOccurrences !== undefined ? expectedOccurrences : defaultOccurrences;
+  if (expected !== undefined && occurrences !== expected) {
     return {
       ok: false,
-      error: `occurrence mismatch: expected ${expectedOccurrences}, found ${occurrences}`,
+      errorCode: "OCCURRENCE_MISMATCH",
+      error: `occurrence mismatch: expected ${expected}, found ${occurrences}`,
     };
-  }
-  if (occurrences === 0) {
-    return { ok: false, error: "oldText not found in target file" };
   }
 
   const replacement = normalizeLineEndings ? String(newText).replace(/\r\n/g, "\n") : String(newText);
-  const updatedNorm = expectedOccurrences === 1
-    ? contentNorm.replace(oldTextNorm, replacement)
-    : contentNorm.split(oldTextNorm).join(replacement);
-  const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
+  const updated = spliceNormalizedSpans(content,
+    starts.map(start => ({ start, end: start + oldTextNorm.length, replacement })),
+    { normalized: normalizeLineEndings, eol: hasCRLF ? "\r\n" : "\n" });
   return { ok: true, updated, occurrences, priorContent: content, preHash: sha256Buffer(raw) };
 }
 
 // Several exact, non-overlapping regions of one file, each found exactly once in
 // the same prior content, applied together. Returns each region's committed
 // lines (start lines in the prior and the updated text) as change evidence.
-function calculateReplacements({ priorContent, edits, normalizeLineEndings = true }) {
+function calculateReplacements({ priorContent, edits, candidateTextChars, normalizeLineEndings = true }) {
   const raw = Buffer.isBuffer(priorContent) ? priorContent : Buffer.from(String(priorContent ?? ""), "utf8");
   const hasCRLF = raw.includes(Buffer.from("\r\n"));
   const content = raw.toString("utf8");
@@ -120,6 +228,13 @@ function calculateReplacements({ priorContent, edits, normalizeLineEndings = tru
       at = contentNorm.indexOf(oldTextNorm, at + 1)) occurrences++;
     if (occurrences === 0 && isLineNumberPrefixedPatch(oldTextNorm, contentNorm)) {
       return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE, editIndex };
+    }
+    if (occurrences === 0) {
+      const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
+      return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
+        error: whitespaceCandidate ? notFoundError(whitespaceCandidate, `edits[${editIndex}].oldText`)
+          : `edits[${editIndex}] occurrence mismatch: expected 1, found 0`,
+        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
     }
     if (occurrences !== 1) {
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
@@ -136,18 +251,15 @@ function calculateReplacements({ priorContent, edits, normalizeLineEndings = tru
         error: `edits[${later}] overlaps another edit; merge them into one region.` };
     }
   }
-  let updatedNorm = "", cursor = 0, lineDelta = 0;
+  let lineDelta = 0;
   const regions = [];
   for (const span of ordered) {
     const beforeStartLine = contentNorm.slice(0, span.start).split("\n").length;
     const before = contentNorm.slice(span.start, span.end);
     regions.push({ beforeStartLine, afterStartLine: beforeStartLine + lineDelta, before, after: span.replacement });
     lineDelta += span.replacement.split("\n").length - before.split("\n").length;
-    updatedNorm += contentNorm.slice(cursor, span.start) + span.replacement;
-    cursor = span.end;
   }
-  updatedNorm += contentNorm.slice(cursor);
-  const updated = hasCRLF && normalizeLineEndings ? updatedNorm.replace(/\n/g, "\r\n") : updatedNorm;
+  const updated = spliceNormalizedSpans(content, ordered, { normalized: normalizeLineEndings, eol: hasCRLF ? "\r\n" : "\n" });
   return { ok: true, updated, occurrences: edits.length, regions, priorContent: content, preHash: sha256Buffer(raw) };
 }
 
@@ -178,13 +290,34 @@ function calculateLineRangeReplacement({
   const rangeSha256 = lineRangeSha256(lines, startLine, endLine);
   const currentRange = { startLine, endLine, rangeSha256, totalLines: lines.length,
     text: before.slice(0, maxRangeTextChars), ...(before.length > maxRangeTextChars ? { textTruncated: true } : {}) };
-  if (rangeSha256 !== String(expectedRangeSha256 || "").toLowerCase()) {
-    return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange,
-      error: `lines ${startLine}-${endLine} no longer hash to expectedRangeSha256; currentRange holds their text now` };
+  const expected = String(expectedRangeSha256 || "").trim().toLowerCase();
+  let rangeProof = null;
+  if (rangeSha256 !== expected) {
+    // The rangeSha256 of a read that contains these lines proves them too: the
+    // same proof already allows editing that whole read range. Conversations
+    // 1794393906420 and 1794402335258 sent such a hash 15 times and lost a
+    // round each time. An overlapping or foreign hash is still refused.
+    const fileHash = expected === sha256Buffer(raw);
+    const other = fileHash ? null : locateRangeSha256(lines, expected, { startLine, endLine });
+    if (other && other.startLine <= startLine && other.endLine >= endLine) {
+      rangeProof = { startLine: other.startLine, endLine: other.endLine };
+    } else {
+      const expectedRangeSource = fileHash ? { kind: "file_sha256" }
+        : other ? { kind: "other_range", startLine: other.startLine, endLine: other.endLine } : { kind: "not_in_current_file" };
+      const error = fileHash
+        ? `expectedRangeSha256 is the whole-file sha256, not a range hash. Pass the rangeSha256 of a read that covers lines ${startLine}-${endLine}; currentRange holds the one for exactly these lines with their text.`
+        : other
+          ? `expectedRangeSha256 is the rangeSha256 of lines ${other.startLine}-${other.endLine}, which does not cover lines ${startLine}-${endLine}. Check currentRange.text and use currentRange.rangeSha256 for lines ${startLine}-${endLine}, or read the lines first. ${KEEP_VERSION_PROOF}`
+          : `lines ${startLine}-${endLine} do not hash to expectedRangeSha256; currentRange holds their text now`;
+      return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange, expectedRangeSource, error };
+    }
   }
-  if (before.length > maxRangeTextChars || before.length + String(newText).length > maxPatchChars) {
+  const combined = before.length + String(newText).length;
+  if (before.length > maxRangeTextChars || combined > maxPatchChars) {
     return { ok: false, errorCode: "PATCH_TOO_LARGE", currentRange,
-      error: `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}` };
+      error: before.length > maxRangeTextChars
+        ? `lines ${startLine}-${endLine} hold ${before.length} characters; a range replaces at most ${maxRangeTextChars}`
+        : `lines ${startLine}-${endLine} (${before.length} characters) plus newText (${String(newText).length}) total ${combined} characters; a region allows at most ${maxPatchChars} combined` };
   }
   const eol = breaks.includes("\r\n") ? "\r\n" : "\n";
   const replacement = String(newText).replace(/\r\n/g, "\n");
@@ -195,7 +328,55 @@ function calculateLineRangeReplacement({
   // Deleting the last lines drops the break before them instead of after.
   else updated = tail ? head + tail.slice(breaks[endLine - 1].length) : head.slice(0, head.length - (breaks[startLine - 2]?.length || 0));
   return { ok: true, updated, occurrences: 1, priorContent: content, preHash: sha256Buffer(raw),
+    ...(rangeProof ? { rangeProof } : {}),
     regions: [{ beforeStartLine: startLine, afterStartLine: startLine, before, after: replacement }] };
+}
+
+// Conversation 1794419304890: the edits refused for size were 92–98% lines
+// that did not change. When oldText matches the file once, name the file lines
+// that do change and their range hash, so a retry sends only those lines by
+// range (no oldText copy). Diagnosis only: nothing is edited from it.
+function changedLineRange(priorContent, oldText, newText, { maxRangeTextChars = Infinity, maxPatchLines = Infinity } = {}) {
+  const content = Buffer.isBuffer(priorContent) ? priorContent.toString("utf8") : String(priorContent ?? "");
+  const contentNorm = content.replace(/\r\n/g, "\n");
+  const oldNorm = String(oldText ?? "").replace(/\r\n/g, "\n");
+  const newNorm = String(newText ?? "").replace(/\r\n/g, "\n");
+  const at = oldNorm ? contentNorm.indexOf(oldNorm) : -1;
+  if (at < 0 || contentNorm.indexOf(oldNorm, at + 1) >= 0) return null;
+  const oldLines = oldNorm.split("\n"), newLines = newNorm.split("\n");
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix
+    && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix++;
+  const addedLines = newLines.length - prefix - suffix;
+  if (addedLines === 0 && oldLines.length - prefix - suffix === 0) return { identical: true };
+  const firstLine = contentNorm.slice(0, at).split("\n").length;
+  let startLine = firstLine + prefix, endLine = firstLine + oldLines.length - suffix - 1;
+  // A pure insertion replaces one neighbouring line together with the new ones.
+  const insertion = endLine < startLine ? (prefix > 0 ? "after" : "before") : null;
+  if (insertion === "after") startLine = endLine = firstLine + prefix - 1;
+  if (insertion === "before") endLine = startLine;
+  const fileLines = content.split(/\r?\n/);
+  const text = fileLines.slice(startLine - 1, endLine).join("\n");
+  const newTextLines = addedLines > 0 ? [prefix + 1, newLines.length - suffix] : null;
+  const fits = text.length <= maxRangeTextChars && addedLines + (insertion ? 1 : 0) <= maxPatchLines;
+  return { startLine, endLine, ...(insertion ? { insertion } : {}), newTextLines, fits,
+    ...(fits ? { rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length, text } : {}) };
+}
+
+function changedLineRangeMessage(range) {
+  if (!range) return "";
+  if (range.identical) return "oldText and newText are identical; there is nothing to replace.";
+  const one = range.startLine === range.endLine;
+  const lines = one ? `line ${range.startLine} changes` : `lines ${range.startLine}-${range.endLine} change`;
+  const [first, last] = range.newTextLines || [];
+  const added = !range.newTextLines ? "nothing" : first === last ? `newText line ${first}` : `newText lines ${first}-${last}`;
+  if (!range.fits) return `Only file ${lines}, but they exceed the per-region limits; split them across calls.`;
+  if (range.insertion) {
+    return `newText only adds ${added} ${range.insertion} file line ${range.startLine}: replace that line by range (changedRange.rangeSha256) with newText = the line ${range.insertion === "after" ? "followed" : "preceded"} by the added lines. ${KEEP_VERSION_PROOF}`;
+  }
+  return `Only file ${lines} (to ${added}): replace just ${one ? "it" : "them"} by range with startLine ${range.startLine}, endLine ${range.endLine} and changedRange.rangeSha256; newText holds whole lines. ${KEEP_VERSION_PROOF}`;
 }
 
 function isLineRangePatch(patch) {
@@ -204,13 +385,16 @@ function isLineRangePatch(patch) {
 
 // One of the three patch forms: edits[], a line range, or one oldText.
 function calculatePatch(priorContent, patch, { maxRangeTextChars, maxPatchChars } = {}) {
-  if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits });
+  const candidateTextChars = Number.isFinite(maxRangeTextChars) ? maxRangeTextChars : undefined;
+  if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits, candidateTextChars });
   if (isLineRangePatch(patch)) {
     return calculateLineRangeReplacement({ priorContent, startLine: patch.startLine, endLine: patch.endLine,
       expectedRangeSha256: patch.expectedRangeSha256, newText: patch.newText, maxRangeTextChars, maxPatchChars });
   }
+  // An omitted count means 1 here too, as at commit: otherwise a duplicated
+  // oldText passed this check and failed under the lock as PATCH_FAILED.
   return calculateReplacement({ priorContent, oldText: patch.oldText, newText: patch.newText,
-    expectedOccurrences: patch.expectedOccurrences });
+    expectedOccurrences: patch.expectedOccurrences, defaultOccurrences: 1, candidateTextChars });
 }
 
 async function replaceWithCAS({
@@ -285,6 +469,8 @@ module.exports = {
   calculateReplacements,
   calculateLineRangeReplacement,
   calculatePatch,
+  changedLineRange,
+  changedLineRangeMessage,
   isLineRangePatch,
   replaceWithCAS,
   createExclusive,

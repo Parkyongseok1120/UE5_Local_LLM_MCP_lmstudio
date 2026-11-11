@@ -2,6 +2,9 @@
   "description": "Static, user-selected LM Studio load and chat recommendations. This file does not select models, plan work, order tools, switch stages, or configure the context compactor.",
   "activeProfile": "qwen3_8_27b",
   "modelAliases": {
+    "meta/muse-glimmer": "muse_glimmer_30b",
+    "muse-glimmer-30b": "muse_glimmer_30b",
+    "muse-glimmer": "muse_glimmer_30b",
     "qwen3.8-27b": "qwen3_8_27b",
     "qwen3.8-27b-gguf": "qwen3_8_27b",
     "qwen3.8-27b-q4_k_m": "qwen3_8_27b",
@@ -36,6 +39,24 @@
     "qwen-coder-large": "qwen_coder_large"
   },
   "profiles": {
+    "muse_glimmer_30b": {
+      "contextLength": 65536,
+      "contextLengthAlternatives": [32768],
+      "quantDefault": "Q4_K_M",
+      "recommendedParallelRequests": 1,
+      "recommendedSystemPrompt": "prompts/lmstudio_direct_model_system.md",
+      "sampling": {
+        "temperature": 1.0,
+        "topP": 0.95,
+        "topK": 64,
+        "maxTokens": 8192
+      },
+      "writeSafety": {
+        "maxFilesPerEdit": 2,
+        "preferPatchOverFullFile": true
+      },
+      "notes": "Recommended first for Unreal workflows where stable multi-step tool use matters. The sampling values follow the LM Studio model catalog; 64K context and the output cap are project starting values."
+    },
     "qwen3_8_27b": {
       "contextLength": 65536,
       "contextLengthAlternatives": [262144],
@@ -53,7 +74,7 @@
         "maxFilesPerEdit": 2,
         "preferPatchOverFullFile": true
       },
-      "notes": "Highly recommended primary validated profile. The v1.3.2 live E2E workflow completed long real-project RAG/read/report work without the prior context truncation. 64K is the practical baseline for the full Direct MCP tool schema; use the larger context only when hardware capacity has been verified."
+      "notes": "Validated alternative to Muse Glimmer 30B. The v1.3.2 live E2E workflow completed long real-project RAG/read/report work without the prior context truncation. 64K is the practical baseline for the full Direct MCP tool schema; use the larger context only when hardware capacity has been verified."
     },
     "qwen3_6_27b": {
       "contextLength": 32768,

@@ -87,6 +87,15 @@ function createSearchCapability(context, helpers = {}) {
     };
   }
 
+  async function defaultSearchPath(projectSelector) {
+    try {
+      await resolveToolPath("project://", projectSelector);
+      return "project://";
+    } catch {
+      return "workspace://";
+    }
+  }
+
   async function collectSearchFiles(rootResolution, maxFiles, guard) {
     const files = [];
     let discoveryErrors = 0, excludedEntries = 0;
@@ -105,6 +114,11 @@ function createSearchCapability(context, helpers = {}) {
       for (const entry of entries) {
         if (files.length >= maxFiles || guard.reason()) break;
         if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedEntries++; continue; }
+        // Links (and Windows junctions) are never followed. Skip them before
+        // the containment check: a junction pointing outside the root made the
+        // whole search fail (Saved/Codex/.../node_modules junctions under
+        // WORKSPACE_ROOT, 6 path-less searches in 2026-11-11/12 conversations).
+        if (entry.isSymbolicLink()) { excludedEntries++; continue; }
         const child = path.join(target, entry.name);
         try { await assertReadChildContained(child, rootResolution); }
         catch (error) {
@@ -127,15 +141,19 @@ function createSearchCapability(context, helpers = {}) {
     if (args.cursor !== undefined && !cursor) {
       return failure("INVALID_ARGUMENT", "cursor is not a search_files nextCursor.", { retryAllowed: true, retryMode: "different_arguments" });
     }
-    const identity = searchIdentity(args);
+    // A path-less search looks in the selected project (the per-call project or
+    // the active one): WORKSPACE_ROOT can be another project entirely. Without
+    // a project it searches the workspace as before.
+    const searchPath = args.path || await defaultSearchPath(args.project);
+    const identity = searchIdentity({ ...args, path: searchPath });
     if (cursor && cursor.s !== identity) {
       return failure("INVALID_ARGUMENT", "cursor belongs to a different search; pass it with the same query, path and filters.",
         { retryAllowed: true, retryMode: "different_arguments" });
     }
-    const resolution = await resolveToolPath(args.path || "workspace://", args.project);
+    const resolution = await resolveToolPath(searchPath, args.project);
     const rootStat = await statOrNull(resolution.absolutePath);
     if (!rootStat) {
-      return failure("NOT_FOUND", `Search path not found: ${args.path || "."}`,
+      return failure("NOT_FOUND", `Search path not found: ${searchPath}`,
         { retryAllowed: true, retryMode: "different_arguments", suggestion: await helpers.notFoundSuggestion?.(args, resolution) });
     }
     const maxResults = clamp(args.maxResults, 100, 1, 1000);

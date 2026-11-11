@@ -7,7 +7,10 @@ import {
   type Tool,
 } from "@lmstudio/sdk";
 
+import { describeArgumentLengthRejection } from "./tool-argument-limits";
+
 type TokenSource = LLM | LLMGeneratorHandle;
+export type ToolRequestFailureKind = "rejected_request" | "generation_failed";
 export type RoundToolGuard = (...args: [...Parameters<NonNullable<LLMActionOpts["guardToolCall"]>>, AbortSignal?]) => ReturnType<NonNullable<LLMActionOpts["guardToolCall"]>>;
 
 /** A normal tool handoff completes this prediction and consumes its input.
@@ -29,7 +32,9 @@ type RoundCallbacks = {
   onToolCallRequestNameReceived?: NonNullable<LLMActionOpts["onToolCallRequestNameReceived"]>;
   onToolCallRequestArgumentFragmentGenerated?: NonNullable<LLMActionOpts["onToolCallRequestArgumentFragmentGenerated"]>;
   onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
-  onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
+  /** kind: "rejected_request" when a parsed request was refused before running
+   * (schema or unknown tool); otherwise the call itself failed to generate. */
+  onToolCallRequestFailure?: (...args: [...Parameters<NonNullable<LLMActionOpts["onToolCallRequestFailure"]>>, ToolRequestFailureKind?]) => void;
   onMessageCaptured?: (message: ChatMessage) => void;
   captureUnparsedToolRequest?: boolean;
   abortAfterPredictionFragment?: (fragment: Parameters<NonNullable<LLMActionOpts["onPredictionFragment"]>>[0]) => Error | undefined;
@@ -40,7 +45,8 @@ export type CapturedRound = {
   messages: Array<ChatMessage>;
   continueAfterTools: boolean;
   failure?: unknown;
-  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null };
+  /** toolName is the provider-announced name of the unparsed call, when the SDK named it. */
+  toolRequestFailure?: { kind: "unparsed_request"; rawContentChars: number | null; toolName?: string };
   finishReason?: string;
   predictionStats?: {
     stopReason: string;
@@ -91,6 +97,13 @@ export async function runOneToolRound(
   let failure: unknown;
   let unparsedToolRequestError: unknown;
   let unparsedArgumentChars: number | null = null;
+  // Names of calls the SDK announced and has not finalized: the name of an
+  // unparsed request is reported to the user; its fragment never is.
+  const pendingRequestNames = new Map<number, string>();
+  let unparsedToolName: string | undefined;
+  // The SDK calls handleInvalidToolRequest before onToolCallRequestFailure for
+  // the same error object, so the failure callback can tell a refused request.
+  const rejectedRequestErrors = new WeakSet<object>();
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
@@ -125,8 +138,12 @@ export async function runOneToolRound(
     const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, captureUnparsedToolRequest, ...actCallbacks } = callbacks;
     const handleInvalidToolRequest: LLMActionOpts["handleInvalidToolRequest"] = (error, request) => {
       if (closed) return undefined;
-      // Preserve the SDK's result for a parsed request rejected by its schema.
-      if (request !== undefined) return error.message;
+      // A parsed request rejected by its schema: the SDK's message, or for a
+      // length limit the field, the allowed length and the lines that differ.
+      if (request !== undefined) {
+        if (typeof error === "object" && error !== null) rejectedRequestErrors.add(error);
+        return describeArgumentLengthRejection(error, request, tools) ?? error.message;
+      }
       // No request exists to execute or attach a synthetic result to. Let the
       // prediction end normally so its stop reason survives; stop at our round
       // boundary after collecting any already-running peers' returned results.
@@ -197,6 +214,7 @@ export async function runOneToolRound(
       onToolCallRequestNameReceived: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestNamedCount += 1;
+        if (typeof args[2] === "string") pendingRequestNames.set(args[1], args[2]);
         actCallbacks.onToolCallRequestNameReceived?.(...args);
       },
       onToolCallRequestEnd: (...args) => {
@@ -207,11 +225,15 @@ export async function runOneToolRound(
       onToolCallRequestFailure: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestFailureCount += 1;
-        actCallbacks.onToolCallRequestFailure?.(...args);
+        if (unparsedToolRequestError !== undefined && args[2] === unparsedToolRequestError)
+          unparsedToolName ??= pendingRequestNames.get(args[1]);
+        const rejected = typeof args[2] === "object" && args[2] !== null && rejectedRequestErrors.has(args[2]);
+        actCallbacks.onToolCallRequestFailure?.(args[0], args[1], args[2], rejected ? "rejected_request" : "generation_failed");
       },
       onToolCallRequestFinalized: (...args) => {
         if (closed) return;
         predictionUsage.sdkToolRequestFinalizedCount += 1;
+        pendingRequestNames.delete(args[1]);
         actCallbacks.onToolCallRequestFinalized?.(...args);
       },
       onPredictionCompleted: (result) => {
@@ -256,6 +278,9 @@ export async function runOneToolRound(
   // A transport error or external cancellation retains precedence over a
   // parser failure. Never reclassify either as a recoverable generation.
   if (failure === undefined && unparsedToolRequestError !== undefined) failure = unparsedToolRequestError;
+  // Without a failure callback, only a single still-pending named call is unambiguous.
+  const failedName = unparsedToolName ?? (pendingRequestNames.size === 1 ? [...pendingRequestNames.values()][0] : undefined);
+  const unparsedToolNameShown = failedName && /^[A-Za-z0-9_.:-]{1,80}$/u.test(failedName) ? failedName : undefined;
 
   return {
     predictionCompleted: Boolean(predictionStats && !fragmentAbortReason && !parentSignal.aborted
@@ -266,7 +291,8 @@ export async function runOneToolRound(
       : finishReason === undefined ? {} : { finishReason }),
     ...(predictionStats ? { predictionStats } : {}),
     ...(unparsedToolRequestError !== undefined && failure === unparsedToolRequestError
-      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars } } : {}),
+      ? { toolRequestFailure: { kind: "unparsed_request" as const, rawContentChars: unparsedArgumentChars,
+        ...(unparsedToolNameShown ? { toolName: unparsedToolNameShown } : {}) } } : {}),
     predictionUsage: {
       ...predictionUsage,
       unattributedTokensCount: predictionStats?.predictedTokensCount === undefined

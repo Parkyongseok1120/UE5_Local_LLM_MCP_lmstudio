@@ -4,6 +4,12 @@
 
 모든 현재 설정은 [같은 기본 지시문](../prompts/lmstudio_direct_model_system.md)을 사용합니다.
 
+## Muse Glimmer 30B
+
+검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 안정성을 우선한다면 Qwen 3.8 27B보다 Muse Glimmer 30B를 먼저 권장합니다. LM Studio에서 `meta/muse-glimmer`를 불러온 뒤 채팅의 모델 목록에서 선택합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
+
+`muse_glimmer_30b` 프로필은 `Q4_K_M`, 대화 길이 65,536, 동시 요청 1개를 시작점으로 제시합니다. 메모리가 부족하면 32,768부터 시작하세요. 샘플링은 모델 배포본의 `temperature` 1.0, `topP` 0.95, `topK` 64를 따릅니다. [LM Studio 모델 설정](https://lmstudio.ai/models/meta/muse-glimmer)
+
 ## 주요 설정 항목
 
 | 설정 이름 | 뜻 |
@@ -24,6 +30,7 @@
 아래 보조 명령은 개발 저장소용이며 압축 배포본에는 포함되지 않습니다.
 
 ```powershell
+python scripts/load_sampling_preset.py --model "meta/muse-glimmer" --show-profile
 python scripts/load_sampling_preset.py --sampling-profile qwen3_8_27b --show-profile
 python scripts/load_sampling_preset.py --model "qwen/qwen3.8-27b" --show-profile
 ```

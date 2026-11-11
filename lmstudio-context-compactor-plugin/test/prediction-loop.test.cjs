@@ -5401,6 +5401,56 @@ test('terminal invalid arguments deliver only returned observations and leave th
   assert.equal(ctl.debugValues.some(e=>e.event==='reasoning_recovery_scheduled'),false);
 });
 
+// Conversation 1794386851846, last turn: the plan streamed, git_status returned,
+// then evidence_first_validate was cut off at the output cap.
+test('a streamed plan stays the answer when its trailing validation call is cut off', async () => {
+  let calls = 0, approvals = 0;
+  const plan = '# 리팩토링 계획\n' + 'PLAN_ONCE Phase 1 — 근접 공격 중복 제거, 빌드 후 커밋. '.repeat(14)
+    + '\n계획의 근거를 검증 패킷으로 기록하겠습니다.';
+  const model = reasoningModel(async (_chat, _tools, options) => {
+    calls++;
+    options.onPredictionFragment({ roundIndex: 0, reasoningType: 'reasoning', content: 'Wait — counterEvidence for P2: the schema says…',
+      tokensCount: 6214, isStructural: false });
+    for (let at = 0; at < plan.length; at += 40)
+      options.onPredictionFragment({ roundIndex: 0, reasoningType: 'none', content: plan.slice(at, at + 40), tokensCount: 10, isStructural: false });
+    options.onMessage(ChatMessage.from({ role: 'assistant', content: [{ type: 'text', text: plan },
+      { type: 'toolCallRequest', toolCallRequest: { type: 'function', id: 'git', name: 'git_status', arguments: {} } }] }));
+    options.onMessage(ChatMessage.from({ role: 'tool', content: [{ type: 'toolCallResult', toolCallId: 'git',
+      content: JSON.stringify([{ type: 'text', text: JSON.stringify({ ok: true, kind: 'git_observation', status: 'observed',
+        action: 'status', pageStart: 1, pageEnd: 55, total: 55, items: [] }) }]) }] }));
+    const { ToolCallRequestError } = require('@lmstudio/sdk');
+    const error = new ToolCallRequestError('Unterminated string in JSON', '{"packet":{"mode":"codegen","claims":[{"claim":"UNFINISHED');
+    options.onToolCallRequestStart?.(0, 7, {});
+    options.onToolCallRequestNameReceived?.(0, 7, 'evidence_first_validate');
+    options.onToolCallRequestArgumentFragmentGenerated?.(0, 7, error.rawContent);
+    assert.equal(await options.handleInvalidToolRequest(error, undefined), undefined);
+    options.onToolCallRequestFailure?.(0, 7, error);
+    options.onPredictionCompleted({ stats: { stopReason: 'maxPredictedTokensReached', promptTokensCount: 21921, predictedTokensCount: 8192 } });
+    options.onRoundEnd(); throw options.signal.reason;
+  });
+  const tools = [['git_status', 'mcp/unreal-agent'], ['evidence_first_validate', 'mcp/evidence-first']]
+    .map(([name, pluginIdentifier]) => ({ name, pluginIdentifier, description: name, parametersJsonSchema: { type: 'object' } }));
+  const ctl = fakeController(Chat.from([{ role: 'user', content: '어떻게 고칠건지 계획세워봐' }]), model,
+    { reasoningRecoveryMode: 'on', outputRecoveryMode: 'on' }, tools);
+  ctl.requestConfirmToolCall = async () => { approvals++; assert.fail('a cut-off request never reaches approval'); };
+  await handlePredictionLoop(ctl);
+  assert.equal(calls, 1, 'no retry or recovery round'); assert.equal(approvals, 0);
+  // Reasoning stays in its own thinking block; the answer blocks are what the user reads as the reply.
+  const shown = ctl.blocks.filter(block => block.options?.style?.type !== 'thinking').map(block => block.text).join('\n');
+  assert.ok(ctl.blocks.some(block => block.options?.style?.type === 'thinking' && /counterEvidence/u.test(block.text)));
+  assert.equal(shown.split('PLAN_ONCE Phase 1').length - 1, 14, 'the plan is shown once, not repeated by the notice');
+  const notice = ctl.blocks.filter(block => block.text.startsWith('[응답 상태 · 미완료]'));
+  assert.equal(notice.length, 1);
+  assert.match(notice[0].text, /`evidence_first_validate`은\(는\) 인수가 출력 생성 한도에서 잘려 실행되지 않았습니다/u);
+  assert.match(notice[0].text, /완료된 조회: git status \(항목 1–55\/55\)/u);
+  assert.doesNotMatch(shown, /부분 조사 보고|미검증 검토 후보|counterEvidence|Task continuity data|"authority"|UNFINISHED/u);
+  const delivery = ctl.debugValues.find(e => e.event === 'partial_report_delivery');
+  assert.ok(delivery.answerShownChars >= 400); assert.equal(delivery.failedToolName, 'evidence_first_validate');
+  const outcome = ctl.debugValues.find(e => e.event === 'execution_outcome');
+  assert.equal(outcome.reportCompleted, false); assert.equal(outcome.deliveryState, 'partial');
+  assert.equal(outcome.reason, 'tool_request_generation_failed');
+});
+
 test('unparsed tool request preserves successful peer results and never completes partial planning', async () => {
   const { RoundTransaction } = require('../dist/execution-state');
   let calls = 0;
@@ -5417,6 +5467,7 @@ test('unparsed tool request preserves successful peer results and never complete
   assert.equal(calls, 1);
   assert.equal(captured.predictionCompleted, false);
   assert.equal(captured.toolRequestFailure.kind, 'unparsed_request');
+  assert.equal(captured.toolRequestFailure.toolName, 'propose_file_deletions');
   const durable = Chat.empty(); new RoundTransaction(captured, false).commitEvidence(durable);
   assert.match(durable.toString(), /PEER_RESULT/);
   assert.doesNotMatch(durable.toString(), /INCOMPLETE_PLAN/);
@@ -6730,6 +6781,25 @@ test('explain objective without topic omits guidance',async()=>{
     {projectEngine:'unreal',designGuidanceMode:'auto',designGuidanceMaxTokens:8192});
   await handlePredictionLoop(ctl);
   assert.ok(ctl.debugValues.some(e=>e.event==='design_guidance_input'&&e.omissionReasons?.includes('objective_explain_without_topic')));
+});
+test('project design advice reaches the measured explain input without changing its tool objective', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'design-advice-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const descriptor = path.join(root, 'Fixture.uproject');
+  fs.writeFileSync(descriptor, '{}');
+  let input;
+  const model = reasoningModel(async (chat, _tools, options) => {
+    input = chat.getMessagesArray().map(m => m.getText()).join('\n');
+    completeRecoveryReply(options, 'Review complete.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: root + '\n해당 프로젝트의 적 설계가 잘못된 거 짚어줘.' }]), model,
+    { projectIdentity: descriptor, designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
+  await handlePredictionLoop(ctl);
+  const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.equal(event.primaryTopic, 'design');
+  assert.equal(event.projectDesignTurnsBack, 0);
+  assert.match(input, /\[reference id=design\//);
+  assert.equal(ctl.debugValues.find(e => e.event === 'execution_outcome').objectiveKind, 'explain');
 });
 test('prefix_reuse event records causes',async()=>{
   const {pair,tool}=require('./helpers/v4.cjs');let calls=0;

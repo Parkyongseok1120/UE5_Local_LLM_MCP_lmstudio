@@ -90,9 +90,14 @@ test("optional evidence cannot flip success and no_change uses actual hashes inc
   const { committedChange, withChangeEvidence, withBundleChangeEvidence } = require("../src/direct-change-evidence");
   const { sha256Text, calculateReplacement } = require("../src/safe-write");
   const before = "a\r\nb\n";
-  const replacement = calculateReplacement({ priorContent: before, oldText: "a", newText: "a", expectedOccurrences: 1 });
+  // Same text, different bytes: the inserted break takes the file's CRLF style.
+  const replacement = calculateReplacement({ priorContent: before, oldText: "b\n", newText: "b\n", expectedOccurrences: 1 });
+  assert.equal(replacement.updated, "a\r\nb\r\n");
   const evidence = committedChange(before, replacement.updated, replacement.preHash, sha256Text(replacement.updated));
   assert.equal(evidence.status, "changed");
+  // Lines outside the match keep their bytes, so an identical replacement changes nothing.
+  const identical = calculateReplacement({ priorContent: before, oldText: "a", newText: "a", expectedOccurrences: 1 });
+  assert.equal(committedChange(before, identical.updated, identical.preHash, sha256Text(identical.updated)).status, "no_change");
   assert.equal(committedChange("a", "a", sha256Text("a"), sha256Text("a")).status, "no_change");
   const payload = { ok: true, sha256: evidence.sha256, fileVersionReceipt: "fvr1_test" };
   assert.equal(withChangeEvidence(payload, evidence, () => { throw Error("serialization failed"); }), payload);

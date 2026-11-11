@@ -56,6 +56,7 @@ type RoundInputOptions = {
   reportContinuation?: string;
   guidanceDocuments?: readonly GuidanceDocument[];
   guidanceIntent?: GuidanceIntent;
+  projectDesignAnchor?: number;
   /** Execution-scoped; the caller discards it with the execution. */
   guidanceRetention?: GuidanceRetention;
   guidanceScope?: ToolScope;
@@ -393,13 +394,25 @@ export async function prepareRoundInput(options: RoundInputOptions) {
   // execution already admitted stays: dropping it would rewrite the system
   // message and take away the engine contracts the failed round reasoned with.
   const recoveryReuse = focused && options.referenceRecovery ? options.guidanceRetention?.kept : undefined;
-  const explainWithoutTopic = options.objective?.kind === "explain"
-    && !options.guidanceIntent?.reason.startsWith("explicit_task_topic");
   let guidanceEvent: Record<string, unknown> | undefined;
   const selectReferences = async () => {
   selectedReference = {};
-  if (!explainWithoutTopic && lowWater.canRun && !config.observeOnly && (!finalizing || options.guidanceRetention?.kept) && config.designGuidanceMode !== "off"
-    && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery || recoveryReuse)) {
+  const canSelect = lowWater.canRun && !config.observeOnly && (!finalizing || options.guidanceRetention?.kept) &&
+    config.designGuidanceMode !== "off" && config.designGuidanceMaxTokens > 0 && (!focused || !options.referenceRecovery || recoveryReuse);
+  // Re-evaluate project applicability after a rewrite, from the same evidence
+  // snapshot used for candidate admission. This never changes execution intent.
+  let projectSnapshot: ReturnType<EvidenceManager["referenceSnapshot"]> | undefined;
+  if (canSelect && options.projectDesignAnchor !== undefined) {
+    ctl.guardAbort();
+    try { projectSnapshot = evidenceManager.referenceSnapshot(workingHistory); } catch { ctl.guardAbort(); }
+  }
+  const projectDesign = projectSnapshot && options.guidanceScope &&
+    referenceGuidanceScope(options.guidanceScope, projectSnapshot).engine === "unreal";
+  const intent = projectDesign
+    ? { ...options.guidanceIntent, primary: "design" as const, reason: options.projectDesignAnchor === 0 ? "project_design_request" : "project_design_followup" }
+    : options.guidanceIntent;
+  const explainWithoutTopic = options.objective?.kind === "explain" && !projectDesign && !intent?.reason.startsWith("explicit_task_topic");
+  if (!explainWithoutTopic && canSelect) {
     let candidates: GuidanceCandidate[] = [];
     let selection: ReturnType<typeof selectGuidanceTopics> | undefined;
     let selectionScope = "unscoped";
@@ -410,13 +423,13 @@ export async function prepareRoundInput(options: RoundInputOptions) {
     ctl.guardAbort();
     try {
       if (focused && options.guidanceScope) {
-        const snapshot = evidenceManager.referenceSnapshot(workingHistory);
+        const snapshot = projectSnapshot ?? evidenceManager.referenceSnapshot(workingHistory);
         const guidanceScope = referenceGuidanceScope(options.guidanceScope, snapshot);
         effectiveArchitectureScope=guidanceScope;
         selectionScope = JSON.stringify([guidanceScope.engine, guidanceScope.source, snapshot.applicability]);
         applicabilityScope = selectionScope;
         if (config.designGuidanceMode === "auto") {
-          selection = selectGuidanceTopics(options.guidanceIntent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
+          selection = selectGuidanceTopics(intent || { primary: "core", reason: "objective_completeness_unknown" }, snapshot);
           candidates = selection.omitted ? [] : autoGuidanceCandidates(selection.primary, selection.supplement, guidanceScope, snapshot);
           // A new topic from returned evidence may select once more, like a new scope.
           selectionScope = JSON.stringify([selectionScope, selection.primary, selection.supplement || null]);
@@ -541,6 +554,7 @@ export async function prepareRoundInput(options: RoundInputOptions) {
       omissionReasons,
       outcome: guidance.telemetry.reason === "included" ? "included" : "omitted",
       ...(selection ? { primaryTopic: selection.primary, supplementTopic: selection.supplement,
+        ...(projectDesign ? { projectDesignTurnsBack: options.projectDesignAnchor } : {}),
         selectionReasonCodes: [...selection.reasons, ...omissionReasons],
         selectionObservationIds: selection.observationIds } : {}), ...telemetry };
   } else if (config.showDebugInfo) guidanceEvent = { event: "design_guidance_input", executionId, modelInputId, roundIndex,

@@ -6,8 +6,9 @@ const { replaceFileArgumentError, normalizeExpectedOccurrences } = require("./di
 const {
   bundleMutationUsage,
   constrainMutationLimits,
+  describeExceeded,
   HARD_MUTATION_LIMITS,
-  textLineCount,
+  regionLimitsExceeded,
 } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { isLineRangePatch } = require("./safe-write");
@@ -103,12 +104,10 @@ function validateBundleLimits(bundle, values = {}) {
   }
   for (const patch of patches) {
     for (const { oldText = "", newText } of patch.edits || [patch]) {
-      if (oldText.length > mutationLimits.maxPatchOldTextChars
-        || newText.length > mutationLimits.maxPatchNewTextChars
-        || oldText.length + newText.length > mutationLimits.maxPatchChars
-        || textLineCount(newText) > mutationLimits.maxPatchLines) {
+      const exceeded = regionLimitsExceeded({ oldText, newText }, mutationLimits);
+      if (exceeded.length) {
         throw new Error(
-          `apply_edit_bundle: patch exceeds the focused-region limits of ${mutationLimits.maxPatchOldTextChars} oldText characters, ${mutationLimits.maxPatchNewTextChars} newText characters, ${mutationLimits.maxPatchChars} combined characters, or ${mutationLimits.maxPatchLines} newText lines: ${patch.path}`,
+          `apply_edit_bundle: patch exceeds the focused-region limits (${describeExceeded(exceeded)}) of ${mutationLimits.maxPatchOldTextChars} oldText characters, ${mutationLimits.maxPatchNewTextChars} newText characters, ${mutationLimits.maxPatchChars} combined characters, or ${mutationLimits.maxPatchLines} newText lines: ${patch.path}`,
         );
       }
     }

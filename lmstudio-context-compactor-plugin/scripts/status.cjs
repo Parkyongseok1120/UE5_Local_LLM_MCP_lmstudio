@@ -67,6 +67,7 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/context-budget.ts",
   "src/attachment-boundary.ts",
   "src/round-loop.ts",
+  "src/tool-argument-limits.ts",
   "src/prediction-stream.ts",
   "src/tool-scope.ts",
   "src/attachment-tools.ts",
