@@ -298,7 +298,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
       minLength: replaceProperties.oldText.minLength,
       maxLength: replaceProperties.oldText.maxLength,
     },
-    { minLength: 1, maxLength: 1_200 },
+    { minLength: 1, maxLength: 1_500 },
   );
   assert.strictEqual(replaceProperties.newText.maxLength, 2_800);
   assert.deepStrictEqual(
@@ -328,7 +328,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
   assert.strictEqual(Object.hasOwn(bundle.inputSchema.properties, "files"), false);
   assert.strictEqual(patches.minItems, 1);
   assert.strictEqual(patches.maxItems, 2);
-  assert.strictEqual(patches.items.properties.oldText.maxLength, 1_200);
+  assert.strictEqual(patches.items.properties.oldText.maxLength, 1_500);
   assert.strictEqual(patches.items.properties.newText.maxLength, 2_800);
   assert.strictEqual(patches.items.properties.expectedOccurrences.const, 1);
   assert.deepStrictEqual(patches.items.anyOf, [
@@ -336,7 +336,7 @@ test("mutation schemas expose focused per-round edit bounds", () => {
     { required: ["expectedHash"] },
   ]);
   assert.equal(patches.items.properties.edits.maxItems, 8);
-  assert.match(bundle.description, /unique paths, ≤64 total lines/u);
+  assert.match(bundle.description, /unique paths, ≤128 total lines/u);
   assert.match(bundle.description, /Per-file edits/u);
   assert.match(bundle.description, /existing files/u);
   assert.match(bundle.description, /Requires ALLOW_WRITE=1/u);

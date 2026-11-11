@@ -92,11 +92,14 @@ function createBundleCapability(context) {
         throw validationError("FILE_VERSION_CONFLICT", `${patch.path} changed after the selected read snapshot`);
       }
       patch.expectedHash = version.expectedHash;
-      const next = calculatePatch(read.content, patch, { maxRangeTextChars: limits.maxPatchOldTextChars, maxPatchChars: limits.maxPatchChars });
+      const next = calculatePatch(read.content, patch, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars });
       if (!next.ok) {
         const error = validationError(next.errorCode || "BUNDLE_VALIDATION_FAILED", `${patch.path}: ${next.error}`);
         // A stale line range answers with what is there now, as replace_in_file does.
-        if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange };
+        if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange,
+          ...(next.expectedRangeSource ? { expectedRangeSource: next.expectedRangeSource } : {}) };
+        else if (next.whitespaceCandidate) error.details = { path: patch.path, currentSha256: read.hash,
+          ...(next.editIndex !== undefined ? { editIndex: next.editIndex } : {}), whitespaceCandidate: next.whitespaceCandidate };
         throw error;
       }
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });

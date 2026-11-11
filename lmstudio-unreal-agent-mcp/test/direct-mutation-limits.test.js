@@ -86,21 +86,23 @@ function runtimeFixture(t, env = {}) {
 test("Direct mutation limits restore bounded defaults and hard-clamp environment overrides", () => {
   assert.deepStrictEqual(resolveMutationLimits({}), {
     maxMutationChars: 4_000,
-    maxPatchOldTextChars: 1_200,
+    maxPatchOldTextChars: 1_500,
+    maxRangeTextChars: 2_400,
     maxPatchNewTextChars: 2_800,
     maxPatchChars: 4_000,
-    maxPatchLines: 32,
+    maxPatchLines: 64,
     maxNewFileChars: 12_000,
     maxNewFileLines: 160,
     maxFilesPerEdit: 2,
     maxBundleOperations: 2,
     maxBundleMutationBytes: 24_000,
-    maxBundleChangedLines: 64,
+    maxBundleChangedLines: 128,
   });
 
   const unlimitedRequest = Object.fromEntries([
     "DIRECT_MAX_MUTATION_CHARS",
     "DIRECT_MAX_PATCH_OLD_TEXT_CHARS",
+    "DIRECT_MAX_RANGE_TEXT_CHARS",
     "DIRECT_MAX_PATCH_NEW_TEXT_CHARS",
     "DIRECT_MAX_PATCH_CHARS",
     "DIRECT_MAX_PATCH_LINES",
@@ -138,14 +140,18 @@ test("focused bundle patches enforce strict per-field character and line bounds"
     patches: [patch("Config/One.ini", "x".repeat(1_200), "n".repeat(2_800))],
   }));
   assert.throws(() => validateBundleLimits({
-    patches: [patch("Config/One.ini", "x".repeat(1_201), "n")],
-  }), /1200 oldText characters/u);
+    patches: [patch("Config/One.ini", "x".repeat(1_501), "n")],
+  }), /1500 oldText characters/u);
   assert.throws(() => validateBundleLimits({
     patches: [patch("Config/One.ini", "x", "n".repeat(2_801))],
   }), /2800 newText characters/u);
   assert.throws(() => validateBundleLimits({
-    patches: [patch("Config/One.ini", "x", lines(33))],
-  }), /32 newText lines/u);
+    patches: [patch("Config/One.ini", "x", lines(65))],
+  }), /64 newText lines/u);
+  // A final newline ends the last line rather than adding one.
+  assert.doesNotThrow(() => validateBundleLimits({
+    patches: [patch("Config/One.ini", "x", `${lines(64)}\n`)],
+  }));
 
   assert.throws(() => validateBundleLimits({
     patches: [patch("Config/One.ini", "x".repeat(1_200), "n".repeat(2_800))],
@@ -188,10 +194,10 @@ test("bundle limits cap total operations and forbid repeated patch paths", () =>
 
   assert.doesNotThrow(() => validateBundleLimits({
     patches: [
-      patch("Config/A.ini", "a", lines(32)),
-      patch("Config/B.ini", "b", lines(32)),
+      patch("Config/A.ini", "a", lines(64)),
+      patch("Config/B.ini", "b", lines(64)),
     ],
-  }));
+  }), "two full regions fit one bundle");
   assert.throws(() => validateBundleLimits({
     patches: [
       patch("Config/A.ini", "a", lines(32)),
@@ -232,10 +238,11 @@ test("Direct handlers cannot bypass mutation hard caps through oversized env val
   ].map((name) => [name, "999999999"]));
   const { projectRoot, runtime, sourcePath, stateRoot } = runtimeFixture(t, oversizedEnv);
 
-  assert.strictEqual(runtime.limits.maxPatchOldTextChars, 1_200);
+  assert.strictEqual(runtime.limits.maxPatchOldTextChars, 1_500);
+  assert.strictEqual(runtime.limits.maxRangeTextChars, 2_400);
   assert.strictEqual(runtime.limits.maxPatchNewTextChars, 2_800);
   assert.strictEqual(runtime.limits.maxPatchChars, 4_000);
-  assert.strictEqual(runtime.limits.maxPatchLines, 32);
+  assert.strictEqual(runtime.limits.maxPatchLines, 64);
   assert.strictEqual(runtime.limits.maxFilesPerEdit, 2);
   assert.strictEqual(runtime.limits.maxBundleOperations, 2);
 
@@ -249,9 +256,9 @@ test("Direct handlers cannot bypass mutation hard caps through oversized env val
 
   const source = fs.readFileSync(sourcePath, "utf8");
   const invalidPatches = [
-    { oldText: "o".repeat(1_201), newText: "replacement", expectedOccurrences: 1, errorCode: "PATCH_TOO_LARGE" },
+    { oldText: "o".repeat(1_501), newText: "replacement", expectedOccurrences: 1, errorCode: "PATCH_TOO_LARGE" },
     { oldText: "old", newText: "n".repeat(2_801), expectedOccurrences: 1, errorCode: "PATCH_TOO_LARGE" },
-    { oldText: "old", newText: lines(33, "replacement"), expectedOccurrences: 1, errorCode: "PATCH_TOO_LARGE" },
+    { oldText: "old", newText: lines(65, "replacement"), expectedOccurrences: 1, errorCode: "PATCH_TOO_LARGE" },
     { oldText: "old", newText: "replacement", expectedOccurrences: 2, errorCode: "INVALID_ARGUMENT" },
   ];
   for (const invalid of invalidPatches) {

@@ -97,8 +97,24 @@ export function isObservationOnlyToolCall(tool: RemoteToolLike, request: Pick<To
 // "…위반하는 것들 … 찾을것" asked for an audit and was classified explain
 // (conversation 1793984074550): every form of 찾-, and the defect nouns.
 const REVIEW_REQUEST = /검토|감사|리뷰|분석|점검|조사|찾(?:아|을|기|는|으)|문제점|위반|결함|확인해|설명|평가|진단|\b(?:review|audit|analy[sz]e|inspect|find|explain|assess|diagnose|investigate)\b/iu;
-const CHANGE_REQUEST = /수정|고쳐|고치|구현|추가해|추가하|변경|바꿔|바꾸|적용|리팩|삭제|지워|만들어|작성해|생성|패치|개선해|빌드|컴파일|실행|돌려|커밋|푸시|\b(?:fix|implement|change|modify|edit|apply|refactor|delete|remove|create|write|add|patch|build|compile|run|execute|commit|push|rename)\b/iu;
+// "옮겨, 그리고 그 이후 단계도 너가 알아서 해봐" (conversation 1794419304890) moved code.
+const CHANGE_REQUEST = /수정|고쳐|고치|구현|추가해|추가하|변경|바꿔|바꾸|적용|리팩|삭제|지워|만들어|작성해|생성|패치|개선해|빌드|컴파일|실행|돌려|커밋|푸시|옮겨|옮기자|옮겨줘|이동해|\b(?:fix|implement|change|modify|edit|apply|refactor|delete|remove|create|write|add|patch|build|compile|run|execute|commit|push|rename)\b/iu;
 const NO_CHANGE = /(?:코드\s*)?(?:수정|변경)하지\s*(?:말고|마|않고)|바꾸지\s*(?:말고|마|않고)|(?:do not|don't)\s+(?:edit|change|modify)\b[^.,]*|without\s+(?:changing|editing|modifying)\b[^.,]*|no\s+(?:code\s+)?changes/giu;
+
+// "그럼 지금 수정 계획 세워봐. 단계적으로" asked for a plan (conversation
+// 1794393906420) but '수정' made it mutate. Writing a plan changes nothing,
+// even when it names the change; asking to carry it out does.
+const PLAN_AUTHORING = /(?:계획|플랜|로드맵|방안)(?:을|를|만|부터|도|좀)?\s*(?:좀\s*|한번\s*|먼저\s*|다시\s*|단계적으로\s*|단계별로\s*)?(?:세워|세우자|세울래|짜\s*(?:봐|줘|보|주|자)|수립|작성해|작성하|잡아|만들어|정리해|제안해)|\b(?:make|write|draft|create|outline|propose)\s+(?:a\s+|an\s+|the\s+)?(?:step[- ]by[- ]step\s+)?(?:plan|roadmap)\b/iu;
+const EXECUTE_NOW = /고쳐|고치|구현|적용해|적용하|진행|실행|반영|수정해|수정하|변경해|바꿔|끝까지|마저|\b(?:implement|apply it|go ahead|proceed|execute)\b/iu;
+// After a plan-only request, these run the plan; "계속"/"continue" keeps planning.
+// "넘어가" moves on to the plan's next step (conversation 1794419304890).
+const APPROVES_PLAN = /진행|쭉|끝까지|계획대로|그대로|실행|구현|적용|넘어가|^\s*(?:그럼|그러면|좋아|네|응|ㅇㅇ|ok|okay)?\s*(?:해|해줘|해주세요|하자|해봐|해줘봐)\s*[.!]*\s*$|\b(?:go ahead|proceed|do it|implement|apply)\b/iu;
+
+/** A request to write a plan, naming no instruction to carry it out now. */
+export function planOnlyRequest(text: string): boolean {
+  const request = String(text || "").replace(NO_CHANGE, " ");
+  return PLAN_AUTHORING.test(request) && !EXECUTE_NOW.test(request);
+}
 
 /** A request that asks only to review, find or explain, naming no change,
  * build or run: its rounds need no file/project mutation schemas.
@@ -109,6 +125,8 @@ export function readOnlyReviewRequest(text: string): boolean {
 
 export function classifyObjective(text: string): TaskObjective {
   const request = String(text || "").replace(NO_CHANGE, " ");
+  // A plan-only request runs read-only, as a review does: nothing it asks for needs a write.
+  if (planOnlyRequest(text)) return { kind: "review", requiredEffects: new Set<"read" | "mutation" | "long_running">(["read"]), mutationState: "none" };
   const kind = CHANGE_REQUEST.test(request)
     ? /빌드|컴파일|실행|돌려|\b(?:build|compile|run|execute)\b/iu.test(request) ? "build" : "mutate"
     : REVIEW_REQUEST.test(request) ? "review" : "explain";
@@ -130,7 +148,11 @@ export function executionObjective(messages: readonly ChatMessage[]): TaskObject
   const { buildObjectiveContinuity } = require("./continuity-objectives.js");
   const previous = require("./continuity-memory.js").extractPriorContinuityState(normalized);
   const active = buildObjectiveContinuity(normalized, previous).activeObjective;
-  return active?.continuedBy ? classifyObjective(active.text) : direct;
+  if (!active?.continuedBy) return direct;
+  // "진행해" after a plan-only request carries that plan out; "계속" continues writing it.
+  if (planOnlyRequest(active.text) && APPROVES_PLAN.test(latest))
+    return { kind: "mutate", requiredEffects: new Set<"read" | "mutation" | "long_running">(["read", "mutation"]), mutationState: "none" };
+  return classifyObjective(active.text);
 }
 
 export class ToolCapabilityRegistry {

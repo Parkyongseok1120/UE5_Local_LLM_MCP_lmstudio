@@ -286,10 +286,12 @@ export function createToolGenerationTracker(ctl: PredictionLoopHandlerController
     statuses.get(callId)?.controller.remove();
     statuses.delete(callId);
   };
-  const failure = (_roundIndex: number, callId: number) => {
+  // A request refused before running (schema, unknown tool) is not a failed
+  // generation: the model gets the reason and can send it again.
+  const failure = (_roundIndex: number, callId: number, kind?: "rejected_request" | "generation_failed") => {
     const state = statuses.get(callId);
     if (!state) return;
-    state.controller.setState({ status: "error", text: "도구 호출 생성 실패" });
+    state.controller.setState({ status: "error", text: kind === "rejected_request" ? "도구 요청 거부" : "도구 호출 생성 실패" });
     statuses.delete(callId);
   };
   const hasUnfinished = () => statuses.size > 0;

@@ -289,3 +289,14 @@ test("project design review carries only through related user turns in the same 
   assert.equal(selectConversationGuidance(history, project, "verified").projectDesignAnchor, 2);
   assert.equal(selectConversationGuidance(history, undefined, "verified").projectDesignAnchor, undefined);
 });
+
+test("a permission-form design follow-up ('이렇게 설계를 해도 돼?') keeps the project design anchor", () => {
+  const { projectDesignTurnsBack } = require("../dist/guidance-topic-selection");
+  const project = "C:\\Games\\Example\\Game.uproject";
+  const anchor = "C:\\Games\\Example\n그러면 해당 프로젝트의 적 관련 설계가 잘못된거 몇개 짚어줘. 중요한거만";
+  assert.equal(projectDesignTurnsBack([anchor, "적의 개수가 많을떄 이렇게 설계를 해도 돼?"], project), 1);
+  for (const followUp of ["이 파일 지워도 돼?", "폴더 구조 보여줘", "설계를 해도 돼?"])
+    assert.equal(projectDesignTurnsBack([anchor, followUp], project), undefined, followUp);
+  assert.equal(projectDesignTurnsBack(["적 설계 알려줘", "이렇게 설계를 해도 돼?"], project), undefined,
+    "without the project path in the chain there is no anchor");
+});
