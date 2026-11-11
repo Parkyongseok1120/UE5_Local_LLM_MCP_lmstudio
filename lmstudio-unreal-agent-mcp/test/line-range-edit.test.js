@@ -246,19 +246,19 @@ test("the range-hash diagnosis is bounded to nearby overlapping ranges", () => {
 test("a patch over a size limit names the limit and the actual value", async (t) => {
   const f = fixture(t, { [A]: "a\nb\n" });
   const read = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 1, endLine: 1 }));
-  const tall = Array.from({ length: 36 }, (_, index) => `n${index}`).join("\n");
+  const tall = Array.from({ length: 70 }, (_, index) => `n${index}`).join("\n");
   const failure = payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`, startLine: 1, endLine: 1,
     expectedRangeSha256: read.rangeSha256, newText: tall, fileVersionReceipt: read.fileVersionReceipt }));
   assert.equal(failure.errorCode, "PATCH_TOO_LARGE");
-  assert.match(failure.message, /^newText lines 36 > 32\./u);
-  assert.deepEqual(failure.exceeded, [{ limit: "newText lines", actual: 36, max: 32 }]);
+  assert.match(failure.message, /^newText lines 70 > 64\./u);
+  assert.deepEqual(failure.exceeded, [{ limit: "newText lines", actual: 70, max: 64 }]);
   const edits = payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`,
     edits: [{ oldText: "a", newText: "A" }, { oldText: "b", newText: tall }], fileVersionReceipt: read.fileVersionReceipt }));
-  assert.match(edits.message, /^edits\[1\]: newText lines 36 > 32\./u);
+  assert.match(edits.message, /^edits\[1\]: newText lines 70 > 64\./u);
   assert.equal(edits.editIndex, 1);
   const bundle = payloadOf(await f.runtime.callTool("apply_edit_bundle", { patches: [{ path: A,
     edits: [{ oldText: "b", newText: tall }], fileVersionReceipt: read.fileVersionReceipt }] }));
   assert.equal(bundle.ok, false);
-  assert.match(JSON.stringify(bundle), /newText lines 36 > 32/u);
+  assert.match(JSON.stringify(bundle), /newText lines 70 > 64/u);
   assert.equal(f.read(A), "a\nb\n");
 });

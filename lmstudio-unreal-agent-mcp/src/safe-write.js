@@ -11,6 +11,7 @@ const {
   isLineNumberPrefixedPatch,
 } = require("../../shared-tool-core/line-numbering.js");
 const { lineRangeSha256, locateRangeSha256 } = require("./line-range-hash");
+const { HARD_MUTATION_LIMITS } = require("./direct-mutation-limits");
 
 function assertMutationActive(signal) {
   if (signal?.aborted) {
@@ -107,7 +108,9 @@ function squashLineWhitespace(text) {
   return text.replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n").replace(/[ \t]+/g, " ");
 }
 
-function whitespaceOnlyCandidate(contentNorm, oldTextNorm, maxRangeTextChars = 1200) {
+// candidateTextChars: the range-edit limit, so a candidate's text is whole
+// whenever its lines could be replaced by range.
+function whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars = HARD_MUTATION_LIMITS.maxRangeTextChars) {
   const squashedOld = squashLineWhitespace(oldTextNorm);
   const needle = squashedOld.trim();
   if (needle.length < 8) return null;
@@ -134,7 +137,7 @@ function whitespaceOnlyCandidate(contentNorm, oldTextNorm, maxRangeTextChars = 1
     kind: "whitespace_only", candidates: "one", startLine, endLine,
     ...(difference ? { difference } : {}),
     currentRange: { startLine, endLine, rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length,
-      text: text.slice(0, maxRangeTextChars), ...(text.length > maxRangeTextChars ? { textTruncated: true } : {}) },
+      text: text.slice(0, candidateTextChars), ...(text.length > candidateTextChars ? { textTruncated: true } : {}) },
   };
 }
 
@@ -156,6 +159,7 @@ function calculateReplacement({
   expectedOccurrences,
   // Count enforced when expectedOccurrences is omitted (replace_in_file uses 1).
   defaultOccurrences,
+  candidateTextChars,
   normalizeLineEndings = true,
 }) {
   const raw = Buffer.isBuffer(priorContent)
@@ -177,7 +181,7 @@ function calculateReplacement({
   // Existing contract: zero matches are OLD_TEXT_NOT_FOUND when no count was
   // given and an occurrence mismatch ("found 0") when one was.
   if (occurrences === 0) {
-    const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm) : null;
+    const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
     const diagnosis = whitespaceCandidate ? notFoundError(whitespaceCandidate) : "";
     return expectedOccurrences === undefined
       ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(whitespaceCandidate),
@@ -205,7 +209,7 @@ function calculateReplacement({
 // Several exact, non-overlapping regions of one file, each found exactly once in
 // the same prior content, applied together. Returns each region's committed
 // lines (start lines in the prior and the updated text) as change evidence.
-function calculateReplacements({ priorContent, edits, normalizeLineEndings = true }) {
+function calculateReplacements({ priorContent, edits, candidateTextChars, normalizeLineEndings = true }) {
   const raw = Buffer.isBuffer(priorContent) ? priorContent : Buffer.from(String(priorContent ?? ""), "utf8");
   const hasCRLF = raw.includes(Buffer.from("\r\n"));
   const content = raw.toString("utf8");
@@ -222,7 +226,7 @@ function calculateReplacements({ priorContent, edits, normalizeLineEndings = tru
       return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE, editIndex };
     }
     if (occurrences === 0) {
-      const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm) : null;
+      const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
         error: whitespaceCandidate ? notFoundError(whitespaceCandidate, `edits[${editIndex}].oldText`)
           : `edits[${editIndex}] occurrence mismatch: expected 1, found 0`,
@@ -330,7 +334,8 @@ function isLineRangePatch(patch) {
 
 // One of the three patch forms: edits[], a line range, or one oldText.
 function calculatePatch(priorContent, patch, { maxRangeTextChars, maxPatchChars } = {}) {
-  if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits });
+  const candidateTextChars = Number.isFinite(maxRangeTextChars) ? maxRangeTextChars : undefined;
+  if (patch.edits) return calculateReplacements({ priorContent, edits: patch.edits, candidateTextChars });
   if (isLineRangePatch(patch)) {
     return calculateLineRangeReplacement({ priorContent, startLine: patch.startLine, endLine: patch.endLine,
       expectedRangeSha256: patch.expectedRangeSha256, newText: patch.newText, maxRangeTextChars, maxPatchChars });
@@ -338,7 +343,7 @@ function calculatePatch(priorContent, patch, { maxRangeTextChars, maxPatchChars 
   // An omitted count means 1 here too, as at commit: otherwise a duplicated
   // oldText passed this check and failed under the lock as PATCH_FAILED.
   return calculateReplacement({ priorContent, oldText: patch.oldText, newText: patch.newText,
-    expectedOccurrences: patch.expectedOccurrences, defaultOccurrences: 1 });
+    expectedOccurrences: patch.expectedOccurrences, defaultOccurrences: 1, candidateTextChars });
 }
 
 async function replaceWithCAS({

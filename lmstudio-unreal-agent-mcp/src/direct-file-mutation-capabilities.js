@@ -211,7 +211,7 @@ function createFileMutationCapabilities(context) {
     if (read.hash.toLowerCase() !== version.expectedHash) {
       return versionConflict(version, read.hash, aimed(read.content));
     }
-    const prospective = calculatePatch(read.buffer, args, { maxRangeTextChars: limits.maxPatchOldTextChars, maxPatchChars: limits.maxPatchChars });
+    const prospective = calculatePatch(read.buffer, args, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars });
     if (!prospective.ok && range) {
       // Like an occurrence mismatch, a stale range answers with what is there now.
       const located = aimed(read.content);

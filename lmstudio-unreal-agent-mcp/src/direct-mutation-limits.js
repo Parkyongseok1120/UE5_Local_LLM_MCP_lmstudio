@@ -1,16 +1,23 @@
 "use strict";
 
+// Conversation 1794419304890: 39-, 44- and 52-line newText (798–1,405 chars)
+// and a 1,235-char oldText were refused although each fit the 4,000-char
+// region budget. newText lines rise to 64 (bundles to 128 so one region does
+// not use a whole bundle). Copied oldText stays near its old size, since long
+// copies fail on whitespace; replacing proven lines by range needs no copy,
+// so a range may cover 2,400 characters.
 const HARD_MUTATION_LIMITS = Object.freeze({
-  maxPatchOldTextChars: 1_200,
+  maxPatchOldTextChars: 1_500,
+  maxRangeTextChars: 2_400,
   maxPatchNewTextChars: 2_800,
   maxPatchChars: 4_000,
-  maxPatchLines: 32,
+  maxPatchLines: 64,
   maxNewFileChars: 12_000,
   maxNewFileLines: 160,
   maxFilesPerEdit: 2,
   maxBundleOperations: 2,
   maxBundleMutationBytes: 24_000,
-  maxBundleChangedLines: 64,
+  maxBundleChangedLines: 128,
 });
 
 function hardBound(value, fallback, hardMaximum) {
@@ -38,6 +45,11 @@ function constrainMutationLimits(values = {}) {
   return Object.freeze({
     maxMutationChars: maxPatchChars,
     maxPatchOldTextChars,
+    maxRangeTextChars: hardBound(
+      values.maxRangeTextChars,
+      HARD_MUTATION_LIMITS.maxRangeTextChars,
+      HARD_MUTATION_LIMITS.maxRangeTextChars,
+    ),
     maxPatchNewTextChars,
     maxPatchChars,
     maxPatchLines: hardBound(
@@ -81,6 +93,7 @@ function constrainMutationLimits(values = {}) {
 function resolveMutationLimits(env = {}) {
   return constrainMutationLimits({
     maxPatchOldTextChars: env.DIRECT_MAX_PATCH_OLD_TEXT_CHARS,
+    maxRangeTextChars: env.DIRECT_MAX_RANGE_TEXT_CHARS,
     maxPatchNewTextChars: env.DIRECT_MAX_PATCH_NEW_TEXT_CHARS,
     maxPatchChars: env.DIRECT_MAX_PATCH_CHARS ?? env.DIRECT_MAX_MUTATION_CHARS,
     maxPatchLines: env.DIRECT_MAX_PATCH_LINES,
@@ -93,8 +106,11 @@ function resolveMutationLimits(env = {}) {
   });
 }
 
+// A final terminator ends the last line; it does not start another one, so
+// a 64-line block ending in "\n" is 64 lines, not 65.
 function textLineCount(value) {
-  return String(value ?? "").split(/\r?\n/u).length;
+  const lines = String(value ?? "").split(/\r?\n/u);
+  return lines.length > 1 && lines.at(-1) === "" ? lines.length - 1 : lines.length;
 }
 
 // Which per-region limits one edit region exceeds, with the actual values, so
