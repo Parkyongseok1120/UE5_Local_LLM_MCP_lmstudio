@@ -229,8 +229,10 @@ function createFileMutationCapabilities(context) {
         prospective.errorCode
           || (/occurrence mismatch/iu.test(prospective.error) ? "OCCURRENCE_MISMATCH" : "OLD_TEXT_NOT_FOUND"),
         prospective.error,
-        { retryAllowed: true, ...located,
-          details: { ...located.details, currentSha256: read.hash, ...(edits ? { editIndex: prospective.editIndex } : {}) } },
+        { retryAllowed: true, retryMode: "different_arguments", ...located,
+          details: { ...located.details, currentSha256: read.hash, ...(edits ? { editIndex: prospective.editIndex } : {}),
+            // Whitespace-only candidate lines, with their exact text and range hash.
+            ...(prospective.whitespaceCandidate ? { whitespaceCandidate: prospective.whitespaceCandidate } : {}) } },
       );
     }
     const semanticAdvisory = mutationSemanticAdvisory(
@@ -290,6 +292,8 @@ function createFileMutationCapabilities(context) {
       previousSha256: read.hash,
       sha256: nextHash,
       hashSource: version.hashSource,
+      // A containing read's range hash proved these lines: name that read range.
+      ...(locked.result.rangeProof ? { rangeProof: locked.result.rangeProof } : {}),
       ...snapshot,
       advisory: "The edit is complete. Static validation and build remain independent diagnostics.",
       ...(semanticAdvisory ? {

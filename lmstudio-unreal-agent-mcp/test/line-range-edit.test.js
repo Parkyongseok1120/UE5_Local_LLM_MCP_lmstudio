@@ -199,20 +199,22 @@ test("apply_edit_bundle accepts line-range patches and stays atomic on a stale r
     [{ beforeStartLine: 2, afterStartLine: 2, before: "a2", after: "A2" }]);
 });
 
-// Conversation 1794393906420: 13 range edits sent the rangeSha256 of a wider
-// read (83-115) for a narrower edit (85-88), each with a valid version receipt.
-test("a range hash from a wider read or the whole file is named and still refused", async (t) => {
+// Conversations 1794393906420 and 1794402335258: 15 range edits sent the
+// rangeSha256 of a wider read (83-115) for a narrower edit (85-88). A read that
+// contains the lines proves them; an overlapping, whole-file or foreign hash does not.
+test("a containing read's range hash proves the lines; other hashes are named and refused", async (t) => {
   const body = Array.from({ length: 40 }, (_, index) => `line${index + 1}`).join("\n") + "\n";
   const f = fixture(t, { [A]: body });
   const wide = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 5, endLine: 30 }));
+  const overlapping = payloadOf(await f.runtime.callTool("read_file_range", { path: `project://${A}`, startLine: 10, endLine: 20 }));
   const call = async (args) => payloadOf(await f.runtime.callTool("replace_in_file", { path: `project://${A}`,
     startLine: 8, endLine: 12, newText: "x", fileVersionReceipt: wide.fileVersionReceipt, ...args }));
 
-  const narrower = await call({ expectedRangeSha256: wide.rangeSha256 });
-  assert.equal(narrower.errorCode, "RANGE_HASH_MISMATCH");
-  assert.deepEqual(narrower.expectedRangeSource, { kind: "other_range", startLine: 5, endLine: 30 });
-  assert.match(narrower.message, /rangeSha256 of lines 5-30, but this edit names lines 8-12/u);
-  assert.equal(narrower.currentRange.text, "line8\nline9\nline10\nline11\nline12");
+  const partial = await call({ expectedRangeSha256: overlapping.rangeSha256 });
+  assert.equal(partial.errorCode, "RANGE_HASH_MISMATCH");
+  assert.deepEqual(partial.expectedRangeSource, { kind: "other_range", startLine: 10, endLine: 20 });
+  assert.match(partial.message, /rangeSha256 of lines 10-20, which does not cover lines 8-12/u);
+  assert.equal(partial.currentRange.text, "line8\nline9\nline10\nline11\nline12");
 
   const whole = await call({ expectedRangeSha256: wide.sha256 });
   assert.deepEqual(whole.expectedRangeSource, { kind: "file_sha256" });
@@ -220,10 +222,15 @@ test("a range hash from a wider read or the whole file is named and still refuse
 
   const unknown = await call({ expectedRangeSha256: sha("recalled after compaction") });
   assert.deepEqual(unknown.expectedRangeSource, { kind: "not_in_current_file" });
-  assert.equal(f.read(A), body, "no diagnosis turns a refused hash into a write");
+  assert.equal(f.read(A), body, "no refused hash becomes a write");
 
-  const exact = await call({ expectedRangeSha256: narrower.currentRange.rangeSha256 });
-  assert.equal(exact.ok, true, JSON.stringify(exact));
+  const contained = await call({ expectedRangeSha256: wide.rangeSha256 });
+  assert.equal(contained.ok, true, JSON.stringify(contained));
+  assert.deepEqual(contained.rangeProof, { startLine: 5, endLine: 30 });
+  assert.equal(f.read(A), body.replace("line8\nline9\nline10\nline11\nline12\n", "x\n"));
+  const stale = await call({ expectedRangeSha256: wide.rangeSha256, fileVersionReceipt: contained.fileVersionReceipt,
+    startLine: 20, endLine: 21 });
+  assert.equal(stale.errorCode, "RANGE_HASH_MISMATCH", "the containing hash is bound to the lines as they were");
 });
 
 test("the range-hash diagnosis is bounded to nearby overlapping ranges", () => {
