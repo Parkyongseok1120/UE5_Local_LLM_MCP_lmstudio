@@ -328,6 +328,53 @@ function calculateLineRangeReplacement({
     regions: [{ beforeStartLine: startLine, afterStartLine: startLine, before, after: replacement }] };
 }
 
+// Conversation 1794419304890: the edits refused for size were 92–98% lines
+// that did not change. When oldText matches the file once, name the file lines
+// that do change and their range hash, so a retry sends only those lines by
+// range (no oldText copy). Diagnosis only: nothing is edited from it.
+function changedLineRange(priorContent, oldText, newText, { maxRangeTextChars = Infinity, maxPatchLines = Infinity } = {}) {
+  const content = Buffer.isBuffer(priorContent) ? priorContent.toString("utf8") : String(priorContent ?? "");
+  const contentNorm = content.replace(/\r\n/g, "\n");
+  const oldNorm = String(oldText ?? "").replace(/\r\n/g, "\n");
+  const newNorm = String(newText ?? "").replace(/\r\n/g, "\n");
+  const at = oldNorm ? contentNorm.indexOf(oldNorm) : -1;
+  if (at < 0 || contentNorm.indexOf(oldNorm, at + 1) >= 0) return null;
+  const oldLines = oldNorm.split("\n"), newLines = newNorm.split("\n");
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix
+    && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) suffix++;
+  const addedLines = newLines.length - prefix - suffix;
+  if (addedLines === 0 && oldLines.length - prefix - suffix === 0) return { identical: true };
+  const firstLine = contentNorm.slice(0, at).split("\n").length;
+  let startLine = firstLine + prefix, endLine = firstLine + oldLines.length - suffix - 1;
+  // A pure insertion replaces one neighbouring line together with the new ones.
+  const insertion = endLine < startLine ? (prefix > 0 ? "after" : "before") : null;
+  if (insertion === "after") startLine = endLine = firstLine + prefix - 1;
+  if (insertion === "before") endLine = startLine;
+  const fileLines = content.split(/\r?\n/);
+  const text = fileLines.slice(startLine - 1, endLine).join("\n");
+  const newTextLines = addedLines > 0 ? [prefix + 1, newLines.length - suffix] : null;
+  const fits = text.length <= maxRangeTextChars && addedLines + (insertion ? 1 : 0) <= maxPatchLines;
+  return { startLine, endLine, ...(insertion ? { insertion } : {}), newTextLines, fits,
+    ...(fits ? { rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length, text } : {}) };
+}
+
+function changedLineRangeMessage(range) {
+  if (!range) return "";
+  if (range.identical) return "oldText and newText are identical; there is nothing to replace.";
+  const one = range.startLine === range.endLine;
+  const lines = one ? `line ${range.startLine} changes` : `lines ${range.startLine}-${range.endLine} change`;
+  const [first, last] = range.newTextLines || [];
+  const added = !range.newTextLines ? "nothing" : first === last ? `newText line ${first}` : `newText lines ${first}-${last}`;
+  if (!range.fits) return `Only file ${lines}, but they exceed the per-region limits; split them across calls.`;
+  if (range.insertion) {
+    return `newText only adds ${added} ${range.insertion} file line ${range.startLine}: replace that line by range (changedRange.rangeSha256) with newText = the line ${range.insertion === "after" ? "followed" : "preceded"} by the added lines.`;
+  }
+  return `Only file ${lines} (to ${added}): replace just ${one ? "it" : "them"} by range with startLine ${range.startLine}, endLine ${range.endLine} and changedRange.rangeSha256; newText holds whole lines.`;
+}
+
 function isLineRangePatch(patch) {
   return Boolean(patch) && ["startLine", "endLine", "expectedRangeSha256"].some((field) => patch[field] !== undefined);
 }
@@ -418,6 +465,8 @@ module.exports = {
   calculateReplacements,
   calculateLineRangeReplacement,
   calculatePatch,
+  changedLineRange,
+  changedLineRangeMessage,
   isLineRangePatch,
   replaceWithCAS,
   createExclusive,

@@ -745,8 +745,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
               toolGeneration.end(modelRoundIndex, callId);
               traceCall(callId, { generationState: "generated" });
             },
-            onToolCallRequestFailure: (modelRoundIndex, callId) => {
-              toolGeneration.failure(modelRoundIndex, callId);
+            onToolCallRequestFailure: (modelRoundIndex, callId, _error, kind) => {
+              toolGeneration.failure(modelRoundIndex, callId, kind);
               traceCall(callId, { generationState: "failed", executionState: "not_executed" });
             },
             onToolCallRequestFinalized: (_roundIndex, callId, info) => {

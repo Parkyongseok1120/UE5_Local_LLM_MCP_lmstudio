@@ -6,6 +6,8 @@ const path = require("node:path");
 const {
   assertMutationActive,
   calculatePatch,
+  changedLineRange,
+  changedLineRangeMessage,
   createExclusive,
   isLineRangePatch,
   replaceWithCAS,
@@ -156,6 +158,24 @@ function createFileMutationCapabilities(context) {
     }), committedChange("", content, null, hash), context.payloadFits);
   }
 
+  // The size check runs before the file is read, so a size refusal only names
+  // the changed file lines after the same version proof an edit needs: never
+  // for missing or stale evidence, a range edit, or oldText not found exactly once.
+  async function oversizedRegionChangedRange(args, region, requestContext) {
+    if (!region?.oldText || isLineRangePatch(args)) return null;
+    try {
+      const resolution = await mutationResolution(args.path, args.project);
+      const version = resolveVersionEvidence(context, resolution, args, requestContext);
+      if (!version.ok) return null;
+      const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
+      if (!read.ok || read.hash.toLowerCase() !== version.expectedHash) return null;
+      return changedLineRange(read.buffer, region.oldText, region.newText,
+        { maxRangeTextChars: limits.maxRangeTextChars, maxPatchLines: limits.maxPatchLines });
+    } catch {
+      return null;
+    }
+  }
+
   async function replaceInFile(args, requestContext = {}) {
     if (!writesAllowed()) {
       return failure("WRITE_DISABLED", "Writes are disabled. Start the MCP with ALLOW_WRITE=1 to enable project mutations.");
@@ -184,10 +204,13 @@ function createFileMutationCapabilities(context) {
       // Name the limit that was hit: a list of every limit left the model
       // guessing (conversation 1794393906420: 36 newText lines read as too many characters).
       const where = tooLarge >= 0 && edits ? `edits[${tooLarge}]: ` : tooLarge >= 0 ? "" : "edits[] together: ";
+      const changedRange = tooLarge >= 0 ? await oversizedRegionChangedRange(args, regions[tooLarge], requestContext) : null;
+      const hint = changedLineRangeMessage(changedRange);
       return failure(
         "PATCH_TOO_LARGE",
-        `${where}${describeExceeded(exceeded)}. Each region is limited to oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters and ${limits.maxPatchLines} newText lines; edits[] together to ${limits.maxBundleChangedLines} newText lines. Replace fewer lines per region; regions in one edits[] call apply together, while separate calls each apply on their own and chain the returned fileVersionReceipt.`,
-        { retryAllowed: true, details: { exceeded, ...(tooLarge >= 0 && edits ? { editIndex: tooLarge } : {}) } },
+        `${where}${describeExceeded(exceeded)}. ${hint ? `${hint} ` : ""}Each region is limited to oldText ${limits.maxPatchOldTextChars} characters, newText ${limits.maxPatchNewTextChars} characters, ${limits.maxPatchChars} combined characters and ${limits.maxPatchLines} newText lines; edits[] together to ${limits.maxBundleChangedLines} newText lines. Replace fewer lines per region; regions in one edits[] call apply together, while separate calls each apply on their own and chain the returned fileVersionReceipt.`,
+        { retryAllowed: true, details: { exceeded, ...(tooLarge >= 0 && edits ? { editIndex: tooLarge } : {}),
+          ...(changedRange ? { changedRange } : {}) } },
       );
     }
     assertMutationActive(requestContext.signal);

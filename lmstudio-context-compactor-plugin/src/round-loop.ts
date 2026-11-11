@@ -7,7 +7,10 @@ import {
   type Tool,
 } from "@lmstudio/sdk";
 
+import { describeArgumentLengthRejection } from "./tool-argument-limits";
+
 type TokenSource = LLM | LLMGeneratorHandle;
+export type ToolRequestFailureKind = "rejected_request" | "generation_failed";
 export type RoundToolGuard = (...args: [...Parameters<NonNullable<LLMActionOpts["guardToolCall"]>>, AbortSignal?]) => ReturnType<NonNullable<LLMActionOpts["guardToolCall"]>>;
 
 /** A normal tool handoff completes this prediction and consumes its input.
@@ -29,7 +32,9 @@ type RoundCallbacks = {
   onToolCallRequestNameReceived?: NonNullable<LLMActionOpts["onToolCallRequestNameReceived"]>;
   onToolCallRequestArgumentFragmentGenerated?: NonNullable<LLMActionOpts["onToolCallRequestArgumentFragmentGenerated"]>;
   onToolCallRequestEnd?: NonNullable<LLMActionOpts["onToolCallRequestEnd"]>;
-  onToolCallRequestFailure?: NonNullable<LLMActionOpts["onToolCallRequestFailure"]>;
+  /** kind: "rejected_request" when a parsed request was refused before running
+   * (schema or unknown tool); otherwise the call itself failed to generate. */
+  onToolCallRequestFailure?: (...args: [...Parameters<NonNullable<LLMActionOpts["onToolCallRequestFailure"]>>, ToolRequestFailureKind?]) => void;
   onMessageCaptured?: (message: ChatMessage) => void;
   captureUnparsedToolRequest?: boolean;
   abortAfterPredictionFragment?: (fragment: Parameters<NonNullable<LLMActionOpts["onPredictionFragment"]>>[0]) => Error | undefined;
@@ -96,6 +101,9 @@ export async function runOneToolRound(
   // unparsed request is reported to the user; its fragment never is.
   const pendingRequestNames = new Map<number, string>();
   let unparsedToolName: string | undefined;
+  // The SDK calls handleInvalidToolRequest before onToolCallRequestFailure for
+  // the same error object, so the failure callback can tell a refused request.
+  const rejectedRequestErrors = new WeakSet<object>();
   let finishReason: string | undefined;
   let predictionStats: CapturedRound["predictionStats"];
   let fragmentAbortReason: Error | undefined;
@@ -130,8 +138,12 @@ export async function runOneToolRound(
     const { onMessageCaptured, abortAfterPredictionFragment, onFirstToken, captureUnparsedToolRequest, ...actCallbacks } = callbacks;
     const handleInvalidToolRequest: LLMActionOpts["handleInvalidToolRequest"] = (error, request) => {
       if (closed) return undefined;
-      // Preserve the SDK's result for a parsed request rejected by its schema.
-      if (request !== undefined) return error.message;
+      // A parsed request rejected by its schema: the SDK's message, or for a
+      // length limit the field, the allowed length and the lines that differ.
+      if (request !== undefined) {
+        if (typeof error === "object" && error !== null) rejectedRequestErrors.add(error);
+        return describeArgumentLengthRejection(error, request, tools) ?? error.message;
+      }
       // No request exists to execute or attach a synthetic result to. Let the
       // prediction end normally so its stop reason survives; stop at our round
       // boundary after collecting any already-running peers' returned results.
@@ -215,7 +227,8 @@ export async function runOneToolRound(
         predictionUsage.sdkToolRequestFailureCount += 1;
         if (unparsedToolRequestError !== undefined && args[2] === unparsedToolRequestError)
           unparsedToolName ??= pendingRequestNames.get(args[1]);
-        actCallbacks.onToolCallRequestFailure?.(...args);
+        const rejected = typeof args[2] === "object" && args[2] !== null && rejectedRequestErrors.has(args[2]);
+        actCallbacks.onToolCallRequestFailure?.(args[0], args[1], args[2], rejected ? "rejected_request" : "generation_failed");
       },
       onToolCallRequestFinalized: (...args) => {
         if (closed) return;
