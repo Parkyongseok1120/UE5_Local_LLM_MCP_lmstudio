@@ -101,6 +101,10 @@ function spliceNormalizedSpans(content, spans, { normalized, eol }) {
   return updated + content.slice(cursor);
 }
 
+// Conversation 1794427092019: after a whitespace hint the range retry dropped the
+// expectedHash its oldText call had carried and failed FILE_SNAPSHOT_REQUIRED.
+const KEEP_VERSION_PROOF = "Send the same fileVersionReceipt or expectedHash with it: a range hash proves lines, not the file version.";
+
 // "};\n \n// next" sent for "};\n\n// next" (conversation 1794402335258): a model
 // that strips "28" from the numbered blank line "28\t" keeps the tab as a space.
 // Diagnosis only; the candidate lines are reported, never edited.
@@ -149,7 +153,7 @@ function notFoundError(candidate, label = "oldText") {
   const where = candidate.difference
     ? ` (oldText line ${candidate.difference.oldTextLine} is ${JSON.stringify(candidate.difference.oldText)}; file line ${candidate.difference.fileLine} is ${JSON.stringify(candidate.difference.fileText)})`
     : "";
-  return `${label} matches lines ${candidate.startLine}-${candidate.endLine} only when whitespace is ignored${where}. Copy tabs, spaces and empty lines exactly, or replace lines ${candidate.startLine}-${candidate.endLine} with currentRange.rangeSha256 after checking currentRange.text.`;
+  return `${label} matches lines ${candidate.startLine}-${candidate.endLine} only when whitespace is ignored${where}. Copy tabs, spaces and empty lines exactly, or replace lines ${candidate.startLine}-${candidate.endLine} with currentRange.rangeSha256 after checking currentRange.text. ${KEEP_VERSION_PROOF}`;
 }
 
 function calculateReplacement({
@@ -303,7 +307,7 @@ function calculateLineRangeReplacement({
       const error = fileHash
         ? `expectedRangeSha256 is the whole-file sha256, not a range hash. Pass the rangeSha256 of a read that covers lines ${startLine}-${endLine}; currentRange holds the one for exactly these lines with their text.`
         : other
-          ? `expectedRangeSha256 is the rangeSha256 of lines ${other.startLine}-${other.endLine}, which does not cover lines ${startLine}-${endLine}. Check currentRange.text and use currentRange.rangeSha256 for lines ${startLine}-${endLine}, or read the lines first.`
+          ? `expectedRangeSha256 is the rangeSha256 of lines ${other.startLine}-${other.endLine}, which does not cover lines ${startLine}-${endLine}. Check currentRange.text and use currentRange.rangeSha256 for lines ${startLine}-${endLine}, or read the lines first. ${KEEP_VERSION_PROOF}`
           : `lines ${startLine}-${endLine} do not hash to expectedRangeSha256; currentRange holds their text now`;
       return { ok: false, errorCode: "RANGE_HASH_MISMATCH", currentRange, expectedRangeSource, error };
     }
@@ -370,9 +374,9 @@ function changedLineRangeMessage(range) {
   const added = !range.newTextLines ? "nothing" : first === last ? `newText line ${first}` : `newText lines ${first}-${last}`;
   if (!range.fits) return `Only file ${lines}, but they exceed the per-region limits; split them across calls.`;
   if (range.insertion) {
-    return `newText only adds ${added} ${range.insertion} file line ${range.startLine}: replace that line by range (changedRange.rangeSha256) with newText = the line ${range.insertion === "after" ? "followed" : "preceded"} by the added lines.`;
+    return `newText only adds ${added} ${range.insertion} file line ${range.startLine}: replace that line by range (changedRange.rangeSha256) with newText = the line ${range.insertion === "after" ? "followed" : "preceded"} by the added lines. ${KEEP_VERSION_PROOF}`;
   }
-  return `Only file ${lines} (to ${added}): replace just ${one ? "it" : "them"} by range with startLine ${range.startLine}, endLine ${range.endLine} and changedRange.rangeSha256; newText holds whole lines.`;
+  return `Only file ${lines} (to ${added}): replace just ${one ? "it" : "them"} by range with startLine ${range.startLine}, endLine ${range.endLine} and changedRange.rangeSha256; newText holds whole lines. ${KEEP_VERSION_PROOF}`;
 }
 
 function isLineRangePatch(patch) {
