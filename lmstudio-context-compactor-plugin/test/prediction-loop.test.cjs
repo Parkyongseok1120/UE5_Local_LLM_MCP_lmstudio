@@ -6731,6 +6731,25 @@ test('explain objective without topic omits guidance',async()=>{
   await handlePredictionLoop(ctl);
   assert.ok(ctl.debugValues.some(e=>e.event==='design_guidance_input'&&e.omissionReasons?.includes('objective_explain_without_topic')));
 });
+test('project design advice reaches the measured explain input without changing its tool objective', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'design-advice-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const descriptor = path.join(root, 'Fixture.uproject');
+  fs.writeFileSync(descriptor, '{}');
+  let input;
+  const model = reasoningModel(async (chat, _tools, options) => {
+    input = chat.getMessagesArray().map(m => m.getText()).join('\n');
+    completeRecoveryReply(options, 'Review complete.');
+  });
+  const ctl = fakeController(Chat.from([{ role: 'user', content: root + '\n해당 프로젝트의 적 설계가 잘못된 거 짚어줘.' }]), model,
+    { projectIdentity: descriptor, designGuidanceMode: 'auto', designGuidanceMaxTokens: 8192 });
+  await handlePredictionLoop(ctl);
+  const event = ctl.debugValues.find(e => e.event === 'design_guidance_input');
+  assert.equal(event.primaryTopic, 'design');
+  assert.equal(event.projectDesignTurnsBack, 0);
+  assert.match(input, /\[reference id=design\//);
+  assert.equal(ctl.debugValues.find(e => e.event === 'execution_outcome').objectiveKind, 'explain');
+});
 test('prefix_reuse event records causes',async()=>{
   const {pair,tool}=require('./helpers/v4.cjs');let calls=0;
   const model=reasoningModel(async(_chat,_tools,opts)=>{
