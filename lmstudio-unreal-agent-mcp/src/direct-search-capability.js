@@ -48,10 +48,42 @@ const TEXT_EXTENSIONS = new Set([
   ".xml", ".yaml", ".yml", ".toml", ".cmake", ".build", ".target",
 ]);
 
+// Directory entries one search may visit; beyond it the result is partial.
+const MAX_VISITED_ENTRIES = 200000;
+// Bumped when the walk's order or candidate rules change: a cursor from the
+// old walk would skip a different set of matches.
+const SEARCH_WALK_VERSION = 2;
+const SOURCE_FIRST = ["source", "plugins", "config"];
+function sourceFirst(name) {
+  const lower = String(name).toLowerCase();
+  const index = SOURCE_FIRST.indexOf(lower);
+  return index >= 0 ? index : lower === "content" ? SOURCE_FIRST.length + 1 : SOURCE_FIRST.length;
+}
+async function isProjectRoot(directory) {
+  try { return (await fsp.readdir(directory)).some(name => /\.uproject$/iu.test(name)); } catch { return false; }
+}
+/** The literal directories an include glob starts with ("Source/Game/**\/*.h" -> "Source/Game"). */
+function includePrefix(pattern) {
+  const glob = String(pattern || "").trim().replace(/\\/gu, "/");
+  if (!glob.includes("/")) return "";
+  const literal = [];
+  for (const segment of glob.split("/").slice(0, -1)) {
+    if (/[*?[\]{}]/u.test(segment)) break;
+    literal.push(segment);
+  }
+  return literal.join("/");
+}
+function onPrefixPath(relative, prefix) {
+  const value = relative.toLowerCase(), wanted = prefix.toLowerCase();
+  return value === wanted || value.startsWith(`${wanted}/`) || wanted.startsWith(`${value}/`);
+}
+const contentSearchable = (target) => { const ext = path.extname(target).toLowerCase(); return !ext || TEXT_EXTENSIONS.has(ext); };
+
 // The search a cursor belongs to: every argument that changes which matches
 // exist or their order. Paging and budget fields are excluded.
 function searchIdentity(args) {
   return crypto.createHash("sha256").update(JSON.stringify([
+    SEARCH_WALK_VERSION,
     String(args.query || ""), String(args.path || "workspace://"), String(args.project || ""),
     args.regex === true, args.matchFileNames ?? null, args.caseSensitive === true,
     args.maxFiles ?? null, String(args.include || ""),
@@ -96,42 +128,63 @@ function createSearchCapability(context, helpers = {}) {
     }
   }
 
-  async function collectSearchFiles(rootResolution, maxFiles, guard) {
+  // Conversation 1794469194476: search_files(query=Spawn, include=**/*.h)
+  // spent its 5,000 candidates on Content assets, read 0 files, and the model
+  // concluded no spawner existed. Only files the search can use count toward
+  // maxFiles now, a project root is walked Source first, and the walk itself is
+  // bounded by visited entries and the deadline.
+  async function collectSearchFiles(rootResolution, maxFiles, guard, { eligible = () => true, prunePrefix = "" } = {}) {
     const files = [];
-    let discoveryErrors = 0, excludedEntries = 0;
-    async function walk(target) {
-      if (files.length >= maxFiles || guard.reason()) return;
+    const root = rootResolution.absolutePath;
+    let discoveryErrors = 0, deniedEntries = 0, excludedByPolicy = 0, filteredFiles = 0, visitedEntries = 0;
+    let entriesLimitReached = false;
+    const policyNames = new Set();
+    const unvisited = [];
+    const projectRoot = await isProjectRoot(root);
+    const stop = () => files.length >= maxFiles || entriesLimitReached || Boolean(guard.reason());
+    async function walk(target, depth) {
+      if (stop()) return false;
       let stat;
-      try { stat = await statOrNull(target); } catch { discoveryErrors++; return; }
-      if (!stat) { discoveryErrors++; return; }
+      try { stat = await statOrNull(target); } catch { discoveryErrors++; return true; }
+      if (!stat) { discoveryErrors++; return true; }
       if (stat.isFile()) {
-        files.push({ target, stat });
-        return;
+        if (eligible(relativeSlash(root, target) || path.basename(target), target)) files.push({ target, stat });
+        else filteredFiles++;
+        return true;
       }
-      if (!stat.isDirectory()) return;
+      if (!stat.isDirectory()) return true;
       let entries;
-      try { entries = await fsp.readdir(target, { withFileTypes: true }); } catch { discoveryErrors++; return; }
-      for (const entry of entries) {
-        if (files.length >= maxFiles || guard.reason()) break;
-        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedEntries++; continue; }
+      try { entries = await fsp.readdir(target, { withFileTypes: true }); } catch { discoveryErrors++; return true; }
+      if (depth === 0 && projectRoot) entries.sort((a, b) => sourceFirst(a.name) - sourceFirst(b.name));
+      for (const [position, entry] of entries.entries()) {
+        if (stop()) {
+          if (depth === 0) unvisited.push(...entries.slice(position).filter(item => item.isDirectory()).map(item => item.name));
+          return false;
+        }
+        if (++visitedEntries > MAX_VISITED_ENTRIES) { entriesLimitReached = true; continue; }
+        if (entry.isDirectory() && DEFAULT_IGNORED_DIRS.has(entry.name)) { excludedByPolicy++; policyNames.add(entry.name); continue; }
         // Links (and Windows junctions) are never followed. Skip them before
         // the containment check: a junction pointing outside the root made the
         // whole search fail (Saved/Codex/.../node_modules junctions under
         // WORKSPACE_ROOT, 6 path-less searches in 2026-11-11/12 conversations).
-        if (entry.isSymbolicLink()) { excludedEntries++; continue; }
+        if (entry.isSymbolicLink()) { excludedByPolicy++; policyNames.add("(links)"); continue; }
         const child = path.join(target, entry.name);
+        if (entry.isDirectory() && prunePrefix && !onPrefixPath(relativeSlash(root, child), prunePrefix)) { filteredFiles++; continue; }
         try { await assertReadChildContained(child, rootResolution); }
         catch (error) {
           if (error.code !== "ENGINE_SOURCE_PATH_DENIED") throw error;
-          excludedEntries++;
+          deniedEntries++;
           continue;
         }
-        if (entry.isDirectory() || entry.isFile()) await walk(child);
-        else excludedEntries++;
+        if (!(entry.isDirectory() || entry.isFile())) { excludedByPolicy++; continue; }
+        const finished = await walk(child, depth + 1);
+        if (!finished && depth === 0 && entry.isDirectory()) unvisited.push(entry.name);
       }
+      return !stop();
     }
-    await walk(rootResolution.absolutePath);
-    return { files, discoveryErrors, excludedEntries };
+    await walk(root, 0);
+    return { files, discoveryErrors, deniedEntries, excludedByPolicy, policyNames: [...policyNames].slice(0, 12),
+      filteredFiles, entriesLimitReached, unvisited: [...new Set(unvisited)].slice(0, 8) };
   }
 
   async function searchFiles(args, requestContext = {}) {
@@ -192,15 +245,20 @@ function createSearchCapability(context, helpers = {}) {
     const cancelled = () => failure("REQUEST_CANCELLED", "search_files was cancelled.", {
       details: { cancelled: true, executionState: "stopped" },
     });
-    const discovered = await collectSearchFiles(resolution, maxFiles, guard);
-    const { discoveryErrors, excludedEntries } = discovered;
-    // include narrows the scope itself; coverage then speaks for the included files only.
-    const files = included ? discovered.files.filter(({ target }) => included(
-      rootStat.isFile() ? path.basename(target) : relativeSlash(resolution.absolutePath, target),
-    )) : discovered.files;
+    // include narrows the scope itself; coverage then speaks for the included
+    // files only. A content search never spends candidates on files it cannot
+    // read; a file-name search keeps every name (assets included).
+    const eligible = (rel, target) => (!included || included(rootStat.isFile() ? path.basename(target) : rel))
+      && (matchFileNames || contentSearchable(target));
+    const discovered = await collectSearchFiles(resolution, maxFiles, guard,
+      { eligible, prunePrefix: rootStat.isFile() ? "" : includePrefix(args.include) });
+    const { discoveryErrors, deniedEntries, excludedByPolicy } = discovered;
+    const excludedEntries = deniedEntries + excludedByPolicy;
+    const files = discovered.files;
     if (guard.reason() === "cancelled") return cancelled();
     const skippedByReason = { size: 0, unsupported_extension: 0, binary: 0, read_error: 0 };
     let filesRead = 0;
+    let filesNameOnly = 0;
     let filesVisited = 0;
     let stopReason = guard.reason();
     const results = [];
@@ -213,9 +271,9 @@ function createSearchCapability(context, helpers = {}) {
       if (matchFileNames && matchesText(path.basename(item.target))) {
         found.push({ path: rel, uri: resultUri(rel), kind: "file_name" });
       }
+      // A file-name candidate the content search cannot read is covered by its name.
+      if (!contentSearchable(item.target)) return matchFileNames ? { found, nameOnly: true } : { found, skipped: "unsupported_extension" };
       if (item.stat.size > 2 * 1024 * 1024) return { found, skipped: "size" };
-      const ext = path.extname(item.target).toLowerCase();
-      if (ext && !TEXT_EXTENSIONS.has(ext)) return { found, skipped: "unsupported_extension" };
       let buffer;
       try {
         buffer = await fsp.readFile(item.target, { signal: requestContext.signal });
@@ -242,6 +300,7 @@ function createSearchCapability(context, helpers = {}) {
         filesVisited++;
         if (scanned.skipped) skippedByReason[scanned.skipped]++;
         if (scanned.read) filesRead++;
+        if (scanned.nameOnly) filesNameOnly++;
         for (const result of scanned.found) {
           if (results.length >= collectLimit) break;
           results.push(result);
@@ -264,8 +323,19 @@ function createSearchCapability(context, helpers = {}) {
     const page = results.slice(offset);
     const limitReached = results.length >= collectLimit;
     const maxFilesReached = discovered.files.length >= maxFiles;
-    const complete = filesRead === files.length && !discoveryErrors && !excludedEntries && !maxFilesReached
-      && !limitReached && !stopReason;
+    const walkStop = discovered.entriesLimitReached ? "max_entries" : "";
+    // Standard generated folders and links are out of scope by policy, named in
+    // excludedByPolicy; counting them as gaps made every root search of a built
+    // project partial, so absenceVerified:false carried no information.
+    const complete = filesRead + filesNameOnly === files.length && !discoveryErrors && !deniedEntries && !maxFilesReached
+      && !walkStop && !limitReached && !stopReason;
+    // Nothing found in a walk that stopped early: name where it did not go.
+    const unvisitedNextStep = !complete && !results.length && discovered.unvisited.length
+      && (maxFilesReached || walkStop || stopReason === "deadline") ? {
+        unvisitedPaths: discovered.unvisited.map(name => resultUri(name)),
+        nextStep: `No match in what was searched, which is not proof of absence: the walk stopped before ${discovered.unvisited.join(", ")}. `
+          + "Search one of unvisitedPaths, or narrow include.",
+      } : {};
     const makePayload = (list, omitted) => {
       const more = omitted || limitReached;
       // A deadline stop rescans differently each time, so it is not resumable.
@@ -278,11 +348,15 @@ function createSearchCapability(context, helpers = {}) {
         query,
         results: list,
         filesScanned: files.length, // Legacy candidate count; filesRead is actual content coverage.
-        ...(included ? { include: args.include, filesFilteredByInclude: discovered.files.length - files.length } : {}),
-        filesRead, filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
+        ...(included ? { include: args.include, filesFilteredByInclude: discovered.filteredFiles } : {}),
+        ...(!included && discovered.filteredFiles ? { filesFilteredByType: discovered.filteredFiles } : {}),
+        filesRead, ...(filesNameOnly ? { filesNameOnly } : {}), filesSkipped: Object.values(skippedByReason).reduce((a, b) => a + b, 0),
         readErrorCount: skippedByReason.read_error, discoveryErrorCount: discoveryErrors, excludedEntries, skippedByReason,
+        ...(excludedByPolicy ? { excludedByPolicy: { entries: excludedByPolicy, names: discovered.policyNames } } : {}),
         coverage: complete && !omitted ? "complete" : "partial",
         maxFilesReached,
+        ...(walkStop ? { walkStopReason: walkStop, maxVisitedEntries: MAX_VISITED_ENTRIES } : {}),
+        ...unvisitedNextStep,
         truncated: more,
         ...(cursor ? { cursorOffset: offset } : {}),
         ...(cursorLimitReached ? { stopReason: "cursor_limit", cursorMatchLimit: MAX_CURSOR_MATCHES,

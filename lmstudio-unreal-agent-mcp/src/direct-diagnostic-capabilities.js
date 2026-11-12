@@ -151,7 +151,8 @@ function createDiagnosticCapabilities(context) {
     }
     const precheck = await runBuildStaticPrecheck({ projectRoot, pending, runValidation: staticValidation,
       validationOptions: { env, signal: requestContext.signal, shutdownTimeoutMs: options.shutdownTimeoutMs,
-        terminate: terminateProcessTree } });
+        terminate: terminateProcessTree },
+      baselineFor: relative => buildChanges.baselineIncludes?.(build.projectPath, relative) || null });
     const forced = precheck.definite.length > 0 && args.force === true;
     return { pending, projectRoot, ...precheck,
       ...(forced ? { staticPrecheck: { ...precheck.staticPrecheck, forced: true } } : {}) };

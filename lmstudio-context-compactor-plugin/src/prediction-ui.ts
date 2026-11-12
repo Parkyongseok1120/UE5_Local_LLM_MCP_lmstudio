@@ -14,6 +14,15 @@ import { toolMemory } from "./context-ports";
 import type { FinalizationTrigger } from "./execution-contracts";
 import { finalizationCause } from "./execution-instructions";
 
+/** Status lines of the prediction loop's stop and retry paths. */
+export const LOOP_STATUS = Object.freeze({
+  continuationBlocked: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다.",
+  reasoningRetryBudget: "생각 단계 재시도에 필요한 입력이 컨텍스트 예산에 맞지 않아 중단했습니다. 추가 도구는 실행하지 않았습니다.",
+  toolArgumentsCut: "도구 인수 JSON이 생성 한도에서 잘려 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘린 요청은 자동 재실행하지 않습니다.",
+  toolArgumentsInvalid: "도구 인수 JSON을 해석할 수 없어 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘못된 요청은 자동 재실행하지 않습니다.",
+  reasoningRetry: "생각 단계에서 생성 한도에 도달했습니다. 이번 생성에는 도구 요청이 없어, 확인된 근거로 다음 작업을 한 번 재시도합니다.",
+});
+
 export function continuationStatusText(trigger: FinalizationTrigger): string {
   if (trigger === "context_working_set_exhausted") return "작업 근거를 유지할 공간이 부족해 확인된 범위로 보고합니다.";
   if (trigger === "mutation_blocked_by_context") return "변경 집중 라운드에서 변경 결과를 얻지 못해 미적용 상태를 보고합니다.";

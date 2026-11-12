@@ -12,6 +12,7 @@ const {
   sanitizeBrokenCompilerLocalization,
 } = require("./process-output-decoder");
 const { killProcessTree } = require("./process-tree-termination");
+const { createBuildOutputDecoder, missingEnglishCompilerNotice } = require("./build-output-decoder");
 
 function normalizeVersion(value) {
   const match = String(value || "").match(/(\d+\.\d+)/);
@@ -218,11 +219,14 @@ async function runUnrealBuildFromPlan(options = {}) {
     projectPath: build.projectPath,
   });
 
+  // Build output only: localized compiler bytes are rebuilt, never cut (see build-output-decoder.js).
+  const outputDecoder = options.decodeOutput ? null : createBuildOutputDecoder({ hostPlatform });
   const processResult = await runBoundedProcess({
     start: () => spawnBuildProcess({ executable, kind, args, workspaceRoot, hostPlatform }),
     timeoutMs,
     logPath,
     hostPlatform,
+    decode: options.decodeOutput || outputDecoder.decode,
     maxOutputBytes: options.maxOutputBytes,
     signal: options.signal,
     shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -240,11 +244,16 @@ async function runUnrealBuildFromPlan(options = {}) {
           ? { errorCode: "BUILD_LOG_WRITE_FAILED", error: processResult.logPersistenceError }
           : null;
   const commandSucceeded = processResult.exitCode === 0 && !processResult.timedOut && !processResult.cancelled;
+  const outputRecovery = outputDecoder?.summary() || null;
+  const environmentNotice = outputRecovery
+    ? missingEnglishCompilerNotice(processResult.stdout, buildProcessEnv()) : null;
   return {
     ok: commandSucceeded && !failure,
     commandSucceeded,
     ...processResult,
     ...(failure || {}),
+    ...(outputRecovery ? { outputRecovery } : {}),
+    ...(environmentNotice ? { environmentNotice } : {}),
     resolvedEngineVersion: resolvedVersion,
     expectedEngineVersion: expectedVersion,
     requestedEngineAssociation: build.requestedEngineAssociation || build.engineAssociation || null,

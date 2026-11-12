@@ -2,7 +2,9 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFile } = require("node:child_process");
 const { discoverAutomationTests } = require("./automation-source-discovery");
+const { includeSet, normalizeInclude } = require("./direct-build-change-ledger");
 
 // Static findings UBT/UHT reject on every engine version: a missing include
 // file, or a broken .generated.h contract. Heuristic or version-dependent
@@ -27,7 +29,39 @@ function compactFinding(finding) {
     line: finding.line,
     message: String(finding.message || "").slice(0, 240),
     definite: isDefiniteStaticError(finding),
+    ...(finding.introduced !== undefined ? { introduced: finding.introduced } : {}),
   };
+}
+
+/** The file's includes at HEAD; null when git cannot say (untracked, no repo, timeout). */
+function gitHeadIncludes(projectRoot, relativePath) {
+  return new Promise((resolve) => {
+    execFile("git", ["-C", projectRoot, "show", `HEAD:${relativePath.replace(/\\/g, "/")}`],
+      { timeout: 5000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, encoding: "buffer" },
+      (error, stdout) => resolve(error ? null : includeSet(stdout)));
+  });
+}
+
+/** A missing include blocks only when this runtime introduced it. A line the
+ * file had before its first change since the last good build already went
+ * through UBT; the static check cannot overrule that (conversation
+ * 1794469194476: two such lines skipped UBT and the model then broke two
+ * correct includes). The exception: the header it named was since removed. */
+async function narrowIncludeErrors(definite, { projectRoot, pending, headIncludes, baselineFor }) {
+  const removed = (pending.paths || []).filter(relative => !existingTargets(projectRoot, [relative]).length)
+    .map(relative => path.posix.basename(relative.replace(/\\/g, "/")).toLowerCase());
+  const kept = [];
+  for (const finding of definite) {
+    const include = finding.code === "INCLUDE_PATH_NOT_FOUND" ? /Include "([^"]+)"/u.exec(String(finding.message || ""))?.[1] : null;
+    if (!include) { kept.push(finding); continue; }
+    let baseline = baselineFor ? baselineFor(finding.path) : null;
+    if (!baseline) baseline = await headIncludes(projectRoot, finding.path);
+    finding.introduced = baseline ? !baseline.has(normalizeInclude(include)) : null;
+    const targetRemoved = removed.includes(path.posix.basename(normalizeInclude(include)).toLowerCase());
+    if (finding.introduced === true || targetRemoved) kept.push(finding);
+    else finding.blocking = false;
+  }
+  return kept;
 }
 
 // Changed Source files that still exist; deleted ones have nothing to scan.
@@ -43,7 +77,8 @@ function existingTargets(projectRoot, paths) {
  * (for the log when the response is trimmed). An unavailable validator never
  * skips a build.
  */
-async function runBuildStaticPrecheck({ projectRoot, pending, runValidation, validationOptions }) {
+async function runBuildStaticPrecheck({ projectRoot, pending, runValidation, validationOptions, headIncludes = gitHeadIncludes,
+  baselineFor = null }) {
   const targets = existingTargets(projectRoot, pending.paths);
   const scope = {
     scopeTargets: targets.slice(0, MAX_PRECHECK_TARGETS),
@@ -57,7 +92,8 @@ async function runBuildStaticPrecheck({ projectRoot, pending, runValidation, val
   const result = await runValidation(projectRoot, { ...validationOptions, scopeTargets: scope.scopeTargets });
   const findings = Array.isArray(result.findings) ? result.findings : [];
   const parsed = !result.reason;
-  const definite = parsed ? findings.filter(isDefiniteStaticError) : [];
+  const definite = parsed ? await narrowIncludeErrors(findings.filter(isDefiniteStaticError),
+    { projectRoot, pending, headIncludes, baselineFor }) : [];
   const ordered = [...definite, ...findings.filter((finding) => !definite.includes(finding))];
   const status = !parsed ? "unavailable" : definite.length ? "definite_errors"
     : findings.some((finding) => finding.severity === "error") ? "advisory_errors" : findings.length ? "advisory" : "clean";

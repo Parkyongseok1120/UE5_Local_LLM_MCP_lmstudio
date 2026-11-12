@@ -77,6 +77,13 @@ export class DeliveryController {
   recordReviewObligations(requested: readonly string[], unresolved: readonly string[]) {
     this.obligations = { requested: [...new Set(requested)].slice(0, 40), unresolved: [...new Set(unresolved)].slice(0, 40) };
   }
+  private objectiveEvidence: ExecutionOutcome["objectiveEvidence"];
+  /** What the turn's tool results show was changed and built; satisfied only
+   * where that settles the objective (a build request), otherwise unknown. */
+  recordObjectiveEvidence(evidence: NonNullable<ExecutionOutcome["objectiveEvidence"]>, satisfied: boolean | null) {
+    this.objectiveEvidence = evidence;
+    if (satisfied !== null) this.observation = { ...this.observation, objectiveSatisfied: satisfied };
+  }
   private includePriorReport(outcome: ExecutionOutcome): ExecutionOutcome {
     if (!this.priorReportPresent) return outcome;
     const merged: ExecutionOutcome = { ...outcome, reportPresent: true,
@@ -134,10 +141,11 @@ export class DeliveryController {
   }
   finish(overrides: Pick<ExecutionObservation, "canceled" | "failure" | "timedOut"> = {}): ExecutionOutcome {
     // Cleanup calls can ask again, but cannot overwrite an accepted outcome.
-    return this.outcome ??= Object.freeze(this.includePriorReport(classifyExecutionOutcome({ ...this.observation,
+    const outcome = this.includePriorReport(classifyExecutionOutcome({ ...this.observation,
       ...(overrides.canceled ? { canceled: true } : {}),
       ...(overrides.timedOut !== undefined ? { timedOut: overrides.timedOut } : {}),
-      ...(overrides.failure !== undefined ? { failure: overrides.failure } : {}) })));
+      ...(overrides.failure !== undefined ? { failure: overrides.failure } : {}) }));
+    return this.outcome ??= Object.freeze(this.objectiveEvidence ? { ...outcome, objectiveEvidence: this.objectiveEvidence } : outcome);
   }
   // Terminal parse failure never repairs or retries an operation. Deliver only
   // returned observations; unfinished model claims are not report evidence.

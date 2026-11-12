@@ -24,6 +24,38 @@ function compactDiagnostic(line, maxChars = 500) {
   return value.replace(/\ufffd+/g, " ").replace(/\s+/g, " ").trim().slice(0, Math.max(80, maxChars));
 }
 
+const MSVC_DIAGNOSTIC = /\(\d+(?:,\d+)?\)\s*:\s*(?:fatal\s+)?(?:error|warning)\s+C\d+/i;
+const NOTE_LINE = /^(.*?)\((\d+)(?:,\d+)?\)\s*:\s*note\s*:\s*(.*)$/i;
+const BOUNDARY = /\b(?:error|warning)\s+(?:C|LNK|MSB)\d+|^\s*\[\d+\/\d+\]|\bResult:|\bTotal execution time\b/i;
+const MAX_NOTES = 2, NOTE_CHARS = 160, SOURCE_CHARS = 120;
+
+/** The notes and the echoed source line MSVC prints right after an error. They
+ * go into the same entry: the plugin keeps diagnostics as strings, so a side
+ * field would be lost when its context is compacted. Lines are taken from the
+ * build output itself, never re-read from a file that may have changed since. */
+function diagnosticContext(lines, index) {
+  const notes = [];
+  let source = "";
+  const errorPath = /^(.*?)\(\d+/.exec(String(lines[index] || "").trim())?.[1] || "";
+  for (let next = index + 1; next < Math.min(lines.length, index + 10); next += 1) {
+    const line = String(lines[next] || "");
+    if (!line.trim()) continue;
+    if (BOUNDARY.test(line)) break;
+    const note = NOTE_LINE.exec(line.trim());
+    if (note) {
+      if (notes.length < MAX_NOTES) {
+        const where = note[1] && note[1] !== errorPath ? `${path.basename(note[1].replace(/\\/g, "/"))}:${note[2]} ` : "";
+        notes.push(`note: ${where}${note[3]}`.replace(/\uFFFD+/g, " ").replace(/\s+/g, " ").trim().slice(0, NOTE_CHARS));
+      }
+      continue;
+    }
+    if (/^\s*\^[~\s^]*$/.test(line)) continue;
+    // The source echo precedes its caret line.
+    if (!source && /^\s*\^/.test(String(lines[next + 1] || ""))) source = line.replace(/\s+/g, " ").trim().slice(0, SOURCE_CHARS);
+  }
+  return [...notes, ...(source ? [`src: ${source}`] : [])];
+}
+
 function collectBuildDiagnostics(stdout, stderr, maxLines = 40) {
   const combined = `${stdout || ""}\n${stderr || ""}`;
   const warningsAreErrors = /UnrealHeaderTool[^\r\n]*-WarningsAsErrors/i.test(combined)
@@ -46,7 +78,8 @@ function collectBuildDiagnostics(stdout, stderr, maxLines = 40) {
       || (captureUndefined && /^\s*".+",\s+referenced from:\s*$/i.test(line))
     );
     if (interesting) {
-      const compact = compactDiagnostic(line);
+      const context = MSVC_DIAGNOSTIC.test(line) ? diagnosticContext(lines, index) : [];
+      const compact = compactDiagnostic(context.length ? [line, ...context].join(" | ") : line);
       if (compact && !diagnostics.includes(compact)) diagnostics.push(compact);
     }
     if (captureUndefined && /^\s*(?:ld:|clang\+\+:|Result:|Total time)/i.test(line)) captureUndefined = false;
@@ -95,6 +128,8 @@ function buildDirectResponse({ result, build, planResult, projectPath, command, 
     firstError: firstError || null,
     outputTail: ok ? [] : outputTail,
     fullLogPath: logPath,
+    ...(result?.outputRecovery ? { outputRecovery: result.outputRecovery } : {}),
+    ...(result?.environmentNotice ? { environmentNotice: result.environmentNotice } : {}),
     proof: {
       level: proof.proofLevel,
       upToDate,

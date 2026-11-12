@@ -143,7 +143,8 @@ function createFileMutationCapabilities(context) {
       });
     }
     const hash = sha256Text(content);
-    context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
+    // A created file had no includes before this commit.
+    context.buildChanges.record(resolution.activeProject, [resolution.relativePath], { [resolution.relativePath]: "" });
     const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
     return withChangeEvidence(success({
       operation: "created",
@@ -306,7 +307,8 @@ function createFileMutationCapabilities(context) {
       });
     }
     const nextHash = sha256Text(locked.result.updated);
-    if (nextHash !== read.hash) context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
+    if (nextHash !== read.hash) context.buildChanges.record(resolution.activeProject, [resolution.relativePath],
+      { [resolution.relativePath]: read.buffer });
     const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
     return withChangeEvidence(success({
       operation: "replaced",
