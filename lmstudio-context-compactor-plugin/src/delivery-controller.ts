@@ -16,10 +16,15 @@ export const TOOL_RETRY_EXHAUSTED_STATUS = "읽기 전용 도구 계획 재시�
 export const RAW_INTENT_PARTIAL_STATUS = "실행되지 않은 도구 호출 텍스트만 남았고 재시도 조건을 충족하지 못해 확인된 근거로 부분 보고를 전달합니다.";
 /** The status line of a final attempt that did not complete, most specific cause first. */
 export function finalDeliveryStatusText(state: { partialDelivered: boolean; reportState: string; deliveryState: string;
-   timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean; reviewing?: boolean; duplicateOnly?: boolean }): string {
+   timedOut: boolean; aborted: boolean; failed: boolean; continuing: boolean; reviewing?: boolean; duplicateOnly?: boolean;
+   reviewWithheld?: "restatement" | "incomplete" }): string {
   // A review round that asked for tools instead of writing its supplement: the report itself stands.
   if (state.reviewing && state.reportState === "unresolved_tool_intent")
     return "검토 보완 단계에서는 도구를 쓸 수 없어 보완문을 만들지 못했습니다. 앞서 전달한 보고서는 그대로입니다.";
+  if (state.reviewing && state.reviewWithheld === "restatement")
+    return "검토 보완이 앞서 전달한 보고서를 다시 작성한 내용이어서 표시하지 않았습니다. 앞서 전달한 보고서는 그대로입니다.";
+  if (state.reviewing && state.reviewWithheld === "incomplete")
+    return "검토 보완이 출력 한도·중지·오류로 끝나지 않아 표시하지 않았습니다. 앞서 전달한 보고서는 그대로입니다.";
   if (state.partialDelivered) return "조사 복구가 완료되지 않아 근거가 있는 부분 보고만 전달했습니다. 전체 완료로 처리하지 않았습니다.";
   if (state.reportState === "unresolved_tool_intent") return "최종 단계에서 실행되지 않은 도구 호출 의도만 남아 보고서 완료로 처리하지 않았습니다.";
   if (state.deliveryState === "truncated") return "최종 보고가 출력 한도에 도달해 잘렸습니다. 완료로 처리하지 않았습니다.";
@@ -63,9 +68,14 @@ export class DeliveryController {
    * a review supplement after a complete report, or the continuation of a cut one. */
   private supplement: { kind: "report_review" | "output_recovery"; reportComplete: boolean } | null = null;
   private outputDisposition: NonNullable<ExecutionOutcome["supplement"]>["outputDisposition"];
+  private obligations: NonNullable<ExecutionOutcome["supplement"]>["obligations"];
   beginSupplement(kind: "report_review" | "output_recovery", reportComplete: boolean) {
     this.outputDisposition = undefined;
     this.supplement = { kind, reportComplete };
+  }
+  /** Whether the review's items were resolved is recorded apart from whether its text was delivered. */
+  recordReviewObligations(requested: readonly string[], unresolved: readonly string[]) {
+    this.obligations = { requested: [...new Set(requested)].slice(0, 40), unresolved: [...new Set(unresolved)].slice(0, 40) };
   }
   private includePriorReport(outcome: ExecutionOutcome): ExecutionOutcome {
     if (!this.priorReportPresent) return outcome;
@@ -82,18 +92,28 @@ export class DeliveryController {
     const empty = !blocked && (outcome.deliveryState === "no_answer" || outcome.reason === "empty_visible_output"
       || this.supplement.kind === "report_review" && outcome.reportState === "unresolved_tool_intent");
     const stopped = ["timed_out", "canceled"].includes(outcome.executionOutcome);
+    // A review held back as a rewrite or as cut short published nothing; the
+    // complete report it followed stays complete.
+    const rejected = !stopped && this.outputDisposition === "restatement_rejected";
+    const withheld = !stopped && this.outputDisposition === "incomplete_withheld";
     const supplement = { kind: this.supplement.kind,
       ...(this.outputDisposition ? { outputDisposition: this.outputDisposition } : {}),
-      state: stopped ? "stopped" : blocked ? "blocked" : empty ? "empty" : "delivered" } as const;
-    if (!this.supplement.reportComplete || stopped || !(empty || blocked)) return { ...merged, reportDelivered: true, supplement };
-    return { ...merged, executionOutcome: "completed", reason: blocked ? outcome.reason : `${this.supplement.kind}_empty`,
+      state: stopped ? "stopped" : blocked ? "blocked" : rejected ? "rejected" : withheld ? "withheld" : empty ? "empty" : "delivered",
+      ...(this.obligations ? { obligations: this.obligations } : {}) } as const;
+    if (!this.supplement.reportComplete || stopped || !(empty || blocked || rejected || withheld))
+      return { ...merged, reportDelivered: true, supplement };
+    return { ...merged, executionOutcome: "completed", reason: blocked ? outcome.reason
+      : rejected ? `${this.supplement.kind}_restatement_rejected` : withheld ? `${this.supplement.kind}_withheld` : `${this.supplement.kind}_empty`,
       reportDelivered: true, reportCompleted: true, deliveryState: "complete", reportState: "report",
       taskCompleted: outcome.objectiveSatisfied === true, supplement };
   }
   observe(captured: { messages: Array<ChatMessage>; finishReason?: string; failure?: unknown; unexecutedToolIntent?: boolean;
-    presentation?: { generatedVisibleChars: number; deliveredChars: number; duplicateSuppressedChars: number } }, timedOut = false) {
-    const shown = captured.presentation;
-    this.outputDisposition = shown ? shown.deliveredChars > 0 ? "delivered"
+    presentation?: { generatedVisibleChars: number; deliveredChars: number; duplicateSuppressedChars: number;
+      reviewAcceptance?: { decision: string } } }, timedOut = false) {
+    const shown = captured.presentation, review = shown?.reviewAcceptance?.decision;
+    this.outputDisposition = review === "rejected" ? "restatement_rejected" : review === "withheld" ? "incomplete_withheld"
+      : review === "salvaged" && shown!.deliveredChars > 0 ? "salvaged"
+      : shown ? shown.deliveredChars > 0 ? "delivered"
       : shown.generatedVisibleChars > 0 && shown.duplicateSuppressedChars >= shown.generatedVisibleChars ? "duplicate_only"
         : shown.generatedVisibleChars > 0 ? "filtered" : "no_generation" : undefined;
     this.observation = { reportText: visibleTextFromMessages(captured.messages).trim(),
@@ -594,6 +614,8 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
   packetQuoteGaps: QuoteMismatch[]; packetEngineGaps: EngineClaimGap[]; engine: string; observeOnly: boolean;
    reviewedReport: boolean; reportReviewBlocked: boolean; reportReviewEmpty: boolean; reportReviewDuplicateOnly?: boolean; reviewMissing: ReviewRow[];
   objectiveKind?: ObjectiveKind;
+  /** Why the review left items open when it was not blocked or empty: its text was held back, or it skipped them. */
+  reportReviewCause?: "restatement" | "incomplete" | "unresolved";
 }) {
   const notices: Array<{event: string; text: string; details?: Record<string, unknown>}> = [];
   const add = (event: string, text: string | null, details?: Record<string, unknown>) => { if (text) notices.push({event,text,details}); };
@@ -614,7 +636,10 @@ export function terminalReportNotices(history: Chat, answer: string, options: {
     // The same gap the review was given; it stays when the supplement did not resolve it.
     if (options.objectiveKind && REPORT_REVIEW_OBJECTIVES.has(options.objectiveKind))
       add("coverage_scope_notice", cleanVerdictScopeGap(answer, source)?.notice ?? null);
-    if (options.reportReviewBlocked || options.reportReviewEmpty)
+    if (options.reportReviewCause && !options.reportReviewBlocked)
+      add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewCause),
+        { cause: options.reportReviewCause, unresolved: options.reviewMissing.map(row => row.identifier) });
+    else if (options.reportReviewBlocked || options.reportReviewEmpty)
       add("report_review_notice", reportReviewNotice(options.reviewMissing, options.reportReviewDuplicateOnly ? "duplicate"
         : options.reportReviewEmpty ? "empty" : "budget"));
   }
