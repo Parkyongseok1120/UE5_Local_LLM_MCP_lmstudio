@@ -7,6 +7,7 @@ import { InternalDataOutputFilter } from "./internal-data-output";
 import { ToolProtocolOutputFilter, stripUnexecutedToolProtocol, hasRawToolIntent, visibleTextFromMessages } from "./raw-tool-intent";
 import { ChatMessage } from "@lmstudio/sdk";
 import { DELIVERED_REPORT_HEADER as FRAME_OPEN, DELIVERED_REPORT_END as FRAME_CLOSE } from "./review-patterns.js";
+import type { ReviewAcceptance } from "./review-acceptance";
 const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 
 type SplitVisibleAnswer = (text: string) => {
@@ -28,7 +29,13 @@ type StreamState = {
   protocolFilter: ToolProtocolOutputFilter;
   echoFilter: DeliveredPrefixEchoFilter;
   visibleText: string;
+  /** Review output held until settleReview() decides what is published. */
+  heldText: string;
+  settled: boolean;
 };
+
+/** Decides what a held report review may publish; see review-acceptance.ts. */
+export type ReviewGate = (text: string, complete: boolean) => ReviewAcceptance;
 
 export type StreamedAssistant = {
   streamed: boolean;
@@ -226,6 +233,7 @@ export class PredictionStreamRenderer {
       suppressedInternalProtocol: observations.some(o => o.suppressedProtocol),
       incompleteInternalProtocol: observations.some(o => o.incompleteProtocol),
       duplicateSuppressedChars: this.suppressedChars,
+      ...(this.reviewGate ? { reviewAcceptance: this.reviewAcceptance } : {}),
     },
       predictionUsage: { ...captured.predictionUsage, rawToolIntentCandidate: captured.predictionUsage.rawToolIntentCandidate || unexecutedToolIntent } };
   }
@@ -237,7 +245,39 @@ export class PredictionStreamRenderer {
     private readonly suppressReasoning = false,
     private readonly internalDataParts: readonly string[] = [],
     private readonly deliveredPrefix?: string,
+    /** Set for a report review: its output is held and published once, as decided. */
+    private readonly reviewGate?: ReviewGate,
   ) {}
+
+  private reviewDecisions: ReviewAcceptance[] = [];
+  private reviewComplete: boolean | null = null;
+  /** The decision on this round's review output; one per generated message, merged. */
+  get reviewAcceptance(): ReviewAcceptance | undefined {
+    const decisions = this.reviewDecisions;
+    if (!decisions.length) return undefined;
+    const rank = ["accepted", "salvaged", "rejected", "withheld"] as const;
+    const worst = decisions.reduce((a, b) => rank.indexOf(b.decision) > rank.indexOf(a.decision) ? b : a);
+    return { ...worst, text: decisions.map(item => item.text).join(""),
+      generatedChars: decisions.reduce((n, item) => n + item.generatedChars, 0) };
+  }
+
+  /** Publish held review output once the round's end is known. Called after
+   * finishAll() and before any message is consumed, so the screen, the saved
+   * transcript and the next model input all get the decided text. */
+  settleReview(complete: boolean): void {
+    if (!this.reviewGate) return;
+    this.reviewComplete = complete;
+    for (const state of this.states.values()) this.settle(state);
+  }
+
+  private settle(state: StreamState): void {
+    if (!this.reviewGate || state.settled || !state.sawFragment) return;
+    state.settled = true;
+    const decision = this.reviewGate(state.heldText, this.reviewComplete === true);
+    this.reviewDecisions.push(decision);
+    state.visibleText = decision.text;
+    if (decision.text) this.answerBlock(state).appendText(decision.text);
+  }
 
   private state(roundIndex: number): StreamState {
     let state = this.states.get(roundIndex);
@@ -248,6 +288,7 @@ export class PredictionStreamRenderer {
         dataFilter: new InternalDataOutputFilter(this.internalDataParts),
         protocolFilter: new ToolProtocolOutputFilter(),
         echoFilter: new DeliveredPrefixEchoFilter(this.deliveredPrefix), visibleText: "",
+        heldText: "", settled: false,
       };
       this.states.set(roundIndex, state);
     }
@@ -271,6 +312,7 @@ export class PredictionStreamRenderer {
   private appendVisible(state: StreamState, text: string, fragment: LLMPredictionFragmentWithRoundIndex): void {
     text = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.push(text)));
     if (!text) return;
+    if (this.reviewGate) { state.heldText += text; return; }
     state.visibleText += text;
     this.answerBlock(state).appendText(text, {
       tokensCount: fragment.tokensCount,
@@ -322,14 +364,17 @@ export class PredictionStreamRenderer {
     const state = this.state(roundIndex);
     if (state.finished) return;
     state.finished = true;
+    const show = (text: string) => {
+      if (!text) return;
+      if (this.reviewGate) { state.heldText += text; return; }
+      state.visibleText += text; this.answerBlock(state).appendText(text);
+    };
     if (!state.footerSeen && state.pendingVisible) {
-      const visible = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.push(state.pendingVisible)));
-      if (visible) { state.visibleText += visible; this.answerBlock(state).appendText(visible); }
+      show(state.echoFilter.push(state.dataFilter.push(state.protocolFilter.push(state.pendingVisible))));
       state.pendingVisible = "";
     }
-    const remaining = state.echoFilter.push(state.dataFilter.push(state.protocolFilter.finish()) + state.dataFilter.finish())
-      + state.echoFilter.finish();
-    if (remaining) { state.visibleText += remaining; this.answerBlock(state).appendText(remaining); }
+    show(state.echoFilter.push(state.dataFilter.push(state.protocolFilter.finish()) + state.dataFilter.finish())
+      + state.echoFilter.finish());
     if (state.thinkingBlock) {
       state.thinkingBlock.setStyle({ type: "thinking", ended: true, title: "생각" });
     }
@@ -346,14 +391,20 @@ export class PredictionStreamRenderer {
       const dataFilter = new InternalDataOutputFilter(this.internalDataParts);
       const raw = stripUnexecutedToolProtocol(this.splitVisibleAnswer(visibleAssistantText(rawText)).visibleText);
       const text = dataFilter.push(raw) + dataFilter.finish();
-      const visibleText = echo.push(text) + echo.finish();
+      let visibleText = echo.push(text) + echo.finish();
       this.fallbackSuppressed += echo.suppressedChars;
+      if (this.reviewGate) {
+        const decision = this.reviewGate(visibleText, this.reviewComplete === true);
+        this.reviewDecisions.push(decision); visibleText = decision.text;
+      }
       return { streamed: false, visibleText,
         ...dataFilter.observation,
         duplicateSuppressed: echo.duplicateSuppressed, suppressedChars: echo.suppressedChars };
     }
     const [roundIndex, state] = entry;
     this.finish(roundIndex);
+    // Consumed before the round's end was known: nothing unjudged is published.
+    this.settle(state);
     state.consumed = true;
     return {
       streamed: true,
