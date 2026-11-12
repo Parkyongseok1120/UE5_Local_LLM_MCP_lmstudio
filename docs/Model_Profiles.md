@@ -6,7 +6,7 @@
 
 ## Muse Glimmer 30B
 
-검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 안정성을 우선한다면 Qwen 3.8 27B보다 Muse Glimmer 30B를 먼저 권장합니다. LM Studio에서 `meta/muse-glimmer`를 불러온 뒤 채팅의 모델 목록에서 선택합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
+검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 작업 안정성과 완료까지 걸리는 시간을 고려해 Qwen 3.8 27B보다 Muse Glimmer 30B를 권장합니다. LM Studio에서 `meta/muse-glimmer`를 불러온 뒤 채팅의 모델 목록에서 선택합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
 
 `muse_glimmer_30b` 프로필은 `Q4_K_M`, 대화 길이 65,536, 동시 요청 1개를 시작점으로 제시합니다. 메모리가 부족하면 32,768부터 시작하세요. 샘플링은 모델 배포본의 `temperature` 1.0, `topP` 0.95, `topK` 64를 따릅니다. [LM Studio 모델 설정](https://lmstudio.ai/models/meta/muse-glimmer)
 
