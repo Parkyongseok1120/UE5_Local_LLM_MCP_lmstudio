@@ -1,5 +1,7 @@
 # UE5_Local_LLM_MCP_lmstudio 1.4.6
 
+> **v1.4.6은 이 프로젝트의 마지막 릴리스입니다. 이 버전을 끝으로 추가 개발·유지보수·업데이트를 종료합니다.**
+
 v1.4.6에서는 Muse Glimmer 30B를 지원하고, 도구 호출이 중단되거나 코드 편집이 거부됐을 때 원인과 다음 단계가 더 잘 드러나도록 개선했습니다. [1.4.6 변경 사항](docs/Release_Notes_1_4_6.md)
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
@@ -44,7 +46,7 @@ Intel Mac에서 VM 생성부터 LM Link, 프로젝트 마운트, MCP/RAG 설치�
 
 ## LM Studio 연결 설정
 
-1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다. 검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 안정성을 우선한다면 Qwen 3.8 27B보다 **Muse Glimmer 30B**를 먼저 권장합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
+1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다. 검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 작업 안정성과 완료까지 걸리는 시간을 고려해 Qwen 3.8 27B보다 **Muse Glimmer 30B**를 권장합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
 2. 설치 후 LM Studio를 재시작하고 `unreal-rag`, `unreal-agent`를 켭니다.
 3. 설치·업데이트 시 기존 채팅의 `codex/unreal-context-compactor`가 `ON`으로 설정됩니다. 필요 없는 채팅에서는 해당 단일 스위치를 끌 수 있습니다.
 4. 정확한 프로젝트를 지정하고 질문하거나 수정할 내용을 요청합니다.

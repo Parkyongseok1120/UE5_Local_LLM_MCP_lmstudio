@@ -257,8 +257,13 @@ export type ExecutionOutcome = Readonly<{
   objectiveSatisfied: boolean | null;
   taskCompleted: boolean;
   /** A follow-up round that extended an already delivered report. */
-  supplement?: { kind: "report_review" | "output_recovery"; state: "delivered" | "empty" | "blocked" | "stopped";
-    outputDisposition?: "delivered" | "duplicate_only" | "filtered" | "no_generation" };
+  supplement?: { kind: "report_review" | "output_recovery";
+    /** rejected: a rewrite of the report was not published; withheld: a cut review was not published. */
+    state: "delivered" | "empty" | "blocked" | "stopped" | "rejected" | "withheld";
+    outputDisposition?: "delivered" | "duplicate_only" | "filtered" | "no_generation"
+      | "salvaged" | "restatement_rejected" | "incomplete_withheld";
+    /** Review obligations apart from delivery: what was asked and what no published text resolved. */
+    obligations?: { requested: string[]; unresolved: string[] } };
 }>;
 
 export type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";

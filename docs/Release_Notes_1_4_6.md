@@ -1,21 +1,23 @@
-# v1.4.6 릴리스 안내
+# v1.4.6 Release
+
+**v1.4.6은 이 프로젝트의 마지막 릴리스입니다. 이 버전을 끝으로 추가 개발·유지보수·업데이트를 종료합니다.**
 
 ## Muse Glimmer 30B 지원
 
-LM Studio에서 `meta/muse-glimmer`를 불러와 언리얼 작업 채팅에 사용할 수 있습니다. 검색·읽기·편집처럼 여러 단계의 도구 호출이 이어지는 작업에서 안정성을 우선한다면 Qwen 3.8 27B보다 **Muse Glimmer 30B**를 먼저 권장합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
+LM Studio에서 `meta/muse-glimmer`를 불러와 언리얼 작업 채팅에 사용할 수 있습니다. 검색·읽기·편집처럼 여러 단계의 도구 호출이 이어지는 작업에서 작업 안정성과 완료까지 걸리는 시간을 고려해 Qwen 3.8 27B보다 **Muse Glimmer 30B**를 권장합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
 
 개발 저장소에서는 모델 ID와 GGUF 파일명으로 Muse Glimmer 전용 설정을 조회할 수 있습니다. 설치 후에는 LM Studio에서 모델을 직접 선택합니다. [모델 설정과 시작값](Model_Profiles.md)
 
 ## 도구 호출과 프로젝트 편집
 
+- 검토 보완이 앞서 전달한 최종 보고서를 다시 작성하면 중복 본문을 표시하지 않습니다. 검토 대상을 처리한 보완만 전달하고, 남은 대상은 미처리 상태로 기록합니다.
+- 추측성 메모만으로 추가 검토를 시작하지 않습니다. 근거가 연결된 단정형 발견은 계속 누락 검사에 포함합니다.
 - 답변 일부를 이미 작성한 뒤 도구 인수가 출력 한도에서 잘리면, 작성한 내용을 보존하고 실행이 끝나지 않았음을 알립니다.
 - 파일 편집이 거부되면 실패 원인과 허용된 변경 줄 수를 더 구체적으로 안내합니다. 정확 일치 편집에서는 대상 범위 밖의 기존 파일 바이트를 보존합니다.
 - 경로를 생략한 검색은 활성 프로젝트에서 수행합니다. 프로젝트 외부를 가리키는 정션 때문에 범위 안의 검색이나 목록 조회가 중단되지 않도록 개선했습니다.
 - 언리얼 설계 후속 질문에 관련 설계 지침을 연결합니다.
 
-## 설치와 버전
-
-Windows에서는 `INSTALL.bat`, Linux와 Apple Silicon macOS에서는 `./install.sh`를 사용합니다. Intel Mac에서 LM Studio를 연결하는 경우 Linux x64 VM의 llmster/LM Link 설치 절차를 따릅니다. [설치 안내](Integrated_Installer.md)
+## 구성별 버전
 
 | 구성 | 버전 |
 |---|---|
@@ -25,3 +27,11 @@ Windows에서는 `INSTALL.bat`, Linux와 Apple Silicon macOS에서는 `./install
 | 대화 압축기 | 0.4.87 / revision 134 |
 | Unity MCP·Editor Bridge | 1.4.0 |
 | 근거 검토 서버 | 1.1.4 |
+
+## 설치·업데이트
+
+- `Evidence-First-Integrated-v1.4.6.zip`과 함께 제공되는 `.sha256` 파일을 내려받아 ZIP 해시를 확인합니다.
+- ZIP을 보관할 폴더에 압축을 풉니다. 설치 후에도 이 폴더에서 도구를 실행합니다.
+- Windows 신규 설치는 `INSTALL.bat`, 같은 폴더에서 기존 연결을 갱신할 때는 `UPDATE.bat`를 실행합니다.
+- Ubuntu와 Apple Silicon macOS는 `./install.sh`를 실행합니다. Intel Mac은 Linux x64 VM에서 llmster/LM Link를 사용하는 `--headless-lmlink` 절차를 따릅니다. [설치 안내](Integrated_Installer.md)
+- 설치·업데이트 후 LM Studio를 완전히 종료했다가 다시 실행합니다.

@@ -4853,9 +4853,17 @@ test('report review includes reasoning-only omissions, uses no tools, and append
   assert.match(reviewInput, /The observed input path is consistent\./);
   assert.match(reviewInput, /\[Delivered report — already shown to the user; write only what follows it\]\n\s*## Audit/);
   assert.ok(!(reviewLast.role === 'assistant' && reviewLast.text.trim() === prefix), `the review input does not end with the answer: ${JSON.stringify(reviewLast)}`);
-  assert.equal(ctl.blocks.filter(block => block.options?.includeInContext !== false).map(block => block.text).join(''), prefix + '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.');
+  // Conversation 1794429926122: a review that skipped an item was recorded as
+  // delivered with no notice. What it left open is now listed after it.
+  assert.equal(ctl.blocks.filter(block => block.options?.includeInContext !== false).map(block => block.text).join(''), prefix
+    + '\n\n## 검토 보완\n- `ReloadSound`: 호출 근거 부족으로 제외.'
+    + '\n\n[보고 검토 · 누락] 전달된 검토 보완이 일부 항목을 다루지 않았습니다. 다음 작업 메모의 최종 처리 상태를 연결하지 못했습니다. 확인된 결함으로 간주할 수 없습니다.\n'
+    + '- RunSpeed (Fixture.cpp:2): `RunSpeed` unused.');
   assert.equal(ctl.debugValues.filter(event => event.event === 'report_review_scheduled').length, 1);
-  assert.equal(ctl.debugValues.find(event => event.event === 'execution_outcome').reportCompleted, true);
+  const outcome = ctl.debugValues.find(event => event.event === 'execution_outcome');
+  assert.equal(outcome.reportCompleted, true);
+  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'delivered', outputDisposition: 'delivered',
+    obligations: { requested: ['ReloadSound', 'RunSpeed'], unresolved: ['RunSpeed'] } });
 });
 
 // Conversation 1792929236226: the review returned one EOS token and the run
@@ -4875,7 +4883,8 @@ test('an empty report review keeps the delivered report, records the supplement 
   assert.equal(outcome.reportDelivered, true);
   assert.equal(outcome.executionOutcome, 'completed');
   assert.equal(outcome.reason, 'report_review_empty');
-  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty', outputDisposition: 'no_generation' });
+  assert.deepEqual(outcome.supplement, { kind: 'report_review', state: 'empty', outputDisposition: 'no_generation',
+    obligations: { requested: ['ResetForRespawn'], unresolved: ['ResetForRespawn'] } });
   const footer = ctl.blocks.map(block => block.text).find(text => text.includes('[보고 검토 · 누락]'));
   assert.match(footer, /검토 보완에서 새로 전달된 본문이 없습니다/);
   assert.match(footer, /- ResetForRespawn \(Fixture\.cpp:3\): `ResetForRespawn\(\)` is never called\./);

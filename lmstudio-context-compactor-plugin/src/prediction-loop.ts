@@ -32,11 +32,12 @@ import { acceptedValidatePackets, packetQuoteMismatches, quoteCheckFact, returne
   type QuoteMismatch } from "./quote-anchoring";
 import { confirmedProgressStatements, engineClaimFact, gradedSections, packetEngineClaimGaps,
   returnedEngineEvidence, textEngineClaimGaps, unresolvedEngineClaimGaps, type EngineClaimGap } from "./engine-claim-anchoring";
-import { ReviewEvidenceIndex, ReviewRegister, type ReviewRow } from "./review-register";
+import { ReviewEvidenceIndex, ReviewRegister } from "./review-register";
 import { unverifiedWriteApis, writeApiFact } from "./write-api-anchoring";
 import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause, finalPhaseInstruction, READ_ONLY_BATCH_INSTRUCTION, READ_ONLY_CONTEXT_RECOVERY_INSTRUCTION, REASONING_RECOVERY_INSTRUCTION, REPETITION_RECOVERY_INSTRUCTION } from "./execution-instructions";
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
+import { ReportReviewState, REPORT_REVIEW_STATUS } from "./report-review-state";
 import { continuationStatusText, createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, rawIntentTelemetry, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile, researchLimitTrigger, researchRoundLimit } from "./recovery-coordinator";
@@ -255,12 +256,7 @@ export function createPredictionLoopHandler(
     const toolStagnation = new ToolRoundStagnationDetector();
     let stagnationWarnings = 0;
     let reportContinuation = "";
-    let reportReviewAttempted = false;
-    let reportReviewBlocked = false;
-    // The review round ran and returned no supplement.
-    let reportReviewEmpty = false;
-    let reportReviewDuplicateOnly = false;
-    let reviewMissing: ReviewRow[] = [];
+    const review = new ReportReviewState();
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
@@ -469,7 +465,7 @@ export function createPredictionLoopHandler(
         ({ activeNote, semanticSummaryCooldownUntilRound } = prepared);
         replaceActiveNote(activeNote);
         if (prepared.kind === "continuation_blocked") {
-          reportReviewBlocked = reviewingReport;
+          review.blocked = reviewingReport;
           deliveryController.stop("continuation_context_budget");
           ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
           break;
@@ -477,7 +473,7 @@ export function createPredictionLoopHandler(
         if (prepared.kind === "pressure") {
           ctl.guardAbort();
           if (continuingReport) {
-            reportReviewBlocked = reviewingReport;
+            review.blocked = reviewingReport;
             deliveryController.stop("continuation_context_budget");
             ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
             break;
@@ -643,8 +639,8 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
         const roundEmitter = continuingReport ? createMessageEmitter(roundController, modelTools) : emitter;
         const internalDataParts = modelComposition?.privateDataParts || [];
         const stream = new PredictionStreamRenderer(roundController, modelNotes.splitVisibleAnswer, noteEnabled, continuingReport,
-          internalDataParts, reviewingReport ? reportContinuation : undefined);
-        const continuationStatus = continuingReport ? ctl.createStatus({ status: "loading", text: "답변 이어 작성 중" }) : null;
+          internalDataParts, reviewingReport ? reportContinuation : undefined, reviewingReport ? review.gate(reportContinuation) : undefined);
+        const continuationStatus = continuingReport ? ctl.createStatus({ status: "loading", text: reviewingReport ? REPORT_REVIEW_STATUS : "답변 이어 작성 중" }) : null;
         const generationRepetition = new GenerationRepetitionDetector(config.generationRepeatCount);
         let generationRepetitionReported = false;
         // Set when this research round's reasoning repeated and was stopped to recover.
@@ -769,6 +765,7 @@ model: String((tokenSource as { identifier?: unknown }).identifier || "unknown")
                 if (id) batchReservation?.receive(id, Buffer.byteLength(typeof result.content === "string"
                   ? result.content : JSON.stringify(result.content)));
               }
+              if (reviewingReport && message.isAssistantMessage()) return; // held: emitted once judged
               let visibleMessage = message;
               let textStreamed = false;
               if (message.isAssistantMessage() && message.getText()) {
@@ -800,10 +797,13 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         // UI termination must not erase the round's unfinished-generation
         // observation used by output classification and recovery eligibility.
         stream.finishAll();
+        if (reviewingReport) stream.settleReview(ReportReviewState.ended(captured, roundSignal.aborted));
         continuationStatus?.remove();
         // Completion/recovery must assess the same prose the user receives.
         // Preserve captured originals for diagnostics and tool evidence.
         const visibleCaptured = stream.normalizeCaptured(captured);
+        const acceptance = reviewingReport ? review.decided(stream.reviewAcceptance, captured.finishReason) : null;
+        if (config.showDebugInfo && acceptance) ctl.debug({ event: "report_review_acceptance", executionId, roundIndex, ...acceptance });
         if (config.showDebugInfo && stream.suppressedChars) ctl.debug({ event: "supplement_duplicate_suppressed",
           executionId, roundIndex, priorReportChars: reportContinuation.length,
           generatedVisibleChars: visibleCaptured.presentation.generatedVisibleChars,
@@ -1194,7 +1194,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         if (!config.observeOnly) {
           reviewEvidence.observe(captured.messages);
-          reviewRegister.observe(captured.messages, roundIndex + 1, internalDataParts);
+          reviewRegister.observe(reviewingReport ? visibleCaptured.messages : captured.messages, roundIndex + 1, internalDataParts);
           reviewRegister.attach(reviewEvidence);
           const reviewFact = reviewRegister.fact();
           if (reviewFact) runtimeFacts.set("review_register", reviewFact);
@@ -1300,24 +1300,24 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
         }
         // A delivered report, research-ended or forced, gets the same review of
         // open candidates; a forced one spends the delivery owner's one review attempt.
-        const reviewable = !config.observeOnly && config.reportReviewMode === "on" && !reportReviewAttempted, objectiveKind = objective.kind;
+        const reviewable = !config.observeOnly && config.reportReviewMode === "on" && !review.attempted, objectiveKind = objective.kind;
         const scheduleReportReview = () => {
           const answer = visibleTranscript.lastAnswerText;
-          const review=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objectiveKind,reviewRegister);
-          reviewMissing=review.missing;
-          if (!review.needed) return false;
+          const obligations=reportReviewObligations(visibleTranscript.snapshot(),answer,evidenceManager.returnedSources(),scope.engine,objectiveKind,reviewRegister);
+          ({missing:review.missing,subjects:review.subjects}=obligations);
+          if (!obligations.needed) return false;
           // A bounded audit keeps its single final attempt: the omissions go to the terminal notice instead.
-          if (finalizing && (boundedAudit || !deliveryController.grantCorrection("report_review"))) { reportReviewBlocked = true; return false; }
-          reportReviewAttempted = true;
-          runtimeFacts.set("report_review",review.reviewFact);
-          runtimeFacts.set("delivered_report",review.deliveredFact);
+          if (finalizing && (boundedAudit || !deliveryController.grantCorrection("report_review"))) { review.blocked = true; return false; }
+          review.attempted = true;
+          runtimeFacts.set("report_review",obligations.reviewFact);
+          runtimeFacts.set("delivered_report",obligations.deliveredFact);
           reportContinuation = answer;
           deliveryController.retainReportPrefix(answer);
           deliveryController.beginSupplement("report_review", true);
           workingHistory = historyBeforeRound;
           execution.enterReportReview();
           if (config.showDebugInfo) ctl.debug({ event: "report_review_scheduled", executionId, modelInputId, afterFinalReport: finalizing,
-            ...review.telemetry });
+            ...obligations.telemetry });
           roundIndex++;
           return true;
         };
@@ -1408,15 +1408,15 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             roundIndex += 1;
             continue;
           }
-          if (reviewingReport && (rawIntentFinal || !visibleTextFromMessages(visibleCaptured.messages).trim())) reportReviewEmpty = true;
-          if (reviewingReport && reportReviewEmpty && !rawIntentFinal && !phaseTimedOut && !ctl.abortSignal.aborted && captured.failure === undefined)
-            reportReviewDuplicateOnly = visibleCaptured.presentation.generatedVisibleChars > 0
-              && visibleCaptured.presentation.duplicateSuppressedChars >= visibleCaptured.presentation.generatedVisibleChars;
+          if (reviewingReport) review.observeFinal(rawIntentFinal, visibleTextFromMessages(visibleCaptured.messages), visibleCaptured.presentation,
+            phaseTimedOut || ctl.abortSignal.aborted || captured.failure !== undefined);
           if (deliveryState === "complete" && !continuingReport && reviewable && scheduleReportReview()) continue;
-          if (deliveryState !== "complete") ctl.createStatus({ status: deliveryState === "no_answer" ? "error" : "canceled",
+          const reviewWithheld = reviewingReport && !rawIntentFinal ? review.withheld : undefined;
+          if (deliveryState !== "complete" || reviewWithheld) ctl.createStatus({
+            status: reviewWithheld === "restatement" ? "done" : deliveryState === "no_answer" && !reviewWithheld ? "error" : "canceled",
             text: finalDeliveryStatusText({ partialDelivered: Boolean(safePartialReport), reportState: finalDelivery.reportState,
               deliveryState, timedOut: phaseTimedOut, aborted: ctl.abortSignal.aborted, failed: captured.failure !== undefined,
-              continuing: continuingReport, reviewing: reviewingReport, duplicateOnly: reportReviewDuplicateOnly }) });
+              continuing: continuingReport, reviewing: reviewingReport, duplicateOnly: review.duplicateOnly, reviewWithheld }) });
           break;
         }
         if (captured.failure !== undefined && !phaseTimedOut) throw captured.failure;
@@ -1625,8 +1625,8 @@ event: decision.trigger === "research_recovery_exhausted"
       }
       const notices = terminalReportNotices(visibleTranscript.snapshot(), visibleTranscript.lastAnswerText, {
         packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
-        reviewedReport: reportReviewAttempted && !reportReviewBlocked && !reportReviewEmpty,
-        reportReviewBlocked, reportReviewEmpty, reportReviewDuplicateOnly, reviewMissing, objectiveKind: objective.kind });
+        objectiveKind: objective.kind, ...review.terminal(reviewRegister, visibleTranscript.lastAnswerText,
+          (requested, unresolved) => deliveryController.recordReviewObligations(requested, unresolved)) });
       for (const notice of notices) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(notice.text);
         if (config.showDebugInfo) ctl.debug({ event: notice.event, executionId, ...notice.details });

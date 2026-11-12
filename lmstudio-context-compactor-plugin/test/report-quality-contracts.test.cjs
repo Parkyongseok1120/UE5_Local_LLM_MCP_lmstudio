@@ -176,10 +176,16 @@ test(`report delivery distinguishes ${mode} from generation and keeps prior outp
   const outcome=ctl.debugValues.find(e=>e.event==='execution_outcome');
   assert.equal(outcome.reportDelivered,true);
   assert.notEqual(outcome.taskCompleted,true,'delivery never certifies the audit objective');
-  assert.equal(outcome.supplement.outputDisposition,mode==='empty'?'no_generation':repeat?'duplicate_only':'delivered');
+  // A near-verbatim copy with one change is shown as the changed section only.
+  assert.equal(outcome.supplement.outputDisposition,mode==='empty'?'no_generation':repeat?'duplicate_only':'salvaged');
   const shown=ctl.blocks.filter(b=>b.options?.includeInContext!==false).map(b=>b.text).join('');
   assert.ok(shown.includes('문제 없음'),'the prior report remains available');
-  if(mode==='correction') assert.ok(shown.includes('문제 있음'),'the user receives the polarity correction');
+  if(mode==='correction') {
+    assert.ok(shown.includes('문제 있음'),'the user receives the polarity correction');
+    assert.equal(shown.split('Checked relation 0').length-1,1,'the unchanged report is not shown a second time');
+    assert.match(shown,/## Conclusion\n- Source: A\.cpp @abcdef, P3, 0 defects\. 이 규모에서 문제 있음\./,'with the section it corrects');
+    assert.match(shown,/앞선 보고서에서 바뀌거나 빠진 줄: - Source: A\.cpp @abcdef, P3, 0 defects\. 이 규모에서 문제 없음\./,'and the original claim');
+  }
   if(repeat) {
     const event=ctl.debugValues.find(e=>e.event==='supplement_duplicate_suppressed');
     assert.equal(event.generatedVisibleChars,reply.length);

@@ -14,7 +14,9 @@ const { REASONING_SEPARATOR, visibleAssistantText } = require("./continuity-text
 
 export type ReviewRow = { identifier: string; status: "found" | "cleared" | "needs_recheck"; source: "reasoning" | "visible";
   round: number; evidence: string; bundle?: EvidenceBundle; sourcePath?: string; sourceLocation?: string; references?: string[];
-  contextOwner?: string; relatedDisposition?: { identifier: string; evidence: string } };
+  contextOwner?: string; relatedDisposition?: { identifier: string; evidence: string };
+  /** The claim was a guess ("never used? Possibly."): kept as a candidate, never a report obligation. */
+  speculative?: true };
 
 /** Excerpt chars the rendered register carries in all. */
 const MAX_EXCERPT_CHARS = 6000;
@@ -92,12 +94,41 @@ function subjectAt(names: { spans: Named[]; bare: Named[] }, at: number): string
   return names.spans[0]?.name || names.bare[0]?.name || null;
 }
 
+// Conversation 1794429926122: "Also they have both HitStunTimer and
+// HitShakeTimer but HitShakeTimer never used? Possibly." was filed as a found
+// row and started a 150 s report review. A guess is judged by the claim it
+// qualifies, not by its source or by any "?" or "may" on the line: an observed
+// fact with a conditional impact ("never cleared, so it may fire after
+// destroy") stays a finding. Code spans and quotes are masked first.
+const HEDGE_BEFORE = /\b(?:possibly|maybe|perhaps|probably|likely|presumably|apparently|seemingly|seems?|appears?|looks?\s+like|I\s+(?:think|guess|suspect|believe)|not\s+sure|unsure|unclear|whether|if|(?:might|may|could)\s+(?:also\s+)?(?:be|have\s+been))\b/iu;
+const HEDGE_AFTER = /\b(?:possibly|probably|maybe|perhaps|I\s+think|I\s+guess|apparently)\b/iu;
+// Hangul has no \b; "수 있다" (can happen) is an impact, not a guess.
+const HEDGE_KO = /아마|추정|것\s*같|듯(?:하|함|합|싶|해)|일\s*(?:지도|수도)|인지\s*(?:확인|불확실|모르|모름)|불확실|확인\s*필요|의심/u;
+const STANDALONE_HEDGE = /^\s*\(?\s*(?:possibly|maybe|perhaps|probably|not\s+sure|unsure|unclear|unverified|needs?\s+(?:to\s+)?(?:verify|check|confirm)|to\s+(?:verify|check|confirm)|아마(?:도)?|추정|불확실|확인\s*필요)\s*[.!?…)]*\s*$/iu;
+const CLAUSE_BREAK = /[,;:—–(]|\s-\s/gu;
+
+function speculativeAt(line: string, at: number): boolean {
+  const masked = line.replace(CODE_SPAN, match => " ".repeat(match.length))
+    .replace(/"[^"\n]*"|“[^”\n]*”/gu, match => " ".repeat(match.length));
+  const ends = [...masked.matchAll(/[.!?。](?=\s|$)/gu)].map(match => match.index!);
+  const start = (ends.filter(end => end < at).at(-1) ?? -1) + 1;
+  const end = ends.find(end => end >= at) ?? masked.length;
+  if (masked[end] === "?") return true;
+  const breaks = [...masked.slice(start, end).matchAll(CLAUSE_BREAK)].map(match => start + match.index!);
+  const clauseStart = (breaks.filter(position => position < at).at(-1) ?? start - 1) + 1;
+  const clauseEnd = breaks.find(position => position > at) ?? end;
+  const before = masked.slice(clauseStart, at), after = masked.slice(at, clauseEnd);
+  if (HEDGE_BEFORE.test(before) || HEDGE_AFTER.test(after) || HEDGE_KO.test(before + after)) return true;
+  const next = ends.find(position => position > end) ?? masked.length;
+  return end < masked.length && STANDALONE_HEDGE.test(masked.slice(end + 1, next + 1));
+}
+
 /** Each judgment of a line as [subject, status]: one per finding keyword, its
  * sentence deciding the status. A line that only rejects clears its leading
  * subject ("**Issue 9: `TakeDamage` — ... not a bug"). A later sentence about
  * the same subject replaces an earlier one ("bug: ... Later verification: not a bug"). */
-function judgments(line: string): Array<[string, ReviewRow["status"], string]> {
-  const out = new Map<string, [ReviewRow["status"], string]>(), lineNames = namesIn(line);
+function judgments(line: string): Array<[string, ReviewRow["status"], string, boolean]> {
+  const out = new Map<string, [ReviewRow["status"], string, boolean]>(), lineNames = namesIn(line);
   let offset = 0;
   for (const sentence of line.split(SENTENCE_BREAK)) {
     const start = line.indexOf(sentence, offset); offset = start + sentence.length;
@@ -105,16 +136,17 @@ function judgments(line: string): Array<[string, ReviewRow["status"], string]> {
     const isRejected = rejected(sentence);
     if (!FINDING.test(sentence)) {
       const subject = isRejected ? names.spans[0]?.name || names.bare[0]?.name || lineNames.spans[0]?.name : null;
-      if (subject) { out.delete(subject); out.set(subject, ["cleared", sentence]); }
+      if (subject) { out.delete(subject); out.set(subject, ["cleared", sentence, false]); }
       continue;
     }
     for (const match of sentence.matchAll(FINDING_ALL)) {
       const subject = isRejected ? subjectAt(names, match.index!) || subjectAt(lineNames, start + match.index!)
         : subjectAt(lineNames, start + match.index!);
-      if (subject) { out.delete(subject); out.set(subject, [isRejected ? "cleared" : "found", isRejected ? sentence : line]); }
+      if (subject) { out.delete(subject); out.set(subject, [isRejected ? "cleared" : "found", isRejected ? sentence : line,
+        !isRejected && speculativeAt(line, start + match.index!)]); }
     }
   }
-  return [...out].map(([identifier, [status, text]]) => [identifier, status, text]);
+  return [...out].map(([identifier, [status, text, speculative]]) => [identifier, status, text, speculative]);
 }
 
 /** Execution-owned working notes. Neither a proof ledger nor an authority source. */
@@ -130,10 +162,10 @@ export class ReviewRegister {
         : [["reasoning", raw.slice(0, raw.indexOf(REASONING_SEPARATOR))], ["visible", visible]];
       for (const [source, text] of parts) for (const line of stripInternalDataEcho(text, privateParts).split(/\r?\n/u)) {
         if (/^\s*(?:Runtime |\[Prior assistant|\[Delivered report|[-*] \[(?:found|cleared)\]|↳ )/u.test(line)) continue;
-        for (const [identifier, status, text] of judgments(line)) {
+        for (const [identifier, status, text, speculative] of judgments(line)) {
           const names = namesIn(text);
           const citation = CITED_PATH.exec(text);
-          this.record({ identifier, status, source, round, evidence: text.trim().slice(0, 240),
+          this.record({ identifier, status, source, round, evidence: text.trim().slice(0, 240), ...(speculative ? { speculative } : {}),
             sourcePath: citation?.[1], sourceLocation: citation?.[0],
             contextOwner: /\b[Ii]n\s+`?([A-Z][A-Za-z0-9_]*)`?\b/u.exec(text)?.[1],
             references: [...new Set([...names.spans, ...names.bare].map(item => item.name).concat(
@@ -149,6 +181,9 @@ export class ReviewRegister {
   }
 
   private record(row: ReviewRow, fullEvidence: string) {
+    // A later guess about a claim already stated outright does not weaken it.
+    const prior = this.entries.get(this.claimKey(row)) || this.retired.get(this.claimKey(row));
+    if (row.speculative && prior && prior.status !== "cleared" && !prior.speculative) return;
     if (row.status === "cleared") {
       // An explicit member retraction can name a call in an earlier claim
       // filed under its caller. Co-occurrence is not proof that their claims
@@ -222,7 +257,7 @@ export class ReviewRegister {
       if (!size || excerptChars + size > MAX_EXCERPT_CHARS) return false;
       excerptChars += size; return true;
     }));
-    return this.rows.flatMap(row => [`- [${row.status}] ${row.identifier} (${row.source}, round ${row.round}): ${reviewRowText(row)}`,
+    return this.rows.flatMap(row => [`- [${row.status}] ${row.identifier} (${row.source}, round ${row.round}${row.speculative ? ", speculative" : ""}): ${reviewRowText(row)}`,
       ...(row.bundle ? [bundleLine(row.bundle, withExcerpt.has(row))] : [])]);
   }
 
@@ -243,11 +278,12 @@ export class ReviewRegister {
     return [...this.retired.values(), ...this.rows].filter(row => row.status !== "cleared");
   }
   /** Found rows the answer does not name, including ones the bounded register
-   * already pushed out of the model input. */
+   * already pushed out of the model input. A guess is a candidate, not an
+   * omission: it never starts a review on its own. */
   missing(answer: string): ReviewRow[] {
     const rows = [...this.retired.values(), ...this.rows];
     return rows.filter(row => {
-      if (row.status === "cleared") return false;
+      if (row.status === "cleared" || row.speculative) return false;
       if (row.status === "needs_recheck") return !answer.split(/\r?\n/u).some(line => mentionsSubject(line, row, rows)
         && /미확인|미검증|재검토|needs_recheck|unverified|not verified|recheck|withdraw/iu.test(line));
       return Boolean(row.bundle?.path) && !answer.split(/\r?\n/u).some(line => mentionsSubject(line, row, rows));
@@ -272,9 +308,14 @@ export function reportReviewFact(missing: readonly ReviewRow[], contracts: reado
     ...contracts.map(gap => `- Engine contract ${gap.factId}: ${gap.statement}`)].join("\n");
 }
 
-export function reportReviewNotice(missing: readonly ReviewRow[], cause: "budget" | "empty" | "duplicate" = "budget"): string | null {
+export function reportReviewNotice(missing: readonly ReviewRow[],
+  cause: "budget" | "empty" | "duplicate" | "restatement" | "incomplete" | "unresolved" = "budget"): string | null {
   const why = cause === "duplicate" ? "중복된 출력을 제외한 뒤 새로 전달된 검토 보완 내용이 없습니다."
-    : cause === "empty" ? "검토 보완에서 새로 전달된 본문이 없습니다." : "입력 예산 때문에 검토 보완을 생성하지 못했습니다.";
+    : cause === "empty" ? "검토 보완에서 새로 전달된 본문이 없습니다."
+    : cause === "restatement" ? "검토 보완이 앞선 보고서를 다시 작성한 내용이어서 표시하지 않았습니다."
+    : cause === "incomplete" ? "검토 보완이 끝나지 않아(출력 한도·중지·오류) 표시하지 않았습니다."
+    : cause === "unresolved" ? "전달된 검토 보완이 일부 항목을 다루지 않았습니다."
+    : "입력 예산 때문에 검토 보완을 생성하지 못했습니다.";
   const where = (row: ReviewRow) => row.bundle?.lines ? ` (${row.bundle.path.split("/").pop()}:${row.bundle.lines[0]})` : "";
   return missing.length ? `\n\n[보고 검토 · 누락] ${why} 다음 작업 메모의 최종 처리 상태를 연결하지 못했습니다. 확인된 결함으로 간주할 수 없습니다.\n`
     + missing.map(row => `- ${row.identifier}${where(row)}: ${reviewRowText(row)}`).join("\n") : null;
@@ -304,7 +345,7 @@ export function reviewCandidateLines(rows: readonly ReviewRow[], maxRows = 12, m
   for (const row of [...rows].reverse()) {
     const where = row.bundle?.path ? ` (${row.bundle.path.split("/").pop()}${row.bundle.lines ? `:${row.bundle.lines[0]}` : ""}`
       + `${row.bundle.sha ? ` @${row.bundle.sha.slice(0, 8)}` : ""})` : "";
-    const line = `- ${row.identifier}${where} [${row.status === "found" ? "미검증 발견" : "재확인 필요"}]: ${reviewRowText(row, 160)}`;
+    const line = `- ${row.identifier}${where} [${row.speculative ? "추측" : row.status === "found" ? "미검증 발견" : "재확인 필요"}]: ${reviewRowText(row, 160)}`;
     if (shown.length >= maxRows || chars + line.length > maxChars) break;
     shown.push(line); chars += line.length;
   }

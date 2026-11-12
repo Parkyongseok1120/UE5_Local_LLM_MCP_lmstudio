@@ -18,7 +18,9 @@ export function reportReviewObligations(history:Chat,answer:string,source:Return
   // A delivered report is data rather than the final assistant message. Keeping
   // that message last makes EOS look like an answer that needs no continuation.
   // Report supplements instead begin after the last tool results.
-  return {missing,needed:Boolean(answer.trim() && (scopeGaps.length || reviewed && (missing.length || gaps.length))),
+  // What the review was asked to address: its acceptance check keeps any section naming one.
+  const subjects=[...missing.map(row=>row.identifier),...gaps.map(g=>g.factId),...scopeGaps.flatMap(g=>g.target?[g.target]:[])];
+  return {missing,subjects,needed:Boolean(answer.trim() && (scopeGaps.length || reviewed && (missing.length || gaps.length))),
     reviewFact:reportReviewFact(missing,gaps)+"\n"+reportScopeReviewFact(scopeGaps),deliveredFact:deliveredReportFact(answer),
     telemetry:{missing:missing.map(row=>row.identifier),contracts:gaps.map(g=>g.factId),scopeGaps:scopeGaps.map(g=>g.kind),toolCount:0}};
 }
