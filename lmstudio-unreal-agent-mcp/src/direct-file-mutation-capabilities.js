@@ -19,6 +19,7 @@ const { readStableTextFile } = require("./direct-file-snapshot");
 const { describeExceeded, regionLimitsExceeded, textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
+const { escapedQuoteIssue, escapedQuoteMessage } = require("./source-escape-guard");
 const { failure, success } = require("./direct-response");
 const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
 const { locateOldText, regionSuggestion } = require("./edit-region-locator");
@@ -102,6 +103,9 @@ function createFileMutationCapabilities(context) {
       allowExistingWrite: false,
     });
     if (!guard.ok) return failure("WRITE_TARGET_BLOCKED", guard.message);
+    const escaped = escapedQuoteIssue(resolution.absolutePath, content);
+    if (escaped) return failure("ESCAPED_QUOTE_IN_CODE", escapedQuoteMessage(escaped, "content"),
+      { retryAllowed: true, retryMode: "different_arguments", details: escaped });
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,
       content,
@@ -227,8 +231,18 @@ function createFileMutationCapabilities(context) {
     if (!version.ok) {
       const current = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
       const located = current.ok ? aimed(current.content) : {};
-      return versionEvidenceFailure(version, { ...located,
-        details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}) } });
+      // Conversation 1794506466121: the same call without a receipt was sent
+      // four times in a row. When its target is already proven in the current
+      // file (oldText found as counted, or the range hash matching), the
+      // currentSha256 this answer always carried is all it lacks.
+      const proven = current.ok && ["FILE_SNAPSHOT_REQUIRED", "FILE_SNAPSHOT_INVALID"].includes(version.errorCode)
+        && !version.malformedExpectedHash
+        && calculatePatch(current.buffer, args, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars }).ok
+        && !regions.some(region => escapedQuoteIssue(resolution.absolutePath, region.newText, current.content));
+      return versionEvidenceFailure(proven ? { ...version, message: `${version.message} This call's target matches the current file, `
+        + "so the same call with expectedHash set to currentSha256 (resendWith) applies it." } : version, { ...located,
+        details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}),
+          ...(proven ? { resendWith: { expectedHash: current.hash } } : {}) } });
     }
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
@@ -255,9 +269,17 @@ function createFileMutationCapabilities(context) {
         prospective.error,
         { retryAllowed: true, retryMode: "different_arguments", ...located,
           details: { ...located.details, currentSha256: read.hash, ...(edits ? { editIndex: prospective.editIndex } : {}),
-            // Whitespace-only candidate lines, with their exact text and range hash.
-            ...(prospective.whitespaceCandidate ? { whitespaceCandidate: prospective.whitespaceCandidate } : {}) } },
+            // Whitespace-only or JSON-escaped candidate lines, with their exact text and range hash.
+            ...(prospective.whitespaceCandidate ? { whitespaceCandidate: prospective.whitespaceCandidate } : {}),
+            ...(prospective.escapedCandidate ? { escapedCandidate: prospective.escapedCandidate } : {}) } },
       );
+    }
+    const escapedRegion = regions.findIndex(region => escapedQuoteIssue(resolution.absolutePath, region.newText, read.content));
+    if (escapedRegion >= 0) {
+      const issue = escapedQuoteIssue(resolution.absolutePath, regions[escapedRegion].newText, read.content);
+      return failure("ESCAPED_QUOTE_IN_CODE", escapedQuoteMessage(issue, edits ? `edits[${escapedRegion}].newText` : "newText"),
+        { retryAllowed: true, retryMode: "different_arguments",
+          details: { ...issue, ...(edits ? { editIndex: escapedRegion } : {}), currentSha256: read.hash } });
     }
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,

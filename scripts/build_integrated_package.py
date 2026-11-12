@@ -581,6 +581,7 @@ REQUIRED_RUNTIME_FILES = (
     "lmstudio-unreal-agent-mcp/src/bounded-process-runner.js",
     "lmstudio-unreal-agent-mcp/src/process-output-decoder.js",
     "lmstudio-unreal-agent-mcp/src/build-output-decoder.js",
+    "lmstudio-unreal-agent-mcp/src/source-escape-guard.js",
     "lmstudio-unreal-agent-mcp/src/process-tree-termination.js",
     "lmstudio-unreal-agent-mcp/src/build-proof.js",
     "lmstudio-unreal-agent-mcp/src/filesystem-path-identity.js",

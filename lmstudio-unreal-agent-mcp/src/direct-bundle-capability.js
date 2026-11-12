@@ -8,6 +8,7 @@ const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
 const { readStableTextFile } = require("./direct-file-snapshot");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
+const { escapedQuoteIssue, escapedQuoteMessage } = require("./source-escape-guard");
 const { failure, success } = require("./direct-response");
 const {
   registerCurrentVersion,
@@ -98,8 +99,17 @@ function createBundleCapability(context) {
         // A stale line range answers with what is there now, as replace_in_file does.
         if (next.currentRange) error.details = { path: patch.path, currentSha256: read.hash, currentRange: next.currentRange,
           ...(next.expectedRangeSource ? { expectedRangeSource: next.expectedRangeSource } : {}) };
-        else if (next.whitespaceCandidate) error.details = { path: patch.path, currentSha256: read.hash,
-          ...(next.editIndex !== undefined ? { editIndex: next.editIndex } : {}), whitespaceCandidate: next.whitespaceCandidate };
+        else if (next.whitespaceCandidate || next.escapedCandidate) error.details = { path: patch.path, currentSha256: read.hash,
+          ...(next.editIndex !== undefined ? { editIndex: next.editIndex } : {}),
+          ...(next.whitespaceCandidate ? { whitespaceCandidate: next.whitespaceCandidate } : { escapedCandidate: next.escapedCandidate }) };
+        throw error;
+      }
+      // JSON escapes copied into C-family source (see source-escape-guard.js).
+      for (const [index, region] of (patch.edits || [patch]).entries()) {
+        const issue = escapedQuoteIssue(resolution.absolutePath, region.newText, read.content);
+        if (!issue) continue;
+        const error = validationError("ESCAPED_QUOTE_IN_CODE", `${patch.path}: ${escapedQuoteMessage(issue, patch.edits ? `edits[${index}].newText` : "newText")}`);
+        error.details = { path: patch.path, ...issue, ...(patch.edits ? { editIndex: index } : {}) };
         throw error;
       }
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });

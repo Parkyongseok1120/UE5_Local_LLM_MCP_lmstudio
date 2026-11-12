@@ -145,7 +145,41 @@ function whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars = 
   };
 }
 
+// Conversation 1794506466121: oldText carried Category=\"PF|LaunchReaction\"
+// (the escapes of a JSON read result, copied as text) for a line with plain
+// quotes, and three calls failed with a bare "not found". One level of
+// backslash escaping removed (\" -> ", \\ -> \) finds what was meant.
+// Diagnosis only, like the whitespace candidate: never edited.
+function escapedTextCandidate(contentNorm, oldTextNorm, candidateTextChars = HARD_MUTATION_LIMITS.maxRangeTextChars) {
+  const unescaped = oldTextNorm.replace(/\\([\\"])/g, "$1");
+  if (unescaped === oldTextNorm || unescaped.trim().length < 8) return null;
+  const first = contentNorm.indexOf(unescaped);
+  if (first < 0) return null;
+  if (contentNorm.indexOf(unescaped, first + 1) >= 0) return { kind: "json_escaped", candidates: "multiple" };
+  const fileLines = contentNorm.split("\n");
+  const startLine = contentNorm.slice(0, first).split("\n").length;
+  const endLine = Math.min(fileLines.length, startLine + unescaped.replace(/\n$/, "").split("\n").length - 1);
+  const text = fileLines.slice(startLine - 1, endLine).join("\n");
+  return {
+    kind: "json_escaped", candidates: "one", startLine, endLine,
+    currentRange: { startLine, endLine, rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length,
+      text: text.slice(0, candidateTextChars), ...(text.length > candidateTextChars ? { textTruncated: true } : {}) },
+  };
+}
+
+function nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars) {
+  if (!oldTextNorm) return null;
+  return whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars)
+    || escapedTextCandidate(contentNorm, oldTextNorm, candidateTextChars);
+}
+
 function notFoundError(candidate, label = "oldText") {
+  if (candidate?.kind === "json_escaped") {
+    const unescape = "with one level of backslash escaping removed (\\\" -> \", \\\\ -> \\)";
+    return candidate.candidates === "multiple"
+      ? `${label} not found in target file; ${unescape} it matches several places. Send the text exactly as the file has it, with more surrounding lines.`
+      : `${label} matches lines ${candidate.startLine}-${candidate.endLine} only ${unescape}: a read result is JSON, and its escapes are not file text. Send the text exactly as the file has it (currentRange.text), or replace lines ${candidate.startLine}-${candidate.endLine} with currentRange.rangeSha256. ${KEEP_VERSION_PROOF}`;
+  }
   if (candidate?.candidates === "multiple") {
     return `${label} not found in target file; it matches several places only when whitespace is ignored. Copy tabs, spaces and empty lines exactly.`;
   }
@@ -185,14 +219,13 @@ function calculateReplacement({
   // Existing contract: zero matches are OLD_TEXT_NOT_FOUND when no count was
   // given and an occurrence mismatch ("found 0") when one was.
   if (occurrences === 0) {
-    const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
-    const diagnosis = whitespaceCandidate ? notFoundError(whitespaceCandidate) : "";
+    const candidate = nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars);
+    const diagnosis = candidate ? notFoundError(candidate) : "";
+    const field = candidate ? { [candidate.kind === "json_escaped" ? "escapedCandidate" : "whitespaceCandidate"]: candidate } : {};
     return expectedOccurrences === undefined
-      ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(whitespaceCandidate),
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) }
+      ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(candidate), ...field }
       : { ok: false, errorCode: "OCCURRENCE_MISMATCH",
-        error: `occurrence mismatch: expected ${expectedOccurrences}, found 0${diagnosis ? `; ${diagnosis}` : ""}`,
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
+        error: `occurrence mismatch: expected ${expectedOccurrences}, found 0${diagnosis ? `; ${diagnosis}` : ""}`, ...field };
   }
   const expected = expectedOccurrences !== undefined ? expectedOccurrences : defaultOccurrences;
   if (expected !== undefined && occurrences !== expected) {
@@ -230,11 +263,11 @@ function calculateReplacements({ priorContent, edits, candidateTextChars, normal
       return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE, editIndex };
     }
     if (occurrences === 0) {
-      const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
+      const candidate = nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars);
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
-        error: whitespaceCandidate ? notFoundError(whitespaceCandidate, `edits[${editIndex}].oldText`)
+        error: candidate ? notFoundError(candidate, `edits[${editIndex}].oldText`)
           : `edits[${editIndex}] occurrence mismatch: expected 1, found 0`,
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
+        ...(candidate ? { [candidate.kind === "json_escaped" ? "escapedCandidate" : "whitespaceCandidate"]: candidate } : {}) };
     }
     if (occurrences !== 1) {
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
