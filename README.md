@@ -2,7 +2,8 @@
 > **v1.4.7이 해당 프로젝트의 마지막 릴리스입니다. 이후 유지보수 및 추가 업데이트 지원을 종료합니다. **
 <img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/cd25e0fe-d6fd-4ea8-be24-d1606bb644aa" />
 
-v1.4.7에서는 장기 작업에서 확인된 문제를 고쳤습니다. 긴 답변 뒤에 "계속해줘"로 이어받지 못하던 문제, C++ 코드에 `\t` 같은 문자가 그대로 들어가던 문제, 한글 Windows에서 빌드 오류 메시지가 깨지던 문제가 포함됩니다. [1.4.7 변경 사항](docs/Release_Notes_1_4_7.md)
+
+v1.4.7 변경사항 :  [1.4.7 변경 사항](docs/Release_Notes_1_4_7.md)
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
 
