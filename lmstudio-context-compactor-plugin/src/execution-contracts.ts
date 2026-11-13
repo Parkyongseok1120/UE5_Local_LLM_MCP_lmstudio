@@ -11,7 +11,8 @@ export type ObjectiveKind = "review" | "mutate" | "build" | "explain";
 export const RUNTIME_DATA_SHARE = 0.10;
 export type RuntimeFactKey = "budget" | "stagnation" | "repeated_failure" | "prior_turn" | "quote_check"
   | "engine_claim_check" | "write_api_check" | "report_now" | "review_register" | "report_review" | "delivered_report"
-  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger" | "round_limit" | "project_rules";
+  | "repetition_check" | "mutation_focus" | "tool_retry" | "partial_projection" | "read_ledger" | "round_limit" | "project_rules"
+  | "execution_return";
 /** Events that end an until_cleared fact. A key with no event lives for the
  * execution (the runtime fact store is created per execution). */
 export type RuntimeFactEvent = "read_budget_resolved" | "research_progress" | "final_delivery";
@@ -19,6 +20,8 @@ type RuntimeFactRule = { priority: 0 | 1 | 2; maxChars: number; lifetime: "until
 export const RUNTIME_FACTS: Readonly<Record<RuntimeFactKey, RuntimeFactRule>> = {
   project_rules: { priority: 0, maxChars: 400, lifetime: "until_cleared" },
   mutation_focus: { priority: 0, maxChars: 800, lifetime: "until_cleared" },
+  // Approved changes answered with text only: one return to the tools.
+  execution_return: { priority: 0, maxChars: 500, lifetime: "until_cleared", clearOn: ["final_delivery"] },
   report_now: { priority: 0, maxChars: 1500, lifetime: "until_cleared" },
   // A round whose reads returned without a limit, denial or cut.
   budget: { priority: 0, maxChars: 2000, lifetime: "until_cleared", clearOn: ["read_budget_resolved"] },
@@ -48,6 +51,10 @@ export interface TaskObjective {
   readonly kind: ObjectiveKind;
   readonly requiredEffects: ReadonlySet<"read" | "mutation" | "long_running">;
   mutationState: MutationState;
+  readonly buildAloneSufficient?: boolean;
+  readonly requestedBuild?: { project?: string; target?: string; configuration?: string; platform?: string };
+  /** Items of the assistant proposal a short user approval accepted. */
+  readonly approvedItems?: readonly string[];
 }
 
 export interface RoundVerdict {
@@ -264,6 +271,9 @@ export type ExecutionOutcome = Readonly<{
       | "salvaged" | "restatement_rejected" | "incomplete_withheld";
     /** Review obligations apart from delivery: what was asked and what no published text resolved. */
     obligations?: { requested: string[]; unresolved: string[] } };
+  /** A change or build turn: what its tool results show (see objective-evidence.ts). */
+  objectiveEvidence?: { level: "none" | "applied" | "built"; edits: number; functionalEdits: number;
+    commentOnlyPaths: string[]; buildAfterLastEdit: "succeeded" | "failed" | "none" };
 }>;
 
 export type OutputLimitStage = "reasoning" | "tool_arguments" | "visible_report" | "forced_final" | "unknown";

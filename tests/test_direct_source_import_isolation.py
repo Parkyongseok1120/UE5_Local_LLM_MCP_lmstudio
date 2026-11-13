@@ -294,6 +294,7 @@ def test_direct_composition_owners_stay_bounded() -> None:
         "unreal_static_lifecycle.py": 680,
         "unreal_static_build.py": 430,
         "unreal_static_include.py": 430,
+        "unreal_static_include_paths.py": 180,
         "unreal_static_network.py": 320,
         "unreal_static_crossfile.py": 480,
         "unreal_static_safety.py": 410,

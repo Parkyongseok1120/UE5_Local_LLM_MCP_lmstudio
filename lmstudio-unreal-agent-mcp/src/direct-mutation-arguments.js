@@ -79,6 +79,12 @@ function rangeArgumentError(args) {
   if (typeof args.expectedRangeSha256 !== "string" || !/^[A-Fa-f0-9]{64}$/u.test(args.expectedRangeSha256)) {
     return "expectedRangeSha256 must be the 64-hex rangeSha256 returned by read_file_range or read_symbol.";
   }
+  // Conversation 1794590083146 sent this call four times without newText and
+  // was answered "newText must be a string." each time.
+  if (args.newText === undefined) {
+    return "newText is required for a line-range replacement: send the lines that replace "
+      + `${args.startLine}-${args.endLine} as newText (an empty string deletes them).`;
+  }
   return requiredStringError(args, "newText", { allowEmpty: true });
 }
 

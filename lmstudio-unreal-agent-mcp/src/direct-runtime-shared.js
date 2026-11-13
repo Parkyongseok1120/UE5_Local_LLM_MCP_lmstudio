@@ -46,6 +46,13 @@ function errorFromException(error) {
   if (error?.code === "REQUEST_CANCELLED") return failure("REQUEST_CANCELLED", message, {
     details: error.details || { cancelled: true }, retryAllowed: false, retryMode: "none",
   });
+  // Conversation 1794469194476: git_read_file on a file the model had just
+  // created came back as INTERNAL_ERROR with no retry; the file exists, only
+  // not as a committed blob.
+  if (error?.code === "not_file") return failure("GIT_PATH_NOT_COMMITTED_FILE", message, {
+    retryAllowed: true, retryMode: "different_arguments",
+    details: { nextStep: "Git tools read committed blobs. Read a new or uncommitted file with read_file (project:// path)." },
+  });
   // Path-policy errors carry their own stable code and observed details.
   if (typeof error?.directErrorCode === "string" && error.directErrorCode) {
     return failure(error.directErrorCode, message, {

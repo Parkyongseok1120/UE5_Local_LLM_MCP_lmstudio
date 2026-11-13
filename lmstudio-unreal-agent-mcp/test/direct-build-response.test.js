@@ -69,3 +69,20 @@ test("diagnostic coverage is additive and shares the legacy parser and entry lim
   assert.equal(payload.diagnosticCoverage.completeBuildLog, false);
   assert.equal(payload.diagnosticCoverage.returnedEntries, 40);
 });
+
+test("large static precheck and notes keep diagnostics and a readable run locator through MCP", () => {
+  const { boundLongRunningPayload } = require("../src/direct-build-response");
+  const { toMcpResult } = require("../src/direct-response");
+  const stdout = Array.from({length:80}, (_,i) => "Source/A.cpp("+(i+1)+"): error C2065: "+"한글".repeat(400)).join("\n");
+  const raw = buildDirectResponse(input({ok:false, stdout, exitCode:6, processExited:true,
+    ubtLog:{fileName:"ubt-run.log",readableFileName:"ubt-run-readable.log",readableComplete:true}}));
+  raw.staticPrecheck = {status:"advisory",scopeTargets:["x".repeat(9000)],findings:[{message:"z".repeat(6000)}]};
+  const result = toMcpResult(boundLongRunningPayload(raw));
+  const value = JSON.parse(result.content[0].text);
+  assert.ok(result.content[0].text.length <= 3584);
+  assert.ok(value.diagnostics.length > 1);
+  assert.equal(value.diagnosticCoverage.truncated, true);
+  assert.equal(value.diagnosticCoverage.returnedEntries, value.diagnostics.length);
+  assert.equal(value.exitCode, 6);
+  assert.equal(value.suggestion.args.fileName, "ubt-run-readable.log");
+});

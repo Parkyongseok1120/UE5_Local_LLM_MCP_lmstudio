@@ -328,8 +328,8 @@ export function assistantNoteTelemetry(note: ContinuityNote | null, enabled: boo
 /** The model-facing observation of a repeated identical failure. Advisory only. */
 export function repeatedFailureFact(failure: { toolName: string; errorCode: string; count: number }) {
   return `Runtime evidence observation: ${failure.toolName} failed with `
-    + `${failure.errorCode} ${failure.count} times for identical arguments. Repeating it yields no new information; `
-    + "change the path, scope or budget the error names, or report the item as unverified.";
+    + `${failure.errorCode} ${failure.count} times for identical arguments. Sent again unchanged it fails the same way; `
+    + "change what its error message names (a missing or wrong argument, or the path, scope or budget), or report the item as unverified.";
 }
 
 /** The model-facing observation of a read cycle with no new coverage. */

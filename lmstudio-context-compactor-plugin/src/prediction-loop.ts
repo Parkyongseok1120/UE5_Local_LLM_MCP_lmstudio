@@ -38,7 +38,9 @@ import { MUTATION_NOT_APPLIED_INSTRUCTION, finalizationCause, finalPhaseInstruct
 import { ExecutionState, RoundTransaction } from "./execution-state";
 import { GenerationRepetitionDetector, PredictionStreamRenderer } from "./prediction-stream";
 import { ReportReviewState, REPORT_REVIEW_STATUS } from "./report-review-state";
-import { continuationStatusText, createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
+import { ExecutionReturn } from "./execution-return";
+import { settleObjectiveEvidence } from "./objective-evidence";
+import { continuationStatusText, LOOP_STATUS, createMessageEmitter, createRoundActivityTracker, createToolGenerationTracker, selectedSourceIsThisPlugin, VisibleHistoryRecorder } from "./prediction-ui";
 import { classifyRawToolIntent, containsUnresolvedToolIntent, hasRawToolIntent, hasUnexecutedRawToolSyntax, rawIntentTelemetry, visibleAssistantOutput, visibleTextFromMessages } from "./raw-tool-intent";
 import { freshToolPlanningRetryDecision, recoveryFallbackInstruction, planReadRecovery, readOnlyRecoveryProfile, researchLimitTrigger, researchRoundLimit } from "./recovery-coordinator";
 import { runOneToolRound } from "./round-loop";
@@ -257,6 +259,7 @@ export function createPredictionLoopHandler(
     let stagnationWarnings = 0;
     let reportContinuation = "";
     const review = new ReportReviewState();
+    const executionReturn = new ExecutionReturn(ctl, config.showDebugInfo, () => capabilityRegistry.mutationProfile().length > 0);
     // Runtime observations for the model are execution-scoped input data, not
     // assistant history: they are rendered after the stable prompt prefix and
     // are never sealed into the durable window.
@@ -467,7 +470,7 @@ export function createPredictionLoopHandler(
         if (prepared.kind === "continuation_blocked") {
           review.blocked = reviewingReport;
           deliveryController.stop("continuation_context_budget");
-          ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
+          ctl.createStatus({ status: "canceled", text: LOOP_STATUS.continuationBlocked });
           break;
         }
         if (prepared.kind === "pressure") {
@@ -475,7 +478,7 @@ export function createPredictionLoopHandler(
           if (continuingReport) {
             review.blocked = reviewingReport;
             deliveryController.stop("continuation_context_budget");
-            ctl.createStatus({ status: "canceled", text: "앞서 작성한 답변을 보존했습니다. 이어쓰기에 필요한 입력 공간이 부족해 자동 생성을 중단했습니다." });
+            ctl.createStatus({ status: "canceled", text: LOOP_STATUS.continuationBlocked });
             break;
           }
           const candidate = prepared.recoveryCandidate;
@@ -490,7 +493,7 @@ export function createPredictionLoopHandler(
           }
           workingHistory = prepared.history;
           if (action === "stop") {
-            ctl.createStatus({ status: "canceled", text: "생각 단계 재시도에 필요한 입력이 컨텍스트 예산에 맞지 않아 중단했습니다. 추가 도구는 실행하지 않았습니다." });
+            ctl.createStatus({ status: "canceled", text: LOOP_STATUS.reasoningRetryBudget });
             if (config.showDebugInfo) ctl.debug({ event: "reasoning_recovery_blocked", executionId, modelInputId, reason: "context_budget" });
             deliverPartial("reasoning_recovery_context_budget");
             break;
@@ -1260,7 +1263,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             stagnationWarnings += 1;
             ctl.createStatus({
               status: "done",
-              text: "동일 근거의 반복 읽기를 감지했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.",
+              // Conversation 1794590083146 was told "반복 읽기" for four identical failing edits.
+              text: failure
+                ? `같은 인수의 ${failure.toolName} 호출이 같은 오류(${failure.errorCode})로 반복 실패했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.`
+                : "동일 근거의 반복 읽기를 감지했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.",
             });
             if (config.showDebugInfo) ctl.debug({
               event: "tool_round_stagnation",
@@ -1291,8 +1297,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             reason: "tool_request_generation_failed", failedRequestExecuted: false,
             answerShownChars, failedToolName: failedToolName || null });
           ctl.createStatus({ status: "canceled", text: captured.finishReason === "maxPredictedTokensReached"
-            ? "도구 인수 JSON이 생성 한도에서 잘려 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘린 요청은 자동 재실행하지 않습니다."
-            : "도구 인수 JSON을 해석할 수 없어 해당 요청을 실행하지 않았습니다. 완료된 다른 도구 결과는 보존했으며 잘못된 요청은 자동 재실행하지 않습니다." });
+            ? LOOP_STATUS.toolArgumentsCut : LOOP_STATUS.toolArgumentsInvalid });
           if (config.showDebugInfo) ctl.debug({ event: "tool_request_generation_failed", executionId, modelInputId,
             finishReason: captured.finishReason || "unknown", stage: "tool_arguments", failedRequestExecuted: false,
             returnedPeerResults: actualResultCount, rawContentChars: captured.toolRequestFailure.rawContentChars });
@@ -1478,7 +1483,7 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
           // Admission proved this round had no tool activity. Earlier returned
           // evidence remains; incomplete reasoning stays in the GUI only.
           workingHistory = historyBeforeRound;
-          ctl.createStatus({ status: "done", text: "생각 단계에서 생성 한도에 도달했습니다. 이번 생성에는 도구 요청이 없어, 확인된 근거로 다음 작업을 한 번 재시도합니다." });
+          ctl.createStatus({ status: "done", text: LOOP_STATUS.reasoningRetry });
           if (config.showDebugInfo) ctl.debug({ event: "reasoning_recovery_scheduled", executionId,
             sourceModelInputId: modelInputId,
             recoveryModelInputId: `${executionId}:reasoning-recovery-${execution.reasoningRecoveryAttempts}`,
@@ -1585,7 +1590,10 @@ event: decision.trigger === "research_recovery_exhausted"
             text: RAW_INTENT_PARTIAL_STATUS });
           deliverPartial(toolPlanningRetryRound ? "raw_tool_intent_retry_failed" : "raw_tool_intent_not_retried");
         }
-        if (!captured.continueAfterTools) break;
+        if (!captured.continueAfterTools) {
+          if (executionReturn.due(objective, captured, visibleTranscript.lastAnswerText, runtimeFacts, ctl.abortSignal.aborted)) { roundIndex += 1; continue; }
+          break;
+        }
         if (!execution.finalizing && !execution.reasoningRecovery && !execution.recovering) {
           const decision = recoveryCoordinator.decide({ verdict: recoveryProgress.verdict, objective, pressure: prepared.pressure,
             limits: { reached: researchLimitTrigger(execution.researchPredictions, researchRoundLimit(config, boundedAudit),
@@ -1627,6 +1635,8 @@ event: decision.trigger === "research_recovery_exhausted"
         packetQuoteGaps, packetEngineGaps, engine: scope.engine, observeOnly: config.observeOnly, returnedSources:evidenceManager.returnedSources(),
         objectiveKind: objective.kind, ...review.terminal(reviewRegister, visibleTranscript.lastAnswerText,
           (requested, unresolved) => deliveryController.recordReviewObligations(requested, unresolved)) });
+      const evidenceNotice = settleObjectiveEvidence(visibleTranscript.snapshot(), objective, visibleTranscript.lastAnswerText, deliveryController);
+      if (evidenceNotice) notices.push({ event: "objective_evidence_notice", text: evidenceNotice });
       for (const notice of notices) {
         visibleTranscript.controller.createContentBlock({ roleOverride: "assistant" }).appendText(notice.text);
         if (config.showDebugInfo) ctl.debug({ event: notice.event, executionId, ...notice.details });

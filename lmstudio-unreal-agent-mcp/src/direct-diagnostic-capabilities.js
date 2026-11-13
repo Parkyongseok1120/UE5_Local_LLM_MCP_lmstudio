@@ -1,12 +1,14 @@
 "use strict";
 
 const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
 const path = require("node:path");
 const cp = require("node:child_process");
 
 const { resolveBuildPlan, resolveProjectSelection } = require("./unreal-detect.js");
 const { runStaticValidation } = require("./direct-static-validation.js");
 const { runUnrealBuildFromPlan, killProcessTree } = require("./build-executor.js");
+const { absolutePathIsWithin } = require("./filesystem-path-identity");
 const { runAutomationTests } = require("./automation-executor.js");
 const { automationTestSuggestion, runBuildStaticPrecheck } = require("./direct-build-precheck.js");
 const {
@@ -44,12 +46,19 @@ function createDiagnosticCapabilities(context) {
   const terminateProcessTree = options.killProcessTree || killProcessTree;
   const staticValidation = options.runStaticValidation || runStaticValidation;
   const runBuild = options.runUnrealBuildFromPlan || runUnrealBuildFromPlan;
-  const logFile = (suffix) => path.join(workspaceRoot, ".agent", "logs", `${nowStamp()}-${suffix}.log`);
+  // A project outside WORKSPACE_ROOT keeps its run logs in its own Saved/Logs,
+  // which read_unreal_logs already reads. Conversation 1794590083146: the
+  // build logs of one game were written into another game's repository.
+  const logFile = (suffix, projectRoot = "") => {
+    const own = projectRoot && !absolutePathIsWithin(path.resolve(projectRoot), workspaceRoot)
+      && path.resolve(projectRoot) !== path.resolve(workspaceRoot);
+    return path.join(...(own ? [path.resolve(projectRoot), "Saved", "Logs"] : [workspaceRoot, ".agent", "logs"]), `${nowStamp()}-${suffix}.log`);
+  };
 
   // Static validation has no process log; complete findings go to a log so
   // trimmed entries stay readable through read_unreal_logs.
   async function persistFindings(payload, projectRoot, findings) {
-    const logPath = logFile(`${path.basename(projectRoot)}-static-validation`);
+    const logPath = logFile(`${path.basename(projectRoot)}-static-validation`, projectRoot);
     try {
       await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
       await fs.promises.writeFile(logPath, findings.map((item) => JSON.stringify(item)).join("\n"), "utf8");
@@ -151,7 +160,8 @@ function createDiagnosticCapabilities(context) {
     }
     const precheck = await runBuildStaticPrecheck({ projectRoot, pending, runValidation: staticValidation,
       validationOptions: { env, signal: requestContext.signal, shutdownTimeoutMs: options.shutdownTimeoutMs,
-        terminate: terminateProcessTree } });
+        terminate: terminateProcessTree },
+      baselineFor: relative => buildChanges.baselineIncludes?.(build.projectPath, relative) || null });
     const forced = precheck.definite.length > 0 && args.force === true;
     return { pending, projectRoot, ...precheck,
       ...(forced ? { staticPrecheck: { ...precheck.staticPrecheck, forced: true } } : {}) };
@@ -170,7 +180,13 @@ function createDiagnosticCapabilities(context) {
       executionMode: runtimeOwner,
       retry: { allowed: true, mode: "after_state_change" },
     });
-    return payload.responseTrimmed?.findings ? persistFindings(payload, precheck.projectRoot, precheck.findings) : payload;
+    if (!payload.responseTrimmed?.findings) return payload;
+    const saved = await persistFindings(payload, precheck.projectRoot, precheck.findings);
+    const { scopeTargets, ...compact } = saved.staticPrecheck;
+    saved.staticPrecheck = { ...compact, scopeTargetCount: scopeTargets?.length || 0 };
+    saved.findings = shown.slice(0, 1).map(finding => ({ ...finding, path: String(finding.path || "").slice(-240) }));
+    saved.responseTrimmed.findings.returned = saved.findings.length;
+    return saved;
   }
 
   async function buildProject(args, requestContext = {}) {
@@ -185,7 +201,7 @@ function createDiagnosticCapabilities(context) {
     }
     const precheck = await precheckBuild(args, plan.build, requestContext);
     if (precheck.definite.length && args.force !== true) return skippedBuild(precheck, plan.build);
-    const logPath = logFile(`${plan.build.projectName}-build`);
+    const logPath = logFile(`${plan.build.projectName}-${randomUUID()}-build`, path.dirname(plan.build.projectPath));
     const result = await runBuild({
       workspaceRoot,
       build: plan.build,
@@ -223,7 +239,7 @@ function createDiagnosticCapabilities(context) {
     if (!envFlag(env, "ALLOW_UNREAL_BUILD", false)) return failure("AUTOMATION_DISABLED", "Unreal automation execution is disabled. Start the MCP with ALLOW_UNREAL_BUILD=1.");
     const plan = await resolvePlan(args);
     if (!plan.ok) return failure(plan.errorCode || "AUTOMATION_PLAN_FAILED", plan.error || "Could not resolve project/engine", { retryAllowed: true });
-    const logPath = logFile(`${plan.build.projectName}-automation`);
+    const logPath = logFile(`${plan.build.projectName}-automation`, path.dirname(plan.build.projectPath));
     const result = await runAutomationTests({
       engineRoot: plan.build.engineRoot,
       projectPath: plan.build.projectPath,

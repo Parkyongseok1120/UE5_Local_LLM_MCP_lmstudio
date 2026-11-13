@@ -145,7 +145,44 @@ function whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars = 
   };
 }
 
+// Conversation 1794506466121: oldText carried Category=\"PF|LaunchReaction\"
+// (the escapes of a JSON read result, copied as text) for a line with plain
+// quotes, and three calls failed with a bare "not found". One level of
+// backslash escaping removed (\" -> ", \\ -> \) finds what was meant.
+// Diagnosis only, like the whitespace candidate: never edited.
+// Conversation 1794590083146 sent the tab escape the same way (backslash and
+// "t" as two characters), so \t, \n and \r are read as that whitespace too.
+const JSON_ESCAPE_TEXT = { t: "\t", n: "\n", r: "" };
+function escapedTextCandidate(contentNorm, oldTextNorm, candidateTextChars = HARD_MUTATION_LIMITS.maxRangeTextChars) {
+  const unescaped = oldTextNorm.replace(/\\([\\"tnr])/g, (_, char) => JSON_ESCAPE_TEXT[char] ?? char);
+  if (unescaped === oldTextNorm || unescaped.trim().length < 8) return null;
+  const first = contentNorm.indexOf(unescaped);
+  if (first < 0) return null;
+  if (contentNorm.indexOf(unescaped, first + 1) >= 0) return { kind: "json_escaped", candidates: "multiple" };
+  const fileLines = contentNorm.split("\n");
+  const startLine = contentNorm.slice(0, first).split("\n").length;
+  const endLine = Math.min(fileLines.length, startLine + unescaped.replace(/\n$/, "").split("\n").length - 1);
+  const text = fileLines.slice(startLine - 1, endLine).join("\n");
+  return {
+    kind: "json_escaped", candidates: "one", startLine, endLine,
+    currentRange: { startLine, endLine, rangeSha256: lineRangeSha256(fileLines, startLine, endLine), totalLines: fileLines.length,
+      text: text.slice(0, candidateTextChars), ...(text.length > candidateTextChars ? { textTruncated: true } : {}) },
+  };
+}
+
+function nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars) {
+  if (!oldTextNorm) return null;
+  return whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars)
+    || escapedTextCandidate(contentNorm, oldTextNorm, candidateTextChars);
+}
+
 function notFoundError(candidate, label = "oldText") {
+  if (candidate?.kind === "json_escaped") {
+    const unescape = "with one level of backslash escaping removed (\\\" -> \", \\\\ -> \\, backslash-t -> a tab)";
+    return candidate.candidates === "multiple"
+      ? `${label} not found in target file; ${unescape} it matches several places. Send the text exactly as the file has it, with more surrounding lines.`
+      : `${label} matches lines ${candidate.startLine}-${candidate.endLine} only ${unescape}: a read result is JSON, and its escapes are not file text. Send the text exactly as the file has it (currentRange.text), or replace lines ${candidate.startLine}-${candidate.endLine} with currentRange.rangeSha256. ${KEEP_VERSION_PROOF}`;
+  }
   if (candidate?.candidates === "multiple") {
     return `${label} not found in target file; it matches several places only when whitespace is ignored. Copy tabs, spaces and empty lines exactly.`;
   }
@@ -185,14 +222,13 @@ function calculateReplacement({
   // Existing contract: zero matches are OLD_TEXT_NOT_FOUND when no count was
   // given and an occurrence mismatch ("found 0") when one was.
   if (occurrences === 0) {
-    const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
-    const diagnosis = whitespaceCandidate ? notFoundError(whitespaceCandidate) : "";
+    const candidate = nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars);
+    const diagnosis = candidate ? notFoundError(candidate) : "";
+    const field = candidate ? { [candidate.kind === "json_escaped" ? "escapedCandidate" : "whitespaceCandidate"]: candidate } : {};
     return expectedOccurrences === undefined
-      ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(whitespaceCandidate),
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) }
+      ? { ok: false, errorCode: "OLD_TEXT_NOT_FOUND", error: notFoundError(candidate), ...field }
       : { ok: false, errorCode: "OCCURRENCE_MISMATCH",
-        error: `occurrence mismatch: expected ${expectedOccurrences}, found 0${diagnosis ? `; ${diagnosis}` : ""}`,
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
+        error: `occurrence mismatch: expected ${expectedOccurrences}, found 0${diagnosis ? `; ${diagnosis}` : ""}`, ...field };
   }
   const expected = expectedOccurrences !== undefined ? expectedOccurrences : defaultOccurrences;
   if (expected !== undefined && occurrences !== expected) {
@@ -230,11 +266,11 @@ function calculateReplacements({ priorContent, edits, candidateTextChars, normal
       return { ok: false, errorCode: LINE_NUMBER_PATCH_ERROR, error: LINE_NUMBER_PATCH_MESSAGE, editIndex };
     }
     if (occurrences === 0) {
-      const whitespaceCandidate = oldTextNorm ? whitespaceOnlyCandidate(contentNorm, oldTextNorm, candidateTextChars) : null;
+      const candidate = nearMissCandidate(contentNorm, oldTextNorm, candidateTextChars);
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
-        error: whitespaceCandidate ? notFoundError(whitespaceCandidate, `edits[${editIndex}].oldText`)
+        error: candidate ? notFoundError(candidate, `edits[${editIndex}].oldText`)
           : `edits[${editIndex}] occurrence mismatch: expected 1, found 0`,
-        ...(whitespaceCandidate ? { whitespaceCandidate } : {}) };
+        ...(candidate ? { [candidate.kind === "json_escaped" ? "escapedCandidate" : "whitespaceCandidate"]: candidate } : {}) };
     }
     if (occurrences !== 1) {
       return { ok: false, errorCode: "OCCURRENCE_MISMATCH", editIndex,
@@ -261,6 +297,29 @@ function calculateReplacements({ priorContent, edits, candidateTextChars, normal
   }
   const updated = spliceNormalizedSpans(content, ordered, { normalized: normalizeLineEndings, eol: hasCRLF ? "\r\n" : "\n" });
   return { ok: true, updated, occurrences: edits.length, regions, priorContent: content, preHash: sha256Buffer(raw) };
+}
+
+// Conversation 1794590083146: a numbered read shows "<n>\t<text>", and the tab
+// after the number was kept as part of every line. oldText written that way
+// fails to match and is diagnosed above, but a range edit has no text to
+// compare, and three of them wrote their lines one tab deeper. Judged from the
+// replaced lines only: every new line starts one tab deeper than the
+// shallowest replaced line. "refuse" when the new text also repeats replaced
+// lines with that tab and none without it; otherwise a note on the change.
+const leadingWhitespace = (line) => /^[ \t]*/.exec(line)[0];
+function separatorTabShift(lines, startLine, endLine, replacement) {
+  const replaced = lines.slice(startLine - 1, endLine).filter(line => line.trim());
+  const fresh = replacement.split("\n").filter(line => line.trim());
+  if (!replaced.length || !fresh.length) return null;
+  const depth = replaced.map(leadingWhitespace).reduce((least, lead) => (lead.length < least.length ? lead : least));
+  if (!fresh.every(line => line.startsWith(`\t${depth}`)) || !fresh.some(line => leadingWhitespace(line) === `\t${depth}`)) return null;
+  // A block opened just above at the old depth makes deeper lines its body.
+  let above = startLine - 2;
+  while (above >= 0 && !lines[above].trim()) above -= 1;
+  if (above >= 0 && leadingWhitespace(lines[above]) === depth && /[{(:\\]$/.test(lines[above].trimEnd())) return null;
+  const had = new Set(replaced.map(line => line.trimEnd()));
+  const shifted = fresh.findIndex(line => had.has(line.trimEnd().slice(1)));
+  return { refuse: shifted >= 0 && !fresh.some(line => had.has(line.trimEnd())), newTextLine: shifted + 1 };
 }
 
 // Lines startLine..endLine replaced as a whole when they still hash to
@@ -321,6 +380,13 @@ function calculateLineRangeReplacement({
   }
   const eol = breaks.includes("\r\n") ? "\r\n" : "\n";
   const replacement = String(newText).replace(/\r\n/g, "\n");
+  const shift = separatorTabShift(lines, startLine, endLine, replacement);
+  if (shift?.refuse) {
+    return { ok: false, errorCode: "SEPARATOR_TAB_IN_NEW_TEXT", currentRange,
+      error: `newText repeats lines ${startLine}-${endLine} with one extra leading tab on every line (newText line ${shift.newTextLine} is a replaced line plus that tab). `
+        + "In a numbered read the first tab after the line number separates the number from the text and is not part of the line. "
+        + `Remove that tab from every line of newText; currentRange.text holds the lines as the file has them. ${KEEP_VERSION_PROOF}` };
+  }
   const head = parts.slice(0, (startLine - 1) * 2).join("");
   const tail = parts.slice(endLine * 2 - 1).join("");
   let updated;
@@ -329,7 +395,9 @@ function calculateLineRangeReplacement({
   else updated = tail ? head + tail.slice(breaks[endLine - 1].length) : head.slice(0, head.length - (breaks[startLine - 2]?.length || 0));
   return { ok: true, updated, occurrences: 1, priorContent: content, preHash: sha256Buffer(raw),
     ...(rangeProof ? { rangeProof } : {}),
-    regions: [{ beforeStartLine: startLine, afterStartLine: startLine, before, after: replacement }] };
+    regions: [{ beforeStartLine: startLine, afterStartLine: startLine, before, after: replacement,
+      ...(shift ? { indentAdvisory: "Every line of newText is one tab deeper than the lines it replaced. "
+        + "If that was not intended, the tab after a read's line number was copied as part of each line." } : {}) }] };
 }
 
 // Conversation 1794419304890: the edits refused for size were 92–98% lines

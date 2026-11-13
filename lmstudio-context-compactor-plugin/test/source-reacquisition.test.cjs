@@ -254,12 +254,21 @@ test("byte windows without a source line origin cannot invent line numbers", () 
 test("archived conversation prose is labelled as this run's own earlier text, not a previous session", () => {
   const archive = new EvidenceArchive(scope);
   const context = new WorkingContext(scope, { archive });
+  // The current turn starts at "continue": the progress after it was written
+  // in this execution, the prose before it in an earlier turn (conversation
+  // 1794590083146: the previous turn's report was labelled as this run's).
   const history = Chat.from([{ role: "user", content: "Audit the damage pipeline." },
-    { role: "assistant", content: "Hypothesis: ApplyDamage double-applies armor." }, { role: "user", content: "continue" }]);
-  assert.equal(context.archiveConversationProse(history, [2]), 2);
+    { role: "assistant", content: "Earlier answer: armor is applied in TakeDamage." }, { role: "user", content: "continue" },
+    { role: "assistant", content: "Hypothesis: ApplyDamage double-applies armor." }]);
+  assert.equal(context.archiveConversationProse(history, [2]), 3);
   const entries = archive.catalogPage({ maxChars: 8192 }).entries;
-  assert.deepEqual(entries.map(e => e.conversationOrigin), ["earlier_round_same_execution", "earlier_round_same_execution"]);
-  const assistant = entries.find(e => e.path === "conversation://assistant");
+  const origins = Object.fromEntries(entries.map(e => [archive.readByHandle(e.readHandle, 0, 4096, "body").content, e.conversationOrigin]));
+  assert.deepEqual(origins, { "Audit the damage pipeline.": "earlier_turn_same_conversation",
+    "Earlier answer: armor is applied in TakeDamage.": "earlier_turn_same_conversation",
+    "Hypothesis: ApplyDamage double-applies armor.": "earlier_round_same_execution" });
+  const earlier = entries.find(e => origins["Earlier answer: armor is applied in TakeDamage."] === e.conversationOrigin && e.path === "conversation://assistant");
+  assert.match(archive.readByHandle(earlier.readHandle, 0, 4096, "body").notice, /earlier turn of this same conversation.*not a previous session/u);
+  const assistant = entries.find(e => e.path === "conversation://assistant" && e.conversationOrigin === "earlier_round_same_execution");
   const read = archive.readByHandle(assistant.readHandle, 0, 4096, "body");
   assert.equal(read.content, "Hypothesis: ApplyDamage double-applies armor.");
   assert.equal(read.conversationOrigin, "earlier_round_same_execution");
@@ -678,4 +687,27 @@ test('v3 repeated hidden narrow spans are measured without changing legacy progr
    assert.equal(readLedgerTelemetry(value).repeatRestores,i);
   }
  }finally{context.close();}
+});
+
+test("metadata catalog handles resolve directly and old body handles recover only the same envelope", async () => {
+  const archive = new EvidenceArchive(scope), context = new WorkingContext(scope, { archive });
+  const record = archive.put(JSON.stringify({ ok: true, findings: [], status: "checked" }), {
+    toolName: "validate_unreal_sources", callKey: "metadata",
+  }).record;
+  const entry = archive.catalogPage({ maxChars: 900 }).entries.find(row => row.evidenceId === record.evidenceId);
+  assert.equal(entry.view, "envelope");
+  const read = args => context.tool().implementation({ action: "read", ...args }, environment);
+  assert.equal((await read({ readHandle: entry.readHandle })).ok, true);
+  const rejected = await read({ readHandle: archive.readHandleFor(record, "body") });
+  assert.equal(rejected.errorCode, "body_view_unavailable");
+  const page = await read(rejected.retryArgs);
+  assert.equal(page.ok, true);
+  assert.equal(page.grantsMutation, false);
+  assert.equal(page.currentFile, false);
+  assert.equal((await read({ readHandle: entry.readHandle, view: "body" })).ok, false);
+  const { recoveryFallbackInstruction } = require("../dist/recovery-coordinator");
+  const messages = [{getToolCallResults: () => [{content: JSON.stringify(rejected)}]}];
+  assert.match(recoveryFallbackInstruction(messages), /retryArgs/);
+  archive.removeEntry(record.evidenceId);
+  assert.equal((await read(rejected.retryArgs)).ok, false);
 });

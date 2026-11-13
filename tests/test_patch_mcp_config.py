@@ -233,3 +233,14 @@ def test_upgrade_cleanup_removes_only_legacy_python_control_entries() -> None:
         "keep-node-custom",
         "keep-unrelated",
     }
+
+def test_agent_repair_uses_colocated_validator_if_js_was_selected_from_fallback(tmp_path, monkeypatch):
+    mod = load_module()
+    agent = tmp_path / "runtime" / "lmstudio-unreal-agent-mcp"
+    scripts = agent.parent / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "validate_project_sources.py").touch()
+    monkeypatch.setattr(mod, "resolve_agent_root", lambda _: agent)
+    entry = mod.patch_unreal_agent({"env": {"UNREAL58_ROOT": "stale"}}, tmp_path / "old", Path("node"), Path("python"))
+    assert Path(entry["env"]["UNREAL58_ROOT"]) == agent.parent
+    assert Path(entry["args"][0]) == agent / "src" / "direct-server.js"

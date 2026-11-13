@@ -11,6 +11,29 @@ const ASSISTANT_MARKER = "[Prior assistant conversation evidence v1]";
 const AUTHORITY = "prior_assistant_judgment_not_verified_fact";
 const DELIVERED_RESPONSE_MARKER = "[Delivered partial assistant response; unverified]";
 const isDeliveredPartialResponse = text => String(text || "").startsWith(DELIVERED_RESPONSE_MARKER + "\n");
+// What the harness itself showed after a completed answer ("[작업 근거] ...",
+// "[제안 코드 검증 범위] ..."). Conversation 1794590083146: stored under the
+// partial-response marker, the notice became the next turn's "previous answer"
+// and the report it followed left the input.
+const DELIVERED_NOTICE_MARKER = "[Delivered notice after the answer; not part of it]";
+const HARNESS_NOTICE = /^\s*\[[^\]\n]{1,60}\]/u;
+
+/** The text of a delivered-response record without its marker, or null for any other text. */
+function deliveredRecordText(text) {
+  const value = String(text || "");
+  for (const marker of [DELIVERED_RESPONSE_MARKER, DELIVERED_NOTICE_MARKER]) {
+    if (value.startsWith(marker + "\n")) return value.slice(marker.length + 1);
+  }
+  return null;
+}
+
+/** A delivered record that holds a harness notice. Windows sealed before the
+ * notice marker existed carry the notice under the partial-response marker. */
+function isDeliveredNotice(text) {
+  const value = String(text || "");
+  return value.startsWith(DELIVERED_NOTICE_MARKER + "\n")
+    || (isDeliveredPartialResponse(value) && HARNESS_NOTICE.test(value.slice(DELIVERED_RESPONSE_MARKER.length + 1)));
+}
 
 /** Preserve delivered prose without committing an interrupted plan or tool call.
  * Inputs are serialized messages from a verified host prefix and its replacement.
@@ -36,7 +59,8 @@ function retainVisibleResponse(source, replacement) {
   if (!visible.trim()) return replacement;
   const decoded = message => {
     const value = text(message);
-    if (isDeliveredPartialResponse(value)) return value.slice(DELIVERED_RESPONSE_MARKER.length + 1);
+    const delivered = deliveredRecordText(value);
+    if (delivered !== null) return delivered;
     if (value.startsWith(ASSISTANT_MARKER + "\n")) {
       try { return JSON.parse(value.slice(ASSISTANT_MARKER.length)).previousResponse?.text || value; } catch { /* ordinary text */ }
     }
@@ -45,12 +69,15 @@ function retainVisibleResponse(source, replacement) {
   const current = tail(replacement);
   const retained = current.messages.map(decoded).join("");
   if (retained.includes(visible.trimEnd())) return replacement;
-  let missing = visible, at = replacement.length;
-  if (retained && visible.startsWith(retained)) missing = visible.slice(retained.length);
+  let missing = visible, at = replacement.length, afterRetained = false;
+  if (retained && visible.startsWith(retained)) { missing = visible.slice(retained.length); afterRetained = true; }
   else if (retained && visible.endsWith(retained)) { missing = visible.slice(0, -retained.length); at = current.start; }
   // Keep this as ordinary assistant prose. A generated ASSISTANT_MARKER
   // checkpoint is excluded from semantic input during the next compaction.
-  const record = { role: "assistant", content: [{ type: "text", text: DELIVERED_RESPONSE_MARKER + "\n" + missing }] };
+  // Text shown after the retained answer that opens with a bracketed label is
+  // a harness notice, not an unfinished answer.
+  const marker = afterRetained && HARNESS_NOTICE.test(missing) ? DELIVERED_NOTICE_MARKER : DELIVERED_RESPONSE_MARKER;
+  const record = { role: "assistant", content: [{ type: "text", text: marker + "\n" + missing }] };
   return [...replacement.slice(0, at), record, ...replacement.slice(at)];
 }
 
@@ -249,6 +276,9 @@ function mergePriorAssistantEvidence(previousState, evidence) {
 module.exports = {
   retainVisibleResponse,
   isDeliveredPartialResponse,
+  isDeliveredNotice,
+  deliveredRecordText,
+  DELIVERED_NOTICE_MARKER,
   ASSISTANT_MARKER,
   currentTurnFindings,
   extractPriorAssistantEvidence,
