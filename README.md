@@ -62,7 +62,7 @@ Intel Mac에서 VM 생성부터 LM Link, 프로젝트 마운트, MCP/RAG 설치�
 
 ## LM Studio 연결 설정
 
-1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다. 검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 작업 안정성과 완료까지 걸리는 시간을 고려해 Qwen 3.8 27B보다 **Muse Glimmer 30B**를 권장합니다. [LM Studio 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer)
+1. 사용할 AI 모델을 불러오고 모델 목록에서 직접 선택합니다. 추천 모델은 1순위 **Muse Glimmer 30B**, 2순위 **Qwen 3.8 27B**입니다. 검색·읽기·편집처럼 여러 도구 호출이 이어지는 언리얼 작업에서 작업 안정성과 완료까지 걸리는 시간을 기준으로 정한 순서입니다. [Muse Glimmer 모델 페이지](https://lmstudio.ai/models/meta/muse-glimmer), [모델 설정](docs/Model_Profiles.md)
 2. 설치 후 LM Studio를 재시작하고 `unreal-rag`, `unreal-agent`를 켭니다.
 3. 설치·업데이트 시 기존 채팅의 `codex/unreal-context-compactor`가 `ON`으로 설정됩니다. 필요 없는 채팅에서는 해당 단일 스위치를 끌 수 있습니다.
 4. 정확한 프로젝트를 지정하고 질문하거나 수정할 내용을 요청합니다.
