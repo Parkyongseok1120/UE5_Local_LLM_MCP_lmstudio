@@ -2,9 +2,9 @@
 
 **v1.4.7은 이 프로젝트의 마지막 릴리스입니다.**
 
-통합 제품 v1.4.7에는 Unity MCP·Editor Bridge v1.4.0도 포함합니다. 이번 변경은 [1.4.7 릴리스 안내](docs/Release_Notes_1_4_7.md), Unity의 별도 설정과 실제 지원 범위는 [Unity 안내](docs/Unity_Setup.md)를 참고하세요. 아래 통합 설치 절차는 Unreal용입니다.
+LM Studio의 로컬 모델로 언리얼 프로젝트를 검색하고, 코드를 읽거나 수정하고, 빌드까지 할 수 있게 만든 도구입니다. 엔진과 프로젝트 검색 자료는 설치할 때 직접 만듭니다.
 
-내 컴퓨터의 AI가 언리얼 프로젝트를 검색하고, 코드를 읽고, 수정과 빌드를 할 수 있게 연결하는 도구입니다. 엔진 소스와 완성된 검색 자료는 포함하지 않습니다. 사용할 프로젝트에 맞춰 직접 만들어야 합니다.
+아래는 Unreal 설치 방법입니다. Unity MCP·Editor Bridge v1.4.0을 쓰려면 [Unity 설정](docs/Unity_Setup.md)을 참고하세요. [v1.4.7 변경 사항](docs/Release_Notes_1_4_7.md)
 
 ## 배포본 설치 방법
 
@@ -14,13 +14,13 @@
 - 압축을 푼 폴더는 설치 후에도 그대로 두어야 합니다. MCP가 이 폴더의 프로그램을 실행합니다.
 - 첫 설치에서는 `--skip-deps`를 사용하지 말아야 합니다. 필요한 패키지는 설치 과정에서 받습니다.
 
-기본 권한은 읽기 전용입니다. 파일 수정과 빌드가 필요하면 설치 화면에서 `AGENT`를 따로 선택하면 됩니다. [설치 안내](docs/Integrated_Installer.md)를 참고해야 합니다.
+처음에는 읽기 전용으로 시작하면 됩니다. 파일 수정이나 빌드까지 맡기려면 설치 화면에서 `AGENT`를 고르세요. [설치 안내](docs/Integrated_Installer.md)
 
-## LM Studio 연결 및 사용 설정
+## LM Studio 연결
 
-실제 AI 모델을 선택한 뒤 `unreal-rag`와 `unreal-agent`를 켜면 됩니다. 기본 방식인 `Direct`에서는 AI가 도구 사용 순서와 답변할 시점을 정합니다.
+설치가 끝나면 LM Studio를 재시작하세요. 모델을 선택한 뒤 채팅에서 `unreal-rag`와 `unreal-agent`를 켜고 작업할 프로젝트를 지정합니다.
 
-`codex/unreal-context-compactor`는 긴 대화를 줄여 주는 보조 기능입니다. 설치·업데이트 시 당시 저장된 기존 채팅에서 기본 `ON`으로 설정합니다. 필요 없는 채팅에서는 단일 스위치를 끌 수 있습니다.
+`codex/unreal-context-compactor`는 긴 대화에서 이전 내용을 줄여 주는 플러그인입니다. 설치나 업데이트를 하면 기존 채팅에서 켜집니다. 필요 없는 채팅에서는 끌 수 있습니다.
 
 기존 파일은 `replace_in_file`로 필요한 부분만 고칩니다. 읽기나 직전 수정 결과의 `fileVersionReceipt`를 매번 전달해야 합니다. 호환 입력인 `expectedHash`도 가능합니다. `write_file`은 새 파일에만 사용합니다.
 
