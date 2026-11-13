@@ -753,7 +753,14 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
     const latestUser = messages.reduce((last, message, index) => message.isUserMessage() ? index : last, -1);
     const lastAnswer = options.keepLastAssistantAnswer ? messages.reduce((last, message, index) => index < latestUser
       && message.isAssistantMessage() && message.getText().trim() ? index : last, -1) : -1;
-    if (lastAnswer >= 0 && !requiredIndexes.includes(lastAnswer)) requiredIndexes.push(lastAnswer);
+    // The previous turn's visible answer is its whole text-only tail: the
+    // answer and any notice shown after it. The last message alone can be
+    // that notice (conversation 1794590083146). A turn that ended with tool
+    // activity has no tail and keeps its last visible progress as before.
+    const answerTail = options.keepLastAssistantAnswer
+      ? core.previousAnswerTail(normalizeMessages(messages), latestUser).map(item => item.index) : [];
+    const keptAnswer = answerTail.length ? answerTail : lastAnswer >= 0 ? [lastAnswer] : [];
+    for (const index of keptAnswer) if (!requiredIndexes.includes(index)) requiredIndexes.push(index);
     const floorCandidate = buildCompactedHistory(history, 0, this.config,
       { ...this.checkpointOptions, requiredIndexes, maxCurrentTurnMessages: 0, checkpointPolicy: "mandatory" });
     const floorInput = floorCandidate.history === history ? before : await assemble(floorCandidate.history, { rewrite: true });
@@ -805,8 +812,9 @@ history, assembled: before, changed: false, success: false, checkpoint: null,
           : buildCompactedHistory(history, recentTurns, this.config, { ...this.checkpointOptions, requiredIndexes, ...choiceOptions });
         const input = candidate.history === history ? before
           : name === "mandatory_floor" ? floorInput : await assemble(candidate.history, { rewrite: true });
-        const accepted = (lastAnswer < 0 || candidate.history.getMessagesArray().some(message => message.isAssistantMessage()
-          && message.getText() === messages[lastAnswer].getText()))
+        const candidateTexts = keptAnswer.length ? new Set(candidate.history.getMessagesArray()
+          .filter(message => message.isAssistantMessage()).map(message => message.getText())) : null;
+        const accepted = keptAnswer.every(index => candidateTexts!.has(messages[index].getText()))
           && input.measurement.exact && input.measurement.inputTokens <= ceiling
           && input.measurement.inputTokens <= water.hardInputCeiling
           && this.broker.watermarks(input.measurement, floor.measurement.inputTokens,

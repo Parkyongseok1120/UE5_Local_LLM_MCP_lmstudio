@@ -486,7 +486,12 @@ class WorkingContext {
   archiveConversationProse(history, retainedIndexes = []) {
     const retained = new Set(retainedIndexes);
     let archived = 0;
-    history.getMessagesArray().forEach((message, index) => {
+    const messages = history.getMessagesArray();
+    // Prose before the latest user message belongs to an earlier turn, though
+    // it is archived now (conversation 1794590083146: the previous turn's final
+    // report was labelled "an earlier round of this same execution").
+    const latestUser = messages.reduce((last, message, index) => message.getRole() === "user" ? index : last, -1);
+    messages.forEach((message, index) => {
       const role = message.getRole();
       if (retained.has(index) || (role !== "user" && role !== "assistant") || message.hasFiles()) return;
       const text = role === "assistant" ? visibleAssistantText(message.getText()) : message.getText();
@@ -497,7 +502,7 @@ class WorkingContext {
       const saved = this.archive.put(JSON.stringify({ kind: "conversation_message", role, text }), {
         callKey: key, toolName: "conversation", sourceKind: "conversation_message",
         sourceIdentity: { path: `conversation://${role}` }, resultStatus: true,
-        semanticFacts: { kind: "conversation_message", role, chars: text.length },
+        semanticFacts: { kind: "conversation_message", role, chars: text.length, ...(index < latestUser ? { turn: "earlier" } : {}) },
       });
       if (!saved.ok) return;
       this.archivedProse.add(key);

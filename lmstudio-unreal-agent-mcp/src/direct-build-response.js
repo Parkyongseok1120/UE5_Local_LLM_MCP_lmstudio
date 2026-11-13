@@ -15,14 +15,23 @@ function digest(value) {
   return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
 }
 
+// How diagnosticContext() appends the compiler's echoed source line; it is last.
+const SOURCE_ECHO = " | src: ";
+
 function compactDiagnostic(line, maxChars = 500) {
   let value = String(line || "").replace(/\s+/g, " ").trim();
   if (!value) return "";
+  // The echoed source line is code, not a path: its backslashes are content.
+  // Conversation 1794590083146 was shown "src: /tif (...)" for a line that
+  // began with a literal backslash-t, the very cause of the C2017 it reported.
+  const echoAt = value.indexOf(SOURCE_ECHO);
+  const echo = echoAt >= 0 ? value.slice(echoAt) : "";
+  if (echo) value = value.slice(0, echoAt);
   const source = value.match(/(?:^|[\\/])((?:Source|Plugins)[\\/].+?\.(?:cpp|c|cc|cxx|h|hpp)(?:\(\d+(?:,\d+)?\)|:\d+(?::\d+)?))(?=:\s*(?:fatal\s+)?(?:error|warning)\b)/i);
   if (source && Number.isInteger(source.index)) {
     value = value.slice(source.index + source[0].length - source[1].length).replace(/\\/g, "/");
   }
-  return value.slice(0, Math.max(80, maxChars));
+  return (value + echo).slice(0, Math.max(80, maxChars));
 }
 
 const MSVC_DIAGNOSTIC = /\(\d+(?:,\d+)?\)\s*:\s*(?:fatal\s+)?(?:error|warning)\s+C\d+/i;
@@ -54,7 +63,7 @@ function diagnosticContext(lines, index) {
     // The source echo precedes its caret line.
     if (!source && /^\s*\^/.test(String(lines[next + 1] || ""))) source = line.replace(/\s+/g, " ").trim().slice(0, SOURCE_CHARS);
   }
-  return [...notes, ...(source ? [`src: ${source}`] : [])];
+  return [...notes, ...(source ? [`${SOURCE_ECHO.slice(3)}${source}`] : [])];
 }
 
 function collectBuildDiagnostics(stdout, stderr, maxLines = 40) {

@@ -79,7 +79,9 @@ function outlineSpan(outline, symbol) {
 // lineage was written in this execution; an inherited one in an earlier turn.
 function conversationOrigin(record, lineage) {
   if (record.metadata?.sourceKind !== "conversation_message") return null;
-  const sameExecution = record.lineage === lineage;
+  // Archived in this execution, and not marked as text of an earlier turn.
+  // Records from before that mark existed keep the lineage reading alone.
+  const sameExecution = record.lineage === lineage && record.metadata?.semanticFacts?.turn !== "earlier";
   const role = record.metadata?.semanticFacts?.role === "user" ? "user" : "assistant";
   return { conversationOrigin: sameExecution ? "earlier_round_same_execution" : "earlier_turn_same_conversation",
     notice: `Archived ${role} text from ${sameExecution ? "an earlier round of this same execution (current run)"

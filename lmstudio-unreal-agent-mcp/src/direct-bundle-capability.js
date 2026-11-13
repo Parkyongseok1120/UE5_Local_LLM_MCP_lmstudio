@@ -8,7 +8,7 @@ const { normalizedBundlePath } = require("./direct-edit-bundle-plan");
 const { readStableTextFile } = require("./direct-file-snapshot");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
-const { escapedQuoteIssue, escapedQuoteMessage } = require("./source-escape-guard");
+const { copiedEscapeRefusal, newTextRegions } = require("./source-escape-guard");
 const { failure, success } = require("./direct-response");
 const {
   registerCurrentVersion,
@@ -105,11 +105,11 @@ function createBundleCapability(context) {
         throw error;
       }
       // JSON escapes copied into C-family source (see source-escape-guard.js).
-      for (const [index, region] of (patch.edits || [patch]).entries()) {
-        const issue = escapedQuoteIssue(resolution.absolutePath, region.newText, read.content);
-        if (!issue) continue;
-        const error = validationError("ESCAPED_QUOTE_IN_CODE", `${patch.path}: ${escapedQuoteMessage(issue, patch.edits ? `edits[${index}].newText` : "newText")}`);
-        error.details = { path: patch.path, ...issue, ...(patch.edits ? { editIndex: index } : {}) };
+      const escaped = copiedEscapeRefusal(resolution.absolutePath, newTextRegions(patch.edits || [patch], Boolean(patch.edits)),
+        next.updated, read.content);
+      if (escaped) {
+        const error = validationError(escaped.errorCode, `${patch.path}: ${escaped.message}`);
+        error.details = { path: patch.path, ...escaped.details };
         throw error;
       }
       prospective.set(patch.path, { content: next.updated, initialHash: read.hash, version });

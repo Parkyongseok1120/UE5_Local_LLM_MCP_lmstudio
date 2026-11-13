@@ -104,13 +104,17 @@ export function settleObjectiveEvidence(history: Chat, objective: TaskObjective,
 export function objectiveEvidenceNotice(objective: TaskObjective, evidence: ObjectiveEvidence, answer: string): string | null {
   if (!objective.requiredEffects.has("mutation")) return null;
   const lines: string[] = [];
+  // A line that only bounds what a successful build shows, not a mismatch.
+  let scopeOnly = 0;
   const claims = answer.split(/\r?\n/u).filter(line => COMPLETION_CLAIM.test(line));
   if (objective.kind === "mutate" && FILE_CHANGE_CLAIM.test(answer) && !evidence.edits)
     lines.push("- 이번 턴에 적용된 파일 수정이 없습니다. 완료로 확인되지 않았습니다.");
   if (objective.buildAloneSufficient === false && evidence.buildAfterLastEdit === "succeeded"
     && claims.some(line => /(?:모든|전체|전부|모두|\bP[0-3](?!-\d)\b|\ball\b)/iu.test(line)
-      && !/(?:미확인|보류|남았|아직|부분|not |pending|unverified)/iu.test(line)))
+      && !/(?:미확인|보류|남았|아직|부분|not |pending|unverified)/iu.test(line))) {
     lines.push("- 마지막 빌드는 성공했습니다. 요청한 변경 전체의 동작을 확인한 근거는 별도로 필요합니다.");
+    scopeOnly += 1;
+  }
   for (const target of evidence.commentOnlyPaths) {
     const stem = target.split("/").pop()!.replace(/\.[^.]+$/u, "");
     if (claims.some(line => line.includes(stem)) || claims.length && evidence.functionalEdits === 0)
@@ -118,5 +122,10 @@ export function objectiveEvidenceNotice(objective: TaskObjective, evidence: Obje
   }
   if (BUILD_CLAIM.test(answer) && evidence.edits && evidence.buildAfterLastEdit !== "succeeded")
     lines.push("- 마지막 수정 이후 성공한 빌드가 없습니다.");
-  return lines.length ? `\n\n[작업 근거] 답변의 완료 표현과 이번 턴 도구 결과가 다릅니다.\n${lines.join("\n")}` : null;
+  if (!lines.length) return null;
+  // Conversation 1794590083146: edits applied and the build succeeded, as the
+  // answer said, and the notice still opened with "…도구 결과가 다릅니다".
+  const header = lines.length > scopeOnly ? "답변의 완료 표현과 이번 턴 도구 결과가 다릅니다."
+    : "이번 턴 도구 결과가 확인한 범위입니다.";
+  return `\n\n[작업 근거] ${header}\n${lines.join("\n")}`;
 }

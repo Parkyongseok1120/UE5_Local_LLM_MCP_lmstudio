@@ -44,18 +44,52 @@ test("a whole-file read is raised to its estimate when the batch share holds it"
   assert.equal(raised.limit.modelRequested, 3072);
   assert.equal(raised.limit.raisedTo, "whole_file_estimate");
   assert.equal(readBudgetFeedback([{ readResultLimit: raised.limit }]), "", "a raise is not reported as a limit");
-  // Without a size hint, or for a part of a file, the request stands.
+  // Without a size hint, or for a byte window or page of a file, the request stands.
   assert.equal(reserveReadResult(new BatchReservation(40000), "b", read, { path: "A.h", byteBudget: 3072 }).arguments.byteBudget, 3072);
   for (const args of [{ startLine: 1, endLine: 20 }, { offsetBytes: 100 }, { cursor: "c" }]) {
     const part = reserveReadResult(new BatchReservation(40000), "c", read, { path: "A.h", byteBudget: 3072, ...args }, undefined, undefined, estimate);
     assert.equal(part.arguments.byteBudget, 3072, JSON.stringify(args));
   }
-  const ranged = reserveReadResult(new BatchReservation(40000), "d", range, { path: "A.h", byteBudget: 3072, startLine: 1, endLine: 9 }, undefined, undefined, estimate);
-  assert.equal(ranged.arguments.byteBudget, 3072);
+  for (const args of [{ startLine: 1, endLine: 9, cursor: "c" }, { startLine: 1, endLine: 9, offsetBytes: 100 }, { startLine: 1 }]) {
+    const part = reserveReadResult(new BatchReservation(40000), "d", range, { path: "A.h", byteBudget: 3072, ...args }, undefined, undefined, estimate);
+    assert.equal(part.arguments.byteBudget, 3072, JSON.stringify(args));
+  }
   // An explicit budget above the estimate is not raised (the existing size-hint ceiling still applies).
   const above = reserveReadResult(new BatchReservation(40000), "e", read, { path: "A.h", byteBudget: 9000 }, undefined, undefined, estimate);
   assert.equal(above.limit.raisedTo, undefined);
   assert.equal(above.arguments.byteBudget, Math.ceil(estimate * 1.25));
+});
+
+// Conversation 1794590083146: CEnemyCharacterBase.cpp (48,719 bytes, 1,716
+// lines). Reads of lines 1048-1080 and 1080-1115 with a small explicit budget
+// ran at the 3,276-byte minimum and each came back one line short, because the
+// response metadata alone takes about 2.4 KB.
+test("a line-range read is raised to the estimate for its lines when the batch share holds it", () => {
+  const hint = { sizeBytes: 48719, totalLines: 1716 };
+  const args = { path: "Enemy.cpp", startLine: 1048, endLine: 1080 };
+  const rangeEstimate = estimateReadResponseBytes(hint, args);
+  assert.equal(rangeEstimate, 3902);
+  const raised = reserveReadResult(new BatchReservation(40000), "a", range, { ...args, byteBudget: 2048 }, undefined, undefined, rangeEstimate);
+  assert.equal(raised.allowed, true);
+  assert.equal(raised.arguments.byteBudget, rangeEstimate);
+  assert.deepEqual([raised.limit.modelRequested, raised.limit.raisedTo], [2048, "line_range_estimate"]);
+  assert.equal(readBudgetFeedback([{ readResultLimit: raised.limit }]), "", "a raise is not reported as a limit");
+  // A file whose line count is not known has no range estimate, and the request stands.
+  assert.equal(estimateReadResponseBytes({ sizeBytes: 48719, totalLines: null }, args), undefined);
+  assert.equal(reserveReadResult(new BatchReservation(40000), "b", range, { ...args, byteBudget: 2048 }).limit.raisedTo, undefined);
+  // An explicit budget above the estimate is not raised (the size-hint ceiling still applies).
+  const above = reserveReadResult(new BatchReservation(40000), "c", range, { ...args, byteBudget: 24576 }, undefined, undefined, rangeEstimate);
+  assert.equal(above.limit.raisedTo, undefined);
+  assert.equal(above.arguments.byteBudget, Math.ceil(rangeEstimate * 1.25));
+  // A batch whose share cannot hold the estimate leaves the request as it was.
+  let fitting = null;
+  for (let capacity = 2000; capacity <= 40000 && !fitting; capacity += 50) {
+    if (reserveReadResult(new BatchReservation(capacity), "x", range, { ...args, byteBudget: 2048 }, undefined, undefined, rangeEstimate)
+      .arguments.byteBudget === rangeEstimate) fitting = capacity;
+  }
+  assert.ok(fitting, "some capacity holds the estimate");
+  const tight = reserveReadResult(new BatchReservation(fitting - 50), "y", range, { ...args, byteBudget: 2048 }, undefined, undefined, rangeEstimate);
+  assert.equal(tight.limit.raisedTo, undefined, "no partial raise");
 });
 
 test("the raise happens only when the estimate fits the batch share; otherwise nothing changes", () => {

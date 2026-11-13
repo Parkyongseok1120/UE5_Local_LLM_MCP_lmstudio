@@ -1263,7 +1263,10 @@ ctl, emitter, roundTools, config, scope, toolPlanningRetryRound,
             stagnationWarnings += 1;
             ctl.createStatus({
               status: "done",
-              text: "동일 근거의 반복 읽기를 감지했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.",
+              // Conversation 1794590083146 was told "반복 읽기" for four identical failing edits.
+              text: failure
+                ? `같은 인수의 ${failure.toolName} 호출이 같은 오류(${failure.errorCode})로 반복 실패했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.`
+                : "동일 근거의 반복 읽기를 감지했습니다. 사용자 목표와 라운드 한도로 다음 단계를 결정합니다.",
             });
             if (config.showDebugInfo) ctl.debug({
               event: "tool_round_stagnation",

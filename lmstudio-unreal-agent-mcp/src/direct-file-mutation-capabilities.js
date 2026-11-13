@@ -19,7 +19,7 @@ const { readStableTextFile } = require("./direct-file-snapshot");
 const { describeExceeded, regionLimitsExceeded, textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
-const { escapedQuoteIssue, escapedQuoteMessage } = require("./source-escape-guard");
+const { copiedEscapeRefusal, newTextRegions } = require("./source-escape-guard");
 const { failure, success } = require("./direct-response");
 const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
 const { locateOldText, regionSuggestion } = require("./edit-region-locator");
@@ -103,9 +103,9 @@ function createFileMutationCapabilities(context) {
       allowExistingWrite: false,
     });
     if (!guard.ok) return failure("WRITE_TARGET_BLOCKED", guard.message);
-    const escaped = escapedQuoteIssue(resolution.absolutePath, content);
-    if (escaped) return failure("ESCAPED_QUOTE_IN_CODE", escapedQuoteMessage(escaped, "content"),
-      { retryAllowed: true, retryMode: "different_arguments", details: escaped });
+    const escaped = copiedEscapeRefusal(resolution.absolutePath, [{ text: content, label: "content" }], content);
+    if (escaped) return failure(escaped.errorCode, escaped.message,
+      { retryAllowed: true, retryMode: "different_arguments", details: escaped.details });
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,
       content,
@@ -235,10 +235,12 @@ function createFileMutationCapabilities(context) {
       // four times in a row. When its target is already proven in the current
       // file (oldText found as counted, or the range hash matching), the
       // currentSha256 this answer always carried is all it lacks.
-      const proven = current.ok && ["FILE_SNAPSHOT_REQUIRED", "FILE_SNAPSHOT_INVALID"].includes(version.errorCode)
+      const unproven = current.ok && ["FILE_SNAPSHOT_REQUIRED", "FILE_SNAPSHOT_INVALID"].includes(version.errorCode)
         && !version.malformedExpectedHash
-        && calculatePatch(current.buffer, args, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars }).ok
-        && !regions.some(region => escapedQuoteIssue(resolution.absolutePath, region.newText, current.content));
+        ? calculatePatch(current.buffer, args, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars }) : null;
+      // A resend that would write copied JSON escapes into the file is not offered.
+      const proven = Boolean(unproven?.ok)
+        && !copiedEscapeRefusal(resolution.absolutePath, newTextRegions(regions, Boolean(edits)), unproven.updated, current.content);
       return versionEvidenceFailure(proven ? { ...version, message: `${version.message} This call's target matches the current file, `
         + "so the same call with expectedHash set to currentSha256 (resendWith) applies it." } : version, { ...located,
         details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}),
@@ -274,12 +276,10 @@ function createFileMutationCapabilities(context) {
             ...(prospective.escapedCandidate ? { escapedCandidate: prospective.escapedCandidate } : {}) } },
       );
     }
-    const escapedRegion = regions.findIndex(region => escapedQuoteIssue(resolution.absolutePath, region.newText, read.content));
-    if (escapedRegion >= 0) {
-      const issue = escapedQuoteIssue(resolution.absolutePath, regions[escapedRegion].newText, read.content);
-      return failure("ESCAPED_QUOTE_IN_CODE", escapedQuoteMessage(issue, edits ? `edits[${escapedRegion}].newText` : "newText"),
-        { retryAllowed: true, retryMode: "different_arguments",
-          details: { ...issue, ...(edits ? { editIndex: escapedRegion } : {}), currentSha256: read.hash } });
+    const escaped = copiedEscapeRefusal(resolution.absolutePath, newTextRegions(regions, Boolean(edits)), prospective.updated, read.content);
+    if (escaped) {
+      return failure(escaped.errorCode, escaped.message, { retryAllowed: true, retryMode: "different_arguments",
+        details: { ...escaped.details, currentSha256: read.hash } });
     }
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,
