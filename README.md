@@ -6,7 +6,7 @@ v1.4.7에서는 장기 작업에서 확인된 문제를 고쳤습니다. 긴 답
 
 LM Studio에서 돌리는 AI가 내 언리얼 프로젝트를 찾아보고, 코드를 읽고, 필요한 부분을 고칠 수 있게 연결하는 도구입니다.
 
-현재 지원하는 기능은 RAG 검색, MCP 도구 실행, 대화 압축(Compactor), Unreal Engine, Unity Engine(단기 테스트 버전)입니다.
+현재 지원하는 기능은 RAG 검색, MCP 도구 실행, 대화 압축(Compactor), Unreal Engine 5, Unity 6 (실험적 지원)입니다.
 
 ## 연구 목적
 
