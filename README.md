@@ -1,4 +1,4 @@
-# UE5_Local_LLM_MCP_lmstudio
+# UE5_Local_LLM_Agent_lmstudio
 
 **언리얼 프로젝트에서 코드 찾기, 수정, 빌드 확인까지 이어서 할 수 있게 만든 로컬 개발 도구입니다.**
 
@@ -42,8 +42,8 @@ LM Studio에서 모델이 MCP 도구를 호출하면 아래 서버가 검색과 
 Windows에서 저장소를 받은 뒤 설치기를 실행합니다.
 
 ```powershell
-git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio.git
-cd UE5_Local_LLM_MCP_lmstudio
+git clone https://github.com/Parkyongseok1120/UE5_Local_LLM_Agent_lmstudio.git
+cd UE5_Local_LLM_Agent_lmstudio
 .\INSTALL.bat
 ```
 

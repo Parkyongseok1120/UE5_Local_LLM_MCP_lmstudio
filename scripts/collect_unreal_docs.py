@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 from workspace_paths import find_workspace_root, resolve_engine_version, resolve_index_dir
 
-USER_AGENT = "UE5-Local-LLM-MCP/0.1 (+https://github.com/Parkyongseok1120/UE5_Local_LLM_MCP_lmstudio; local RAG index build)"
+USER_AGENT = "UE5-Local-LLM-MCP/0.1 (+https://github.com/Parkyongseok1120/UE5_Local_LLM_Agent_lmstudio; local RAG index build)"
 BLOCK_TAGS = {
     "address",
     "article",
