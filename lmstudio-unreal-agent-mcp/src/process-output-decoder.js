@@ -23,12 +23,16 @@ function localeOutputEncoding(locale = "", hostPlatform = process.platform) {
   return "windows-1252";
 }
 
+// Broken localization at the end of a line is dropped; inside a line it
+// becomes one marker per run so what follows (type names, paths) stays.
+// Cutting each line at its first broken character lost them (conversation
+// 1794469194476: "error C2440: '" with the types removed).
+const BROKEN = "[\\u3130-\\u318f\\uff61-\\uffdc\\ufffd]";
+const TRAILING_BROKEN = new RegExp(`\\?*${BROKEN}[${BROKEN.slice(1, -1)}\\s?]*$`);
+const BROKEN_RUN = new RegExp(`\\?*${BROKEN}+`, "g");
 function sanitizeBrokenCompilerLocalization(text) {
-  return String(text || "").split(/\r?\n/).map((line) => {
-    const brokenAt = line.search(/[\u3130-\u318f\uff61-\uffdc\ufffd]/);
-    if (brokenAt < 0) return line;
-    return line.slice(0, brokenAt).replace(/\?+\s*$/, "").trimEnd();
-  }).join("\n");
+  return String(text || "").split(/\r?\n/).map((line) => line.replace(TRAILING_BROKEN, "").trimEnd()
+    .replace(BROKEN_RUN, "\ufffd")).join("\n");
 }
 
 function decodeProcessOutput(chunks, options = {}) {

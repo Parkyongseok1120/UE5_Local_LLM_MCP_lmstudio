@@ -48,6 +48,8 @@ const DIRECT_SOURCE_FILES = Object.freeze([
   "src/review-register.ts",
   "src/review-acceptance.ts",
   "src/report-review-state.ts",
+  "src/execution-return.ts",
+  "src/objective-evidence.ts",
   "src/review-evidence.ts",
   "src/review-patterns.js",
   "src/runtime-fact-store.ts",

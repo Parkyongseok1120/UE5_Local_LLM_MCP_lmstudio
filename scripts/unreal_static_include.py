@@ -18,6 +18,13 @@ from unreal_static_model import (
     SOURCE_ONLY_SUFFIXES,
     Finding,
 )
+from unreal_static_include_paths import (
+    commented_lines,
+    conditional_include_lines,
+    module_include_roots,
+    normalize_include_path,
+    resolve_quoted_include,
+)
 from unreal_static_scan import (
     class_base_names,
     has_include,
@@ -307,19 +314,33 @@ def validate_include_paths_exist(
     write_mode: bool = False,
     include_owner_map: dict[str, list[str]] | None = None,
 ) -> list[Finding]:
+    """A missing include is an error only when it is provable: unconditional,
+    and the module's include roots are all known. Otherwise it is
+    INCLUDE_PATH_UNVERIFIED, a warning that never blocks a build. Conversation
+    1794469194476: a file-relative include and one with "//" in a file that had
+    just compiled blocked UBT, and the model then broke two correct includes."""
     findings: list[Finding] = []
     rel = str(path.relative_to(root)).replace("\\", "/")
     owner_map = include_owner_map or {}
+    roots, roots_complete = module_include_roots(path, root)
+    conditional = conditional_include_lines(text)
+    commented = commented_lines(text)
     for line, include_path in include_lines(text):
-        normalized = include_path.replace("\\", "/")
+        if line in commented:
+            continue
+        normalized = normalize_include_path(include_path)
         if normalized.startswith("Game/Framework/"):
             continue
         if any(normalized.startswith(prefix) for prefix in ENGINE_INCLUDE_PREFIXES):
             continue
         if normalized in {"CoreMinimal.h", "Generated.h"} or normalized.endswith(".generated.h"):
             continue
-        candidates = include_index.get(normalized, [])
-        if candidates:
+        resolution = resolve_quoted_include(include_path, path, include_index, roots)
+        if resolution["found"]:
+            if resolution["caseMismatch"]:
+                findings.append(Finding("warning", rel, line, "INCLUDE_PATH_CASE_MISMATCH",
+                                        f'Include "{include_path}" matches a header only case-insensitively; '
+                                        "case-sensitive platforms will not find it."))
             continue
         if write_mode and find_include_owner(normalized, owner_map):
             continue
@@ -330,21 +351,26 @@ def validate_include_paths_exist(
             # No local header with this basename means the include is most likely
             # supplied by Unreal Engine or another module. UBT is authoritative.
             continue
-        severity = "error"
-        if write_mode and "/" not in normalized and "\\" not in normalized:
+        provable = roots_complete and line not in conditional and not resolution["escapes"]
+        severity = "error" if provable else "warning"
+        if write_mode and "/" not in normalized:
             severity = "warning"
         known_locations = ", ".join(
             sorted({str(Path(candidate).relative_to(root)).replace("\\", "/") for candidate in local_basename_candidates})[:3]
+        )
+        reason = "" if provable else (
+            " Not provable here (conditional include, path outside the module, or Build.cs adds include paths "
+            "this check cannot evaluate); UBT decides."
         )
         findings.append(
             Finding(
                 severity,
                 rel,
                 line,
-                "INCLUDE_PATH_NOT_FOUND",
+                "INCLUDE_PATH_NOT_FOUND" if provable else "INCLUDE_PATH_UNVERIFIED",
                 (
                     f'Include "{include_path}" does not resolve to a local project/plugin header. '
-                    f"Known header location(s): {known_locations}."
+                    f"Known header location(s): {known_locations}.{reason}"
                 ),
             )
         )
@@ -362,4 +388,7 @@ __all__ = [
     'ENGINE_INCLUDE_PREFIXES',
     'validate_duplicate_source_basenames',
     'validate_include_paths_exist',
+    'normalize_include_path',
+    'resolve_quoted_include',
+    'module_include_roots',
 ]

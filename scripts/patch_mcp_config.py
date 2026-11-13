@@ -175,7 +175,11 @@ def patch_unreal_agent(
     env.setdefault("WORKSPACE_ROOT", str(Path.home() / "Documents"))
     env["AGENT_MCP_CONFIG"] = str(agent_root / "config" / "agent-mcp.json")
     env["SHARED_UNREAL_CONFIG"] = str(SHARED_CONFIG)
-    env["UNREAL58_ROOT"] = str(workspace)
+    # Prefer the Python tools shipped beside the selected JS entry point.
+    # Legacy split installs keep their separately supplied script workspace.
+    bundled_runtime = agent_root.parent
+    scripts_root = bundled_runtime if (bundled_runtime / "scripts" / "validate_project_sources.py").is_file() else workspace
+    env["UNREAL58_ROOT"] = str(scripts_root.resolve())
     env["PYTHON_EXE"] = str(python_exe)
     for key in (
         "MCP_ESSENTIAL_TOOLS",

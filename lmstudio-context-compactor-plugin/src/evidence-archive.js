@@ -79,7 +79,9 @@ function outlineSpan(outline, symbol) {
 // lineage was written in this execution; an inherited one in an earlier turn.
 function conversationOrigin(record, lineage) {
   if (record.metadata?.sourceKind !== "conversation_message") return null;
-  const sameExecution = record.lineage === lineage;
+  // Archived in this execution, and not marked as text of an earlier turn.
+  // Records from before that mark existed keep the lineage reading alone.
+  const sameExecution = record.lineage === lineage && record.metadata?.semanticFacts?.turn !== "earlier";
   const role = record.metadata?.semanticFacts?.role === "user" ? "user" : "assistant";
   return { conversationOrigin: sameExecution ? "earlier_round_same_execution" : "earlier_turn_same_conversation",
     notice: `Archived ${role} text from ${sameExecution ? "an earlier round of this same execution (current run)"
@@ -556,6 +558,11 @@ class EvidenceArchive {
     return `h_${hash([this.scope, lineage, record.evidenceId, record.archivedBodyHash, view]).slice(0, 24)}`;
   }
 
+  advertisedSelector(record) {
+    const view = recordBodyView(record) ? "body" : "envelope";
+    return { readHandle: this.readHandleFor(record, view), view };
+  }
+
   /** Handles this execution honors for a readable record: its own, and the
    * ones minted by the record's lineage or a restored parent lineage. Access
    * is still decided by load(); a handle never grants membership. */
@@ -571,7 +578,7 @@ class EvidenceArchive {
     return this.entries().map(e => this.load(e.key)).filter(e => e.ok && e.record.metadata?.sourceKind !== "conversation_message")
       .map(e => e.record).filter(r => !wanted || key(r.metadata?.sourceIdentity?.path) === wanted)
       .sort((a, b) => b.createdAt - a.createdAt || a.evidenceId.localeCompare(b.evidenceId)).slice(0, limit)
-      .map(r => ({ readHandle: this.readHandleFor(r), path: r.metadata?.sourceIdentity?.path,
+      .map(r => ({ ...this.advertisedSelector(r), path: r.metadata?.sourceIdentity?.path,
         sourceVersion: r.metadata?.sourceVersion, sourceRange: r.metadata?.originRanges }));
   }
 
@@ -590,7 +597,7 @@ class EvidenceArchive {
       .sort((a, b) => b.createdAt - a.createdAt || a.evidenceId.localeCompare(b.evidenceId));
     const paths = new Set(matches.map(r => r.metadata?.sourceKey || require("./evidence-identity.js").fileSourceKey({ ...r.metadata?.sourceIdentity, provider: r.metadata?.provider })));
     if (!matches.length || paths.size > 1) {
-      const validHandles = matches.length ? matches.slice(0, 8).map(r => ({ readHandle: this.readHandleFor(r),
+      const validHandles = matches.length ? matches.slice(0, 8).map(r => ({ ...this.advertisedSelector(r),
         path: r.metadata?.sourceIdentity?.path, sourceVersion: r.metadata?.sourceVersion })) : this.validHandles(undefined);
       return { ok: false, errorCode: matches.length ? "path_ambiguous" : "path_unavailable", currentFile: false,
         grantsMutation: false, validHandles, message: matches.length
@@ -619,12 +626,13 @@ class EvidenceArchive {
     return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view, lines);
   }
 
-  readByHandle(handle, start = 0, maxChars = 4096, view = "body", lines = null, sourcePath = undefined) {
-    if (!/^h_[a-f0-9]{24}$/.test(String(handle)) || !["body", "envelope"].includes(view))
+  readByHandle(handle, start = 0, maxChars = 4096, view, lines = null, sourcePath = undefined) {
+    if (!/^h_[a-f0-9]{24}$/.test(String(handle)) || (view !== undefined && !["body", "envelope"].includes(view)))
       return { ok: false, errorCode: "invalid_read_handle", validHandles: this.validHandles(sourcePath),
         currentFile: false, grantsMutation: false };
-    const candidates = this.entries().map(e => this.load(e.key)).filter(e => e.ok
-      && this.handlesFor(e.record, view).has(handle));
+    const views = view === undefined ? ["body", "envelope"] : [view];
+    const candidates = this.entries().map(e => this.load(e.key)).filter(e => e.ok)
+      .flatMap(e => views.filter(v => this.handlesFor(e.record, v).has(handle)).map(v => ({ record: e.record, view: v })));
     if (candidates.length !== 1) {
       const validHandles = this.validHandles(sourcePath);
       return { ok: false, errorCode: "read_handle_unavailable", currentFile: false, grantsMutation: false,
@@ -632,8 +640,8 @@ class EvidenceArchive {
           + "invented. Copy a handle exactly from a projection, catalog or ledger fact" + (validHandles.length
             ? `; current handles${sourcePath ? ` for ${sourcePath}` : ""} are listed in validHandles.` : ".") };
     }
-    const record = candidates[0].record;
-    return this.read(record.evidenceId, record.archivedBodyHash, start, maxChars, view, lines);
+    const candidate = candidates[0];
+    return this.read(candidate.record.evidenceId, candidate.record.archivedBodyHash, start, maxChars, candidate.view, lines);
   }
 
   /** version is the archive record digest, not a source hash. When it belongs
@@ -645,10 +653,10 @@ class EvidenceArchive {
       .find(e => e.ok && e.record.archivedBodyHash === version && e.record.evidenceId !== record.evidenceId)?.record : null;
     const ownerPath = owner?.metadata?.sourceIdentity?.path;
     const result = { ok: false, errorCode: "version_mismatch", evidenceId: record.evidenceId,
-      expectedVersion: record.archivedBodyHash, readHandle: this.readHandleFor(record), path, sourceVersion,
+      expectedVersion: record.archivedBodyHash, ...this.advertisedSelector(record), path, sourceVersion,
       currentFile: false, grantsMutation: false };
     if (owner) result.versionBelongsTo = { evidenceId: owner.evidenceId, path: ownerPath,
-      sourceVersion: owner.metadata?.sourceVersion, readHandle: this.readHandleFor(owner) };
+      sourceVersion: owner.metadata?.sourceVersion, ...this.advertisedSelector(owner) };
     result.message = (owner
       ? `version ${String(version).slice(0, 8)} belongs to ${owner.evidenceId.slice(0, 11)} (${name(ownerPath)}), not to `
         + `${record.evidenceId.slice(0, 11)} (${name(path)}): an evidenceId was paired with another record's version.`
@@ -685,7 +693,7 @@ class EvidenceArchive {
       const [id, version] = snapshot.refs[index], loaded = this.load(id);
       if (!loaded.ok || loaded.record.archivedBodyHash !== version) continue;
       const r = loaded.record;
-      const entry = { evidenceId: id, version, readHandle: this.readHandleFor(r), view: "body",
+      const entry = { evidenceId: id, version, ...this.advertisedSelector(r),
         path: r.metadata?.sourceIdentity?.path, toolName: r.metadata?.toolName,
         sourceVersion: r.metadata?.sourceVersion, sourceRange: r.metadata?.originRanges };
       const origin = conversationOrigin(r, this.lineage);
@@ -778,7 +786,8 @@ class EvidenceArchive {
       decodedValue = decoded.value;
       selected = recordBodyView(r, decoded.value);
       bodyFacts = evidenceSemanticFacts(decoded.value);
-      if (!selected) return { ok: false, errorCode: "body_view_unavailable", retryView: "envelope", evidenceId: id, version };
+      if (!selected) return { ok: false, errorCode: "body_view_unavailable", retryView: "envelope", evidenceId: id, version,
+        currentFile: false, grantsMutation: false, retryArgs: { action: "read", evidenceId: id, version, view: "envelope" } };
     }
     const body = selected ? selected.body : r.body;
     if (start > body.length) return { ok: false, errorCode: "invalid_range" };

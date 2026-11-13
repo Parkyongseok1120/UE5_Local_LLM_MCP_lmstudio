@@ -24,8 +24,10 @@ const {
 } = require("./continuity-memory.js");
 const {
   currentTurnFindings,
+  deliveredRecordText,
   extractPriorAssistantEvidence,
   generatedAssistantCheckpoint,
+  isDeliveredNotice,
   isDeliveredPartialResponse,
   mergePriorAssistantEvidence,
   renderAssistantCheckpoint,
@@ -133,6 +135,26 @@ function unresolvedQuestions(messages, latestUserIndex, maxItems = 6) {
 const PREVIOUS_RESPONSE_MAX_CHARS = 3000;
 const userTurnKey = text => createHash("sha256").update(normalizedTextKey(text)).digest("hex");
 
+/** The visible answer that ended the turn before `latestUserIndex`: its trailing
+ * text-only assistant messages, oldest first, as { index, text, partial, notice }.
+ * A notice the harness showed after the answer is a record of its own; taken
+ * alone it is not the answer. Conversation 1794590083146: the notice was kept
+ * as "the previous answer", the report it followed left the input, and the next
+ * turn spent six calls recovering it from the archive. */
+function previousAnswerTail(messages, latestUserIndex) {
+  const tail = [];
+  for (let at = messages.length - 1; at >= 0; at -= 1) {
+    const message = messages[at], index = Number.isInteger(message?.index) ? message.index : at;
+    if (index >= latestUserIndex) continue;
+    if (message.role !== "assistant" || (message.toolRequests || []).length || (message.toolResults || []).length
+      || generatedCheckpoint(message)) break;
+    const raw = String(message.text || ""), delivered = deliveredRecordText(raw);
+    const text = delivered ?? visibleAssistantText(raw);
+    if (text.trim()) tail.unshift({ index, text, partial: delivered !== null, notice: isDeliveredNotice(raw) });
+  }
+  return tail;
+}
+
 // The prior answer (or the last visible progress of an interrupted turn) is
 // the most important context for "continue". Retain a bounded head/tail of
 // its text, and carry it across re-compaction within the same user turn.
@@ -143,6 +165,15 @@ function previousTurnFinalResponseEvidence(messages, latestUserIndex, previousSt
   const carry = reason => carried?.present === true && typeof carried.text === "string" && carried.text
     && carried.forUserTurn === forUserTurn ? { ...carried, source: "prior_checkpoint" } : { present: false, reason };
   if (latestUserIndex <= 0) return carry("no_previous_turn");
+  // A completed answer and what was shown after it are one response. A tail
+  // of delivered records alone (an interrupted answer) keeps the path below.
+  const tail = previousAnswerTail(messages, latestUserIndex);
+  const answerAt = tail.findIndex(item => !item.partial);
+  if (answerAt >= 0) {
+    const shown = tail.slice(answerAt);
+    return { present: true, messageIndex: shown[0].index, final: shown.every(item => !item.partial || item.notice), forUserTurn,
+      text: clipHeadTail(sanitizeDerivedOperationalText(shown.map(item => item.text).join("")), PREVIOUS_RESPONSE_MAX_CHARS, { trim: false }) };
+  }
   const prior = messages.filter((message) => message.index < latestUserIndex).at(-1);
   if (!prior) return carry("no_previous_message");
   const record = (message, final) => ({ present: true, messageIndex: message.index, final, forUserTurn,
@@ -739,6 +770,7 @@ module.exports = {
   normalizeMessage,
   olderContinuationAnchor,
   parseToolResult,
+  previousAnswerTail,
   priorUserRequestsForContinuation,
   shouldCompact,
   stripControl,

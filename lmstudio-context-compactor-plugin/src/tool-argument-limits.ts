@@ -8,6 +8,10 @@ type JsonSchema = {
   maxLength?: unknown;
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
+  const?: unknown;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+  required?: string[];
 };
 type ToolWithSchema = { name: string; parametersJsonSchema?: unknown };
 
@@ -50,6 +54,39 @@ export function changedLineSummary(oldText: string, newText: string) {
   };
 }
 
+export type AlternativeViolation = { field: string; choices: string[]; conflict: boolean };
+
+/** Objects that satisfy none of an anyOf/oneOf list of required-field
+ * alternatives (fewest missing fields first), or more than one of a oneOf
+ * list, in nested objects and arrays too. */
+export function alternativeViolations(schema: JsonSchema | undefined, value: unknown, field = "", depth = 0): AlternativeViolation[] {
+  if (!schema || depth > 6) return [];
+  const found: AlternativeViolation[] = [];
+  if (isRecord(value)) {
+    for (const [kind, branches] of [["anyOf", schema.anyOf], ["oneOf", schema.oneOf]] as const) {
+      if (!Array.isArray(branches)) continue;
+      const compatible = branches.filter(branch => Array.isArray(branch.required) && Object.entries(branch.properties || {})
+        .every(([key, child]) => !("const" in child) || !(key in value) || value[key] === child.const));
+      const missing = compatible.map(branch => (branch.required || []).filter(key => !(key in value)));
+      const satisfied = missing.filter(keys => keys.length === 0).length;
+      if (compatible.length && satisfied === 0) {
+        // Nearest first: fewest fields missing, then most of its fields already sent.
+        const present = (index: number) => (compatible[index].required || []).length - missing[index].length;
+        const order = missing.map((_, index) => index).sort((a, b) => missing[a].length - missing[b].length || present(b) - present(a));
+        found.push({ field, conflict: false, choices: [...new Set(order.map(index => missing[index].join(" + ")))] });
+      } else if (kind === "oneOf" && satisfied > 1) {
+        found.push({ field, conflict: true, choices: compatible.filter((_, index) => missing[index].length === 0)
+          .map(branch => (branch.required || []).join(" + ")) });
+      }
+    }
+    for (const [key, child] of Object.entries(schema.properties || {}))
+      found.push(...alternativeViolations(child, value[key], field ? `${field}.${key}` : key, depth + 1));
+  } else if (Array.isArray(value) && schema.items) {
+    value.forEach((item, index) => found.push(...alternativeViolations(schema.items, item, `${field}[${index}]`, depth + 1)));
+  }
+  return found;
+}
+
 function span([first, last]: readonly [number, number]) {
   return last < first ? "no lines" : first === last ? `line ${first}` : `lines ${first}-${last}`;
 }
@@ -62,7 +99,30 @@ export function describeArgumentLengthRejection(
   const tool = tools.find(candidate => (candidate as ToolWithSchema)?.name === request.name) as ToolWithSchema | undefined;
   const schema = tool?.parametersJsonSchema as JsonSchema | undefined;
   const violations = lengthViolations(schema, request.arguments);
-  if (!violations.length) return undefined;
+  if (!violations.length) {
+    const args = request.arguments;
+    if (!isRecord(args)) return undefined;
+    const branches = schema?.anyOf ?? schema?.oneOf;
+    const compatible = !Array.isArray(branches) ? [] : branches.filter(branch => Object.entries(branch.properties || {}).every(([key, child]) =>
+      !("const" in child) || !(key in args) || args[key] === child.const));
+    const missing = compatible.map(branch => (branch.required || []).filter(key => !(key in args)));
+    if (missing.length && !missing.some(keys => keys.length === 0)) {
+      const choices = missing.map(keys => keys.join(" + "));
+      return request.name + " was not run. Supply one of the missing selector alternatives: " +
+        [...new Set(choices)].join(" or ") + ". " + (request.name === "evidence_first_read_context" ? "Use an identifier and version from the same catalog entry. " : "") +
+        String(error.message || "").slice(0, 200);
+    }
+    // The host also checks alternatives inside array items, and every list an
+    // object has. Conversation 1794590083146: a second patches[] entry without
+    // its version proof was answered only "params.patches.1 is not any of
+    // [subschema 0],[subschema 1]".
+    const nested = alternativeViolations(schema, args);
+    if (!nested.length) return undefined;
+    const said = nested.slice(0, 3).map(item => item.conflict
+      ? `${item.field || "the arguments"} combines alternatives that exclude each other (${item.choices.join(" / ")}); send exactly one`
+      : `${item.field || "the arguments"} lacks ${item.choices.join(" or ")}`);
+    return `${request.name} was not run: ${said.join("; ")}. (Schema check: ${String(error.message || "").slice(0, 200)})`;
+  }
   const first = violations[0];
   const parts = [`${request.name} was not run: ${violations.map(v => `${v.field} is ${v.actual} characters; the tool schema allows ${v.max}`).join("; ")}.`];
   const { oldText, newText } = first.parent;

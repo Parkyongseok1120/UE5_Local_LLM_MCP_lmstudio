@@ -19,6 +19,7 @@ const { readStableTextFile } = require("./direct-file-snapshot");
 const { describeExceeded, regionLimitsExceeded, textLineCount } = require("./direct-mutation-limits");
 const { canonicalAbsolutePathIdentity } = require("./filesystem-path-identity");
 const { mutationSemanticAdvisory } = require("./mutation-semantic-guard");
+const { copiedEscapeRefusal, newTextRegions } = require("./source-escape-guard");
 const { failure, success } = require("./direct-response");
 const { committedChange, withChangeEvidence } = require("./direct-change-evidence");
 const { locateOldText, regionSuggestion } = require("./edit-region-locator");
@@ -102,6 +103,9 @@ function createFileMutationCapabilities(context) {
       allowExistingWrite: false,
     });
     if (!guard.ok) return failure("WRITE_TARGET_BLOCKED", guard.message);
+    const escaped = copiedEscapeRefusal(resolution.absolutePath, [{ text: content, label: "content" }], content);
+    if (escaped) return failure(escaped.errorCode, escaped.message,
+      { retryAllowed: true, retryMode: "different_arguments", details: escaped.details });
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,
       content,
@@ -143,7 +147,8 @@ function createFileMutationCapabilities(context) {
       });
     }
     const hash = sha256Text(content);
-    context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
+    // A created file had no includes before this commit.
+    context.buildChanges.record(resolution.activeProject, [resolution.relativePath], { [resolution.relativePath]: "" });
     const snapshot = await registerCurrentVersion(context, resolution, hash, requestContext);
     return withChangeEvidence(success({
       operation: "created",
@@ -226,8 +231,20 @@ function createFileMutationCapabilities(context) {
     if (!version.ok) {
       const current = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
       const located = current.ok ? aimed(current.content) : {};
-      return versionEvidenceFailure(version, { ...located,
-        details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}) } });
+      // Conversation 1794506466121: the same call without a receipt was sent
+      // four times in a row. When its target is already proven in the current
+      // file (oldText found as counted, or the range hash matching), the
+      // currentSha256 this answer always carried is all it lacks.
+      const unproven = current.ok && ["FILE_SNAPSHOT_REQUIRED", "FILE_SNAPSHOT_INVALID"].includes(version.errorCode)
+        && !version.malformedExpectedHash
+        ? calculatePatch(current.buffer, args, { maxRangeTextChars: limits.maxRangeTextChars, maxPatchChars: limits.maxPatchChars }) : null;
+      // A resend that would write copied JSON escapes into the file is not offered.
+      const proven = Boolean(unproven?.ok)
+        && !copiedEscapeRefusal(resolution.absolutePath, newTextRegions(regions, Boolean(edits)), unproven.updated, current.content);
+      return versionEvidenceFailure(proven ? { ...version, message: `${version.message} This call's target matches the current file, `
+        + "so the same call with expectedHash set to currentSha256 (resendWith) applies it." } : version, { ...located,
+        details: { ...located.details, ...(current.ok ? { currentSha256: current.hash } : {}),
+          ...(proven ? { resendWith: { expectedHash: current.hash } } : {}) } });
     }
     const read = await readStableTextFile(resolution.absolutePath, limits.maxSourceBytes);
     if (!read.ok) return failure(read.errorCode, read.message);
@@ -254,9 +271,15 @@ function createFileMutationCapabilities(context) {
         prospective.error,
         { retryAllowed: true, retryMode: "different_arguments", ...located,
           details: { ...located.details, currentSha256: read.hash, ...(edits ? { editIndex: prospective.editIndex } : {}),
-            // Whitespace-only candidate lines, with their exact text and range hash.
-            ...(prospective.whitespaceCandidate ? { whitespaceCandidate: prospective.whitespaceCandidate } : {}) } },
+            // Whitespace-only or JSON-escaped candidate lines, with their exact text and range hash.
+            ...(prospective.whitespaceCandidate ? { whitespaceCandidate: prospective.whitespaceCandidate } : {}),
+            ...(prospective.escapedCandidate ? { escapedCandidate: prospective.escapedCandidate } : {}) } },
       );
+    }
+    const escaped = copiedEscapeRefusal(resolution.absolutePath, newTextRegions(regions, Boolean(edits)), prospective.updated, read.content);
+    if (escaped) {
+      return failure(escaped.errorCode, escaped.message, { retryAllowed: true, retryMode: "different_arguments",
+        details: { ...escaped.details, currentSha256: read.hash } });
     }
     const semanticAdvisory = mutationSemanticAdvisory(
       resolution.absolutePath,
@@ -306,7 +329,8 @@ function createFileMutationCapabilities(context) {
       });
     }
     const nextHash = sha256Text(locked.result.updated);
-    if (nextHash !== read.hash) context.buildChanges.record(resolution.activeProject, [resolution.relativePath]);
+    if (nextHash !== read.hash) context.buildChanges.record(resolution.activeProject, [resolution.relativePath],
+      { [resolution.relativePath]: read.buffer });
     const snapshot = await registerCurrentVersion(context, resolution, nextHash, requestContext);
     return withChangeEvidence(success({
       operation: "replaced",

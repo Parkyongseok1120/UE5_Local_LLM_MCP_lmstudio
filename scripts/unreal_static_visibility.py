@@ -12,6 +12,7 @@ from cpp_parse_utils import (
 from unreal_static_include import (
     ENGINE_INCLUDE_PREFIXES,
     module_name_for_source_path,
+    normalize_include_path,
 )
 from unreal_static_model import (
     CPP_HEADER_SUFFIXES,
@@ -27,10 +28,11 @@ QUOTED_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
 
 
 def _resolve_project_include(include: str, path: Path, include_index: dict[str, list[str]]) -> list[Path]:
-    normalized = include.replace("\\", "/")
-    if (path.parent / normalized).is_file():
-        return [path.parent / normalized]
-    return [Path(item) for item in include_index.get(normalized, [])]
+    # Same lookup as the existence check ("//", "./" included); the file's own
+    # directory first, as compilers search a quoted include.
+    if (path.parent / include.replace("\\", "/")).is_file():
+        return [path.parent / include.replace("\\", "/")]
+    return [Path(item) for item in include_index.get(normalize_include_path(include), [])]
 
 
 def visible_includes(path: Path, text: str, include_index: dict[str, list[str]], *, depth: int = 4) -> set[str]:

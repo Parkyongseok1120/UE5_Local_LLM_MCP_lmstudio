@@ -424,18 +424,29 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
   const share = Math.floor((batch.available / 2 - envelopeTokens) / multiplier);
   const ceilingFromHint = Number.isSafeInteger(estimatedBytes) && estimatedBytes! > 0
     ? Math.max(contract.minimum, Math.ceil(estimatedBytes! * 1.25)) : Infinity;
-  // An explicit budget below the estimated whole response of a whole-file
-  // read is raised to that estimate when it fits this batch's share and the
-  // published maximum; otherwise the request stands. A budget is a floor when
-  // the whole file fits (revised plan §E: 18 files were cut and re-read).
+  // An explicit budget below the estimated response of a whole-file read, or
+  // of a line range, is raised to that estimate when it fits this batch's
+  // share and the published maximum; otherwise the request stands. A budget is
+  // a floor when what was asked for fits (revised plan §E: 18 files were cut
+  // and re-read).
   const modelRequested = field !== null && args[field] !== undefined ? tokens(Number(args[field])) : undefined;
-  const wholeFile = field === "byteBudget" && tool.name === "read_file" && modelRequested !== undefined
+  const belowEstimate = field === "byteBudget" && modelRequested !== undefined
     && Number.isSafeInteger(estimatedBytes) && estimatedBytes! > modelRequested
-    && !WHOLE_FILE_SELECTORS.some(key => args[key] !== undefined)
     && estimatedBytes! <= contract.maximum && estimatedBytes! <= share;
+  const wholeFile = belowEstimate && tool.name === "read_file"
+    && !WHOLE_FILE_SELECTORS.some(key => args[key] !== undefined);
+  // The same floor for a line range, whose estimate is sized for those lines
+  // (estimateReadResponseBytes). Conversation 1794590083146: a 33-line read
+  // with a small explicit budget ran at the 3,276-byte minimum, the response
+  // metadata alone took about 2.4 KB of it, and four such reads came back one
+  // line short, each costing another read.
+  const lineRange = belowEstimate && tool.name === "read_file_range"
+    && Number.isSafeInteger(Number(args.startLine)) && Number.isSafeInteger(Number(args.endLine))
+    && !WHOLE_FILE_SELECTORS.some(key => key !== "startLine" && key !== "endLine" && args[key] !== undefined);
+  const raised = wholeFile || lineRange;
   const requested = field ? Math.min(tokens(args[field] === undefined
     ? adaptive ? Math.max(DEFAULT_READ_FLOOR_BYTES, Math.min(contract.defaultValue, share)) : contract.defaultValue
-    : wholeFile ? estimatedBytes! : Number(args[field])), ceilingFromHint) : 3072;
+    : raised ? estimatedBytes! : Number(args[field])), ceilingFromHint) : 3072;
   const allocation = field ? Math.max(contract.minimum, Math.min(contract.maximum, requested)) : requested;
   const minimum = field ? contract.minimum : requested;
   const minimumTokens = Math.ceil(minimum * multiplier) + envelopeTokens;
@@ -449,7 +460,7 @@ export function reserveReadResult(batch: BatchReservation, id: string, tool: Rem
 allowed: true, arguments: field ? { ...args, [field]: boundedValue } : args,
     reservedTokens: reserved, bounded: field !== null,
     limit: { field, requested, effective: boundedValue, unit: field === "maxChars" ? "utf16_code_units" : "utf8_bytes",
-      ...(wholeFile ? { modelRequested, raisedTo: "whole_file_estimate" } : {}) }
+      ...(raised ? { modelRequested, raisedTo: wholeFile ? "whole_file_estimate" : "line_range_estimate" } : {}) }
 };
 }
 

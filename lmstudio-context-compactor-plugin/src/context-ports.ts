@@ -11,6 +11,8 @@ import { type CheckpointResult, type ContextMeasurement, type ContinuityNote, ty
 export const core = require("./direct-compaction-core.js") as {
   buildCheckpoint(messages: Array<NormalizedMessage>, options?: Record<string, unknown>): CheckpointResult;
   invariantSystemText(message: NormalizedMessage): string;
+  previousAnswerTail(messages: Array<NormalizedMessage>, latestUserIndex: number):
+    Array<{ index: number; text: string; partial: boolean; notice: boolean }>;
   shouldCompact(measurement: ContextMeasurement, options?: Record<string, unknown>): boolean;
 };
 

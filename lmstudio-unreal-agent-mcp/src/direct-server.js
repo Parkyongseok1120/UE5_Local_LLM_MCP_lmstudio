@@ -24,6 +24,7 @@ const { createDiagnosticCapabilities } = require("./direct-diagnostic-capabiliti
 const { toolDefinitions } = require("./direct-tool-catalog.js");
 const { cleanArgs, envFlag, errorFromException, statSignature } = require("./direct-runtime-shared.js");
 const { failure } = require("./direct-response.js");
+const { validatorIdentity } = require("./direct-static-validation.js");
 const { probeMutationSemanticGuard } = require("./mutation-semantic-guard.js");
 const { recoverRuntimeTransactions } = require("./direct-transaction-recovery.js");
 
@@ -107,7 +108,7 @@ function createDirectRuntime(options = {}) {
     close: (reason = "connection_closed") => lifetime.abort(reason),
     resolveProject: (selector) => context.resolveCallProject(selector),
     recoverTransactions: () => recoverRuntimeTransactions(context.stateRoot, context.runtimeOwner),
-    probeSafety: () => ({ semanticGuard: probeMutationSemanticGuard() }),
+    probeSafety: () => ({ semanticGuard: probeMutationSemanticGuard(), validator: validatorIdentity(context.env) }),
   };
 }
 
@@ -152,6 +153,7 @@ async function main() {
     console.error(`[unreal-agent-${runtime.runtimeOwner}] transaction recovery scan failed: ${error.message || error}`);
   }
   const safety = runtime.probeSafety();
+  console.error("[unreal-agent-direct] static validator " + JSON.stringify(safety.validator));
   if (!safety.semanticGuard.ok) {
     console.warn(`[unreal-agent-direct] advisory semantic guard unavailable: ${safety.semanticGuard.reason}; hard mutation gates remain active`);
   }
