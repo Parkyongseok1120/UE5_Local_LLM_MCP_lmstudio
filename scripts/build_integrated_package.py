@@ -788,6 +788,7 @@ PORTABLE_CONTENT_FILES = frozenset(
         "docs/Release_Notes_1_4_4.md",
         "docs/Release_Notes_1_4_5.md",
         "docs/Release_Notes_1_4_6.md",
+        "docs/Release_Notes_1_4_7.md",
         "docs/Rider_Cline_Smoke_Checklist.md",
         "docs/Safe_Agent_Mode.md",
         "docs/Troubleshooting.md",
