@@ -51,6 +51,8 @@ export interface TaskObjective {
   readonly kind: ObjectiveKind;
   readonly requiredEffects: ReadonlySet<"read" | "mutation" | "long_running">;
   mutationState: MutationState;
+  readonly buildAloneSufficient?: boolean;
+  readonly requestedBuild?: { project?: string; target?: string; configuration?: string; platform?: string };
   /** Items of the assistant proposal a short user approval accepted. */
   readonly approvedItems?: readonly string[];
 }

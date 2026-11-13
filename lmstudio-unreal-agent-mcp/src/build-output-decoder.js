@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const { extractBuildDiagnostics, diagnosticKey } = require("./direct-build-response");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { localeOutputEncoding, normalizeOutputEncoding } = require("./process-output-decoder");
@@ -124,6 +125,74 @@ function createBuildOutputDecoder(options = {}) {
   return { decode, summary };
 }
 
+// UBT writes UTF-8 before localized text crosses the stdout code page.
+async function readRunDiagnostics(file, processResult, hostPlatform) {
+  const ubtLog = { fileName: path.basename(file), status: "unavailable", matchedEntries: 0 };
+  let handle;
+  try {
+    handle = await fs.promises.open(file, "r");
+    if (processResult.cancelled || processResult.timedOut || !processResult.processExited) {
+      ubtLog.status = "incomplete";
+      return { ubtLog };
+    }
+    if (processResult.exitCode === 0) {
+      ubtLog.status = "available";
+      return { ubtLog };
+    }
+    // Bound memory, including for enormous source echoes. A truncated file
+    // remains available in full via its exact basename.
+    const { size } = await handle.stat();
+    const buffer = Buffer.alloc(Math.min(size, 4 * 1024 * 1024));
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    const partial = offset < size;
+    const bytes = buffer.subarray(0, offset);
+    const end = partial ? bytes.lastIndexOf(10) + 1 : offset;
+    const logText = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, end));
+    const decoder = createBuildOutputDecoder({ hostPlatform });
+    const decoded = decoder.decode(Buffer.from(logText));
+    const readable = path.join(path.dirname(file), path.basename(file, ".log") + "-readable.log");
+    const staging = readable + ".tmp";
+    try {
+      await fs.promises.writeFile(staging, decoded, { flag: "wx" });
+      await fs.promises.rename(staging, readable);
+      ubtLog.readableFileName = path.basename(readable);
+      ubtLog.readableComplete = !partial;
+      ubtLog.sourceBytesRead = end;
+    } catch {
+      await fs.promises.unlink(staging).catch(() => {});
+    }
+    const recovery = decoder.summary();
+    if (recovery) ubtLog.decoding = recovery;
+    const candidates = new Map();
+    for (const line of extractBuildDiagnostics(decoded, "", 120)) {
+      const key = diagnosticKey(line);
+      if (key) candidates.set(key, candidates.has(key) ? null : line);
+    }
+    const consoleEntries = extractBuildDiagnostics(processResult.stdout, processResult.stderr);
+    const keys = consoleEntries.map(diagnosticKey);
+    const replacements = new Map();
+    for (const key of keys) {
+      const candidate = candidates.get(key);
+      if (candidate && !candidate.includes("\ufffd") && keys.indexOf(key) === keys.lastIndexOf(key)) {
+        ubtLog.matchedEntries++;
+        replacements.set(key, candidate);
+      }
+    }
+    ubtLog.status = partial || ubtLog.matchedEntries < keys.filter(Boolean).length ? "partial" : "available";
+    if (recovery?.unrecoveredRuns) ubtLog.status = "partial";
+    return { ubtLog, ubtDiagnostics: replacements };
+  } catch {
+    return { ubtLog };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 const notifiedToolchains = new Set();
 /** VSLANG=1033 asks MSVC for English messages; without its 1033 resources it
  * stays localized. Said once per toolchain per server process. */
@@ -136,13 +205,14 @@ function missingEnglishCompilerNotice(output, env = process.env, exists = fs.exi
   if (!anyHost || hosts.some(host => exists(path.join(dir, "bin", ...host.split("/"), "1033")))) return null;
   notifiedToolchains.add(dir);
   return "MSVC at this toolchain has no English (1033) UI resources, so VSLANG=1033 had no effect and compiler "
-    + "messages are localized. They were recovered for this response. For English diagnostics, add the English "
+    + "messages may be localized. For English diagnostics, add the English "
     + "language pack in Visual Studio Installer.";
 }
 
 module.exports = {
   createBuildOutputDecoder,
   recoverSignExtendedLine,
+  readRunDiagnostics,
   buildOutputEncoding,
   systemAnsiEncoding,
   missingEnglishCompilerNotice,

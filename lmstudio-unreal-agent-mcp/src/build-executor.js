@@ -1,5 +1,6 @@
 "use strict";
 
+const { randomUUID } = require("node:crypto");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const fsp = fs.promises;
@@ -12,7 +13,7 @@ const {
   sanitizeBrokenCompilerLocalization,
 } = require("./process-output-decoder");
 const { killProcessTree } = require("./process-tree-termination");
-const { createBuildOutputDecoder, missingEnglishCompilerNotice } = require("./build-output-decoder");
+const { createBuildOutputDecoder, missingEnglishCompilerNotice, readRunDiagnostics } = require("./build-output-decoder");
 
 function normalizeVersion(value) {
   const match = String(value || "").match(/(\d+\.\d+)/);
@@ -219,6 +220,14 @@ async function runUnrealBuildFromPlan(options = {}) {
     projectPath: build.projectPath,
   });
 
+  const ubtLogPath = logPath ? path.join(path.dirname(path.resolve(logPath)), "ubt-" + randomUUID() + ".log") : "";
+  if (ubtLogPath) {
+    try {
+      await fsp.mkdir(path.dirname(ubtLogPath), { recursive: true });
+      args.push("-Log=" + ubtLogPath);
+    } catch { /* The console runner still reports any log persistence failure. */ }
+  }
+
   // Build output only: localized compiler bytes are rebuilt, never cut (see build-output-decoder.js).
   const outputDecoder = options.decodeOutput ? null : createBuildOutputDecoder({ hostPlatform });
   const processResult = await runBoundedProcess({
@@ -252,6 +261,7 @@ async function runUnrealBuildFromPlan(options = {}) {
     commandSucceeded,
     ...processResult,
     ...(failure || {}),
+    ...(ubtLogPath ? await readRunDiagnostics(ubtLogPath, processResult, hostPlatform) : {}),
     ...(outputRecovery ? { outputRecovery } : {}),
     ...(environmentNotice ? { environmentNotice } : {}),
     resolvedEngineVersion: resolvedVersion,

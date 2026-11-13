@@ -84,3 +84,12 @@ test("the round passes the translated reason to the model and labels the refusal
   assert.match(returned, /^replace_in_file was not run: oldText is \d+ characters/u);
   assert.deepEqual(kinds, [[7, "rejected_request"], [8, "generation_failed"]]);
 });
+
+test("the published archive schema explains a missing version without relying on SDK phrasing", () => {
+  const { WorkingContext } = require("../src/working-context");
+  const tool = new WorkingContext({conversation:"schema", lineage:"one", workspace:"test", repository:"test"}).tool();
+  const explain = args => describeArgumentLengthRejection({message:"sdk rejected"}, {name:tool.name, arguments:args}, [tool]);
+  assert.match(explain({action:"read", evidenceId:"ev_wrong"}), /version or readHandle or path/);
+  assert.equal(explain({action:"catalog"}), undefined);
+  assert.equal(explain({action:"read", readHandle:"h_wrong"}), undefined);
+});

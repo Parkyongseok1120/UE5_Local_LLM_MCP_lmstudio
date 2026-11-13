@@ -3,6 +3,7 @@
 const crypto = require("node:crypto");
 const path = require("node:path");
 
+const { renderModelJson } = require("./direct-response");
 const { parseBuildProof } = require("./build-proof.js");
 
 function clamp(value, fallback, min, max) {
@@ -21,7 +22,7 @@ function compactDiagnostic(line, maxChars = 500) {
   if (source && Number.isInteger(source.index)) {
     value = value.slice(source.index + source[0].length - source[1].length).replace(/\\/g, "/");
   }
-  return value.replace(/\ufffd+/g, " ").replace(/\s+/g, " ").trim().slice(0, Math.max(80, maxChars));
+  return value.slice(0, Math.max(80, maxChars));
 }
 
 const MSVC_DIAGNOSTIC = /\(\d+(?:,\d+)?\)\s*:\s*(?:fatal\s+)?(?:error|warning)\s+C\d+/i;
@@ -89,6 +90,13 @@ function collectBuildDiagnostics(stdout, stderr, maxLines = 40) {
     returnedEntries: diagnostics.length, perEntryMaxChars: 500, completeBuildLog: false } };
 }
 
+// A repeated location/code with different messages is ambiguous and must never
+// select a replacement. Strip only the absolute prefix the console also drops.
+function diagnosticKey(line) {
+  return /^(.+?\(\d+(?:,\d+)?\))\s*:\s*(?:fatal\s+)?error\s+(C\d+)\b/i.exec(line)
+    ?.slice(1).join("|").replace(/\\/g, "/") || "";
+}
+
 function extractBuildDiagnostics(stdout, stderr, maxLines = 40) {
   return collectBuildDiagnostics(stdout, stderr, maxLines).diagnostics;
 }
@@ -98,24 +106,29 @@ function buildDirectResponse({ result, build, planResult, projectPath, command, 
   const stderr = String(result?.stderr || "");
   const rawOutput = `${stdout}\n${stderr}`;
   const { diagnostics, coverage } = collectBuildDiagnostics(stdout, stderr);
+  if (result?.ubtDiagnostics) {
+    for (const [index, line] of diagnostics.entries()) {
+      diagnostics[index] = result.ubtDiagnostics.get(diagnosticKey(line)) || line;
+    }
+  }
   const proof = parseBuildProof(result?.ok === true, rawOutput, { logPath });
   const actionsExecuted = proof.highestObservedActionIndex || proof.actionCount;
   const upToDate = proof.targetUpToDate === true;
   const platform = String(build?.platform || (process.platform === "win32" ? "Win64" : process.platform === "darwin" ? "Mac" : "Linux"));
   const ok = result?.ok === true;
-  const firstError = diagnostics[0] || "";
+  const firstError = diagnostics[0]?.split(" | ")[0] || "";
   const errorCode = ok ? "" : String(result?.errorCode || (result?.timedOut ? "BUILD_TIMEOUT" : "BUILD_FAILED"));
   const summary = ok
     ? upToDate && Number(actionsExecuted || 0) === 0
       ? `BUILD SUCCEEDED (up to date; 0 actions) — ${build.target} ${platform} ${build.configuration || "Development"}`
       : `BUILD SUCCEEDED — ${actionsExecuted ?? "unknown"} action(s) — ${build.target} ${platform} ${build.configuration || "Development"}`
-    : `BUILD FAILED${firstError ? ` — ${firstError}` : ""}`;
+    : "BUILD FAILED";
   const outputTail = outputTailLines(rawOutput);
   const payload = {
     ok,
     executionMode,
     summary,
-    message: ok ? summary : String(result?.error || firstError || "Unreal build failed."),
+    message: ok ? summary : String(result?.error || "Unreal build failed. See diagnostics and the run log."),
     errorCode,
     exitCode: result?.exitCode ?? null,
     timedOut: result?.timedOut === true,
@@ -128,6 +141,10 @@ function buildDirectResponse({ result, build, planResult, projectPath, command, 
     firstError: firstError || null,
     outputTail: ok ? [] : outputTail,
     fullLogPath: logPath,
+    ...(result?.ubtLog ? { ubtLog: result.ubtLog } : {}),
+    ...(!ok && logPath ? { suggestion: { tool: "read_unreal_logs", args: {
+      fileName: result?.ubtLog?.readableFileName || path.basename(logPath), mode: "range", cursorByte: 0,
+    } } } : {}),
     ...(result?.outputRecovery ? { outputRecovery: result.outputRecovery } : {}),
     ...(result?.environmentNotice ? { environmentNotice: result.environmentNotice } : {}),
     proof: {
@@ -202,12 +219,67 @@ function trimField(payload, field, keep) {
   return true;
 }
 
-/**
- * Halve the bulkiest output fields until the compact model JSON fits.
- * Summary, exit status, counts and fullLogPath are never trimmed.
- */
+function fitBuildFailure(payload, maxChars) {
+  // Start with the facts needed for recovery. Preferring complete diagnostics
+  // over tails and precheck details avoids losing all errors to the transport.
+  const { project, diagnostics, diagnosticCoverage, fullLogPath } = payload;
+  const out = {
+    ok: false, errorCode: payload.errorCode, summary: "BUILD FAILED",
+    message: payload.message.slice(0, 220), retry: payload.retry, executionMode: payload.executionMode,
+    exitCode: payload.exitCode, timedOut: payload.timedOut, cancelled: payload.cancelled,
+    processStarted: payload.processStarted, processExited: payload.processExited, terminationStatus: payload.terminationStatus,
+    project: { projectPath: project.projectPath, projectFile: project.projectFile, target: project.target, configuration: project.configuration, platform: project.platform },
+    fullLogPath, ubtLog: payload.ubtLog, outputRecovery: payload.outputRecovery,
+    firstError: diagnostics[0]?.split(" | ")[0].slice(0, 180) || null,
+    diagnostics: [], diagnosticCoverage: { ...diagnosticCoverage, returnedEntries: 0, truncated: true,
+      collectedEntries: diagnostics.length }, responseTrimmed: { diagnostics: { original: diagnostics.length, returned: 0 } },
+  };
+  for (const field of ["stdout", "stderr", "outputTail"]) {
+    if (payload[field]?.length) out.responseTrimmed[field] = { original: payload[field].length, returned: 0 };
+  }
+  // The exact basename is sufficient for read_unreal_logs even with a very
+  // long workspace prefix. Keep the absolute path whenever it fits.
+  const fits = () => renderModelJson(out).length <= maxChars;
+  if (renderModelJson(out).length > maxChars - 512) delete out.project.projectPath;
+  if (renderModelJson(out).length > maxChars - 512) out.fullLogPath = path.basename(fullLogPath || "");
+  if (!fits()) {
+    // A plan/launcher refusal may echo unbounded user input (e.g. a target).
+    for (const key of ["target", "configuration", "platform", "projectFile"])
+      out.project[key] = String(out.project[key] || "").slice(0, 120);
+  }
+  function optional(key, value) {
+    if (value === undefined) return;
+    out[key] = value;
+    if (!fits()) delete out[key];
+  }
+  optional("suggestion", payload.suggestion);
+  for (const diagnostic of diagnostics) {
+    const count = out.diagnostics.push(diagnostic);
+    out.diagnosticCoverage.returnedEntries = out.responseTrimmed.diagnostics.returned = count;
+    if (!fits()) {
+      out.diagnostics.pop();
+      out.diagnosticCoverage.returnedEntries = out.responseTrimmed.diagnostics.returned = count - 1;
+      break;
+    }
+  }
+  out.diagnosticCoverage.truncated = diagnosticCoverage.truncated || out.diagnostics.length < diagnostics.length;
+  if (payload.staticPrecheck) optional("staticPrecheck", {
+    status: payload.staticPrecheck.status, contractRevision: payload.staticPrecheck.contractRevision,
+  });
+  optional("proof", payload.proof);
+  optional("environmentNotice", payload.environmentNotice);
+  optional("fingerprints", payload.fingerprints);
+  if (!diagnostics.length && out.responseTrimmed.outputTail) {
+    optional("outputTail", payload.outputTail.slice(-2).map(line => line.slice(0, 200)));
+    out.responseTrimmed.outputTail.returned = out.outputTail?.length || 0;
+  }
+  return out;
+}
+
 function boundLongRunningPayload(payload, options = {}) {
   const maxChars = Number(options.maxChars) || (payload?.ok === false ? LONG_RUNNING_FAILURE_CHARS : LONG_RUNNING_SUCCESS_CHARS);
+  if (payload?.ok === false && payload.diagnosticCoverage && payload.project && renderModelJson(payload).length > maxChars)
+    return fitBuildFailure(payload, maxChars);
   const bounded = { ...payload };
   const original = {};
   for (const [field] of TRIM_ORDER) {
@@ -237,6 +309,7 @@ module.exports = {
   buildDirectResponse,
   compactDiagnostic,
   extractBuildDiagnostics,
+  diagnosticKey,
   outputTailLines,
   tailText,
 };

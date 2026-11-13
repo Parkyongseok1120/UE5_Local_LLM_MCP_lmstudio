@@ -679,3 +679,26 @@ test('v3 repeated hidden narrow spans are measured without changing legacy progr
   }
  }finally{context.close();}
 });
+
+test("metadata catalog handles resolve directly and old body handles recover only the same envelope", async () => {
+  const archive = new EvidenceArchive(scope), context = new WorkingContext(scope, { archive });
+  const record = archive.put(JSON.stringify({ ok: true, findings: [], status: "checked" }), {
+    toolName: "validate_unreal_sources", callKey: "metadata",
+  }).record;
+  const entry = archive.catalogPage({ maxChars: 900 }).entries.find(row => row.evidenceId === record.evidenceId);
+  assert.equal(entry.view, "envelope");
+  const read = args => context.tool().implementation({ action: "read", ...args }, environment);
+  assert.equal((await read({ readHandle: entry.readHandle })).ok, true);
+  const rejected = await read({ readHandle: archive.readHandleFor(record, "body") });
+  assert.equal(rejected.errorCode, "body_view_unavailable");
+  const page = await read(rejected.retryArgs);
+  assert.equal(page.ok, true);
+  assert.equal(page.grantsMutation, false);
+  assert.equal(page.currentFile, false);
+  assert.equal((await read({ readHandle: entry.readHandle, view: "body" })).ok, false);
+  const { recoveryFallbackInstruction } = require("../dist/recovery-coordinator");
+  const messages = [{getToolCallResults: () => [{content: JSON.stringify(rejected)}]}];
+  assert.match(recoveryFallbackInstruction(messages), /retryArgs/);
+  archive.removeEntry(record.evidenceId);
+  assert.equal((await read(rejected.retryArgs)).ok, false);
+});

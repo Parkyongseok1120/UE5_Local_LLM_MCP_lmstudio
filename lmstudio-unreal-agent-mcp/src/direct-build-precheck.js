@@ -104,6 +104,7 @@ async function runBuildStaticPrecheck({ projectRoot, pending, runValidation, val
       findingCount: result.findingCount ?? findings.length,
       definiteErrorCount: definite.length,
       elapsedMs: result.elapsedMs || 0,
+      contractRevision: result.analysis?.contractRevision || null,
       analysisCoverage: result.analysis?.analysisCoverage?.status || (parsed ? "unknown" : "unavailable"),
       ...(parsed ? {} : { reason: String(result.reason).slice(0, 300) }),
       findings: ordered.slice(0, MAX_PRECHECK_FINDINGS).map(compactFinding),

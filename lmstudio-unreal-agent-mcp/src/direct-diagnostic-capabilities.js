@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
 const path = require("node:path");
 const cp = require("node:child_process");
 
@@ -171,7 +172,13 @@ function createDiagnosticCapabilities(context) {
       executionMode: runtimeOwner,
       retry: { allowed: true, mode: "after_state_change" },
     });
-    return payload.responseTrimmed?.findings ? persistFindings(payload, precheck.projectRoot, precheck.findings) : payload;
+    if (!payload.responseTrimmed?.findings) return payload;
+    const saved = await persistFindings(payload, precheck.projectRoot, precheck.findings);
+    const { scopeTargets, ...compact } = saved.staticPrecheck;
+    saved.staticPrecheck = { ...compact, scopeTargetCount: scopeTargets?.length || 0 };
+    saved.findings = shown.slice(0, 1).map(finding => ({ ...finding, path: String(finding.path || "").slice(-240) }));
+    saved.responseTrimmed.findings.returned = saved.findings.length;
+    return saved;
   }
 
   async function buildProject(args, requestContext = {}) {
@@ -186,7 +193,7 @@ function createDiagnosticCapabilities(context) {
     }
     const precheck = await precheckBuild(args, plan.build, requestContext);
     if (precheck.definite.length && args.force !== true) return skippedBuild(precheck, plan.build);
-    const logPath = logFile(`${plan.build.projectName}-build`);
+    const logPath = logFile(`${plan.build.projectName}-${randomUUID()}-build`);
     const result = await runBuild({
       workspaceRoot,
       build: plan.build,

@@ -6,6 +6,7 @@ import { returnedEngineEvidence, unresolvedReportEngineClaimGaps } from "./engin
 import { deliveredReportFact, reportReviewFact, type ReviewRegister } from "./review-register";
 import { cleanVerdictScopeGap, REPORT_REVIEW_OBJECTIVES } from "./report-coverage";
 import type { ObjectiveKind } from "./execution-contracts";
+const { visibleAssistantText } = require("./continuity-text.js") as { visibleAssistantText(text: string): string };
 const { exchangeIndex } = require("./working-context.js");
 const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
 type Gap = { kind: string; target?: string; message: string };
@@ -81,9 +82,21 @@ export function reportScopeGaps(history: Chat, answer: string, source: ReturnedS
   // change report should account for them, not silently imply they were fixed.
   const user = messages[start]?.getText() || "";
   if (/수정|고쳐|\bfix\b/iu.test(user)) {
-    const prior = messages.slice(0, start).filter(m => m.isAssistantMessage() && /\bP1\b/u.test(m.getText())).at(-1)?.getText() || "";
-    let high = false;
+    const prior = messages.slice(0, start).filter(m => m.isAssistantMessage())
+      .map(m => visibleAssistantText(m.getText())).filter(t => /\bP1\b/u.test(t)).at(-1) || "";
+    let high = false, numbered = false;
     for (const line of prior.split(/\r?\n/u)) {
+      const heading = /^\s*(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(P1-\d+)\b\s*[:.)-]?\s*(.+?)(?:\*\*)?\s*$/iu.exec(line);
+      if (heading) {
+        numbered = true;
+        const [, id, title] = heading;
+        const accounted = answer.split(/\r?\n/u).some(row => row.includes(id) && /해결|수정|기각|보류|범위 밖|미확인|남음|완료|fixed|deferred|rejected|unverified/iu.test(row));
+        if (!accounted) gaps.push({ kind: "prior_item_disposition", target: id,
+          message: id + " " + title.slice(0, 120) + "의 처리 상태와 근거를 밝히거나 미확인으로 남겨라." });
+        continue;
+      }
+      if (/^#{1,2}\s|^\s*\*\*P[0-3]\b/u.test(line)) numbered = false;
+      if (numbered) continue;
       // Sections: "## P1 ..." or a bold-only line. Items: "### ...", a
       // top-level list item or a bold-led line (the conversation above wrote
       // its P1 items as bold bullets). Nested evidence bullets are not items.

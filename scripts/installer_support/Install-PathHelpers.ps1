@@ -556,6 +556,10 @@ function Build-ClineMcpConfig {
 
     $ragServer = Join-Path $RagRoot "scripts\unreal_rag_direct.py"
     $agentServer = Join-Path $AgentRoot "src\direct-server.js"
+    $agentRuntime = Split-Path -Parent $AgentRoot
+    if (-not (Test-Path -LiteralPath (Join-Path $agentRuntime "scripts\validate_project_sources.py") -PathType Leaf)) {
+        $agentRuntime = $RagRoot
+    }
     $allowWrite = if ($EnableAgentMode) { "1" } else { "0" }
     $allowCommands = if ($EnableAgentMode) { "1" } else { "0" }
     $allowBuild = if ($EnableAgentMode) { "1" } else { "0" }
@@ -597,7 +601,7 @@ function Build-ClineMcpConfig {
                     SHARED_UNREAL_CONFIG        = $SharedConfigPath
                     AGENT_STATE_ROOT            = $AgentStateRoot
                     PYTHON_EXE                  = $PythonExe
-                    UNREAL58_ROOT               = $RagRoot
+                    UNREAL58_ROOT               = $agentRuntime
                     UNREAL58_PORTABLE_ROOT      = $PortableRoot
                     ALLOW_WRITE                 = $allowWrite
                     ALLOW_COMMANDS              = $allowCommands

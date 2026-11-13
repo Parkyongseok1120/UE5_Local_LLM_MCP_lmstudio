@@ -106,3 +106,21 @@ test("a comment-only edit is not a change, and the answer is held to what the to
   assert.equal(objectiveEvidenceNotice(mutate, empty, "작성 완료했습니다."), null, "a text deliverable is not a file change");
   assert.match(objectiveEvidenceNotice(mutate, empty, "세 파일을 수정했습니다."), /적용된 파일 수정이 없습니다/u);
 });
+
+test("only a matching build can close a compile-only request; changes plus builds stay open", () => {
+  const { classifyObjective } = require("../dist/tool-capability-registry");
+  const evidence = {edits:1, functionalEdits:1, commentOnlyPaths:[], buildAfterLastEdit:"succeeded",
+    buildIdentity:{project:"C:/Games/A.uproject",target:"AEditor",configuration:"Development",platform:"Win64"}};
+  const satisfied = request => objectiveSatisfiedBy(classifyObjective(request), evidence);
+  for (const request of ["빌드해봐", "컴파일 오류 수정하고 빌드해", "fix compiler errors and build", "build AEditor Win64 Development"])
+    assert.equal(satisfied(request), true, request);
+  for (const request of ["P1 모든 사항 수정하고 빌드까지 해봐", "refactor then build", "실행해", "build BEditor Shipping", "build B.uproject", "build and benchmark"])
+    assert.equal(satisfied(request), null, request);
+  const objective = classifyObjective("P1 모든 사항 수정하고 빌드까지 해봐");
+  assert.equal(objectiveEvidenceNotice(objective, evidence, "빌드 성공. 동작 미확인."), null);
+  assert.match(objectiveEvidenceNotice(objective, evidence, "P1 전체 수정 완료"), /변경 전체/);
+  const h = Chat.from([{role:"user",content:"빌드해봐"}]);
+  for (const msg of pair("replace_in_file", {path:"project://A.cpp"}, {ok:true,canonicalProject:"C:/B/A.uproject"}, "change")) h.append(msg);
+  for (const msg of pair("build_unreal_project", {}, {ok:true,project:{projectPath:"D:/Other/A.uproject"}}, "build")) h.append(msg);
+  assert.equal(objectiveEvidence(h).buildAfterLastEdit, "none");
+});

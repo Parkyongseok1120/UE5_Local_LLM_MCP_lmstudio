@@ -42,3 +42,10 @@ test('an absence claim backed only by a partial, empty search becomes a review i
  assert.equal(reportScopeGaps(later,'기존 Spawn 관리자가 없으므로 새 스포너가 필요합니다.',source).filter(g=>g.kind==='partial_search_absence').length,0,
   'a later search that found the term settles it');
 });
+
+test("numbered P1 headings retain their own disposition and nested symbols do not become tasks", () => {
+  const report = "**P1-01 책임 분리 부족**\n- \x60Actor::Tick\x60\n**P1-02 O(N) 순회**\n- \x60BeginPlay\x60";
+  const h = Chat.from([{role:"user",content:"검토해줘"},{role:"assistant",content:report},{role:"user",content:"P1 수정하고 빌드해"}]);
+  const gaps = reportScopeGaps(h, "P1-01 보류\nP1-02", source);
+  assert.deepEqual(gaps.filter(g => g.kind === "prior_item_disposition").map(g => g.target), ["P1-02"]);
+});

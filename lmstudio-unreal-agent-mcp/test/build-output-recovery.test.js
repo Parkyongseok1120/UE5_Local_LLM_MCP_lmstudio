@@ -110,3 +110,21 @@ test("an MSVC error carries its notes and source line, from the build output its
   assert.equal(payload.outputRecovery.recoveredLines, 3);
   assert.ok(JSON.stringify(boundLongRunningPayload(payload)).length <= 3584);
 });
+
+test("run log lookup keeps ambiguous diagnostics, missing artifacts and incomplete processes separate", async t => {
+  const fs = require("node:fs/promises"), path = require("node:path"), os = require("node:os");
+  const { readRunDiagnostics } = require("../src/build-output-decoder");
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), "ubt run "));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const file = path.join(folder, "one.log");
+  const prefix = "Source/Demo.cpp(3,1): error C2039: ";
+  const result = {exitCode:6, processExited:true, stdout:prefix+"console"};
+  assert.equal((await readRunDiagnostics(file, result, process.platform)).ubtLog.status, "unavailable");
+  await fs.writeFile(file, prefix+"first\n"+prefix+"second");
+  assert.equal((await readRunDiagnostics(file, {...result, cancelled:true}, process.platform)).ubtLog.status, "incomplete");
+  const {ubtLog, ubtDiagnostics} = await readRunDiagnostics(file,result,process.platform);
+  assert.equal(ubtLog.status, "partial");
+  assert.equal(ubtDiagnostics.size, 0);
+  assert.equal(ubtLog.readableComplete, true);
+  assert.equal(await fs.readFile(path.join(folder,ubtLog.readableFileName),"utf8"),await fs.readFile(file,"utf8"));
+});

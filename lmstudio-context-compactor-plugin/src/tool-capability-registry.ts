@@ -123,6 +123,29 @@ export function readOnlyReviewRequest(text: string): boolean {
   return classifyObjective(text).kind === "review";
 }
 
+// Only a build or a request scoped to compiler failures is discharged by
+// a successful build. An unspecified change, review, test or run needs its own evidence.
+function buildAcceptance(request: string): Pick<TaskObjective, "buildAloneSufficient" | "requestedBuild"> {
+  const project = /["']([^"']+\.uproject)["']|([^\s"'()]+\.uproject)\b/iu.exec(request);
+  const projectSelector = project?.[1] || project?.[2];
+  const target = /\b([A-Za-z_]\w*(?:Editor|Server|Client))\b/u.exec(request)?.[1];
+  const configuration = /\b(DebugGame|Debug|Development|Shipping|Test)\b/u.exec(request)?.[1];
+  const platform = /\b(Win64|Linux|Mac|Android|IOS)\b/iu.exec(request)?.[1];
+  const isBuild = /빌드|컴파일|\b(?:build|compile)\b/iu.test(request);
+  // Authorize a positive result only for recognized build-only phrasing.
+  // Unrecognized work, including mixed verbs outside the generic classifier,
+  // remains unknown. Remove known project/target selectors first.
+  let remaining = request;
+  for (const selector of [projectSelector, target, platform, configuration])
+    if (selector) remaining = remaining.replace(selector, " ");
+  const compileRepair = /(?:빌드|컴파일(?:러)?|링크)\s*(?:오류|에러|실패)(?:들)?(?:만)?(?:를|을)?\s*(?:수정|고쳐|고치|해결|고친|잡아)(?:하고|해서|한|해줘|해)?|\b(?:fix|resolve|repair)\s+(?:the\s+|all\s+)?(?:build|compil(?:e|er|ation)|link(?:er)?)\s+(?:errors?|failures?)\b/giu;
+  const buildVerb = /(?:다시\s*)?(?:빌드|컴파일)(?:까지|하고|만|도|를|는)?(?:\s*(?:진행|실행))?(?:해(?:주세요|줘|봐|라)?|하(?:세요|고|기|라))?|\b(?:rebuild|build|compile)\b/giu;
+  const connective = /(?:그리고|그다음|프로젝트|다시|먼저|까지|하고|해서|줘|후)|\b(?:please|the|this|project|target|configuration|for|on|in|then|again|and|it)\b/giu;
+  const residual = remaining.replace(compileRepair, " ").replace(buildVerb, " ").replace(connective, "").replace(/[^\p{L}\p{N}]/gu, "");
+  return { buildAloneSufficient: isBuild && residual.length === 0,
+    ...(projectSelector || target || configuration || platform ? { requestedBuild: { project: projectSelector, target, configuration, platform } } : {}) };
+}
+
 export function classifyObjective(text: string): TaskObjective {
   const request = String(text || "").replace(NO_CHANGE, " ");
   // A plan-only request runs read-only, as a review does: nothing it asks for needs a write.
@@ -133,7 +156,7 @@ export function classifyObjective(text: string): TaskObjective {
   const requiredEffects = new Set<"read" | "mutation" | "long_running">(["read"]);
   if (kind === "mutate" || kind === "build") requiredEffects.add("mutation");
   if (kind === "build") requiredEffects.add("long_running");
-  return { kind, requiredEffects, mutationState: "none" };
+  return { kind, requiredEffects, mutationState: "none", ...(kind === "build" ? buildAcceptance(request) : {}) };
 }
 
 // What the assistant offered to do in its last answer. A change offer and a
@@ -160,6 +183,7 @@ function approvedProposal(messages: readonly ChatMessage[], latest: string): Tas
   const build = PROPOSES_BUILD.test(proposal);
   const items = [...proposal.matchAll(/^\s*(?:\d+[.)]|[-*])\s+(.+)$/gmu)].map(m => m[1].trim().slice(0, 120)).slice(0, 12);
   return { kind: build ? "build" : "mutate", mutationState: "none", approvedItems: items,
+    ...(build ? buildAcceptance(previousUser + "\n" + proposal) : {}),
     requiredEffects: new Set<"read" | "mutation" | "long_running">(build ? ["read", "mutation", "long_running"] : ["read", "mutation"]) };
 }
 

@@ -25,6 +25,20 @@ function resolveValidationRoot(options = {}) {
   return path.resolve(homeDir, ".lmstudio", "Unreal58-RAG");
 }
 
+function validatorIdentity(env = process.env) {
+  const root = resolveValidationRoot({ env });
+  // The entry imports these implementations. Hash the include resolver too:
+  // the entry point alone is identical in older deployed runtimes.
+  const files = ["validate_project_sources.py", "unreal_static_include.py", "unreal_static_include_paths.py",
+    "unreal_static_visibility.py"];
+  const sha256 = Object.fromEntries(files.map(name => {
+    try {
+      return [name, require("node:crypto").createHash("sha256").update(fs.readFileSync(path.join(root, "scripts", name))).digest("hex")];
+    } catch { return [name, null]; }
+  }));
+  return { root, sha256 };
+}
+
 function resolveStaticValidationTimeoutMs(env = process.env) {
   const raw = Number(env.STATIC_VALIDATION_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0
@@ -124,5 +138,6 @@ module.exports = {
   blockingErrorsOf,
   resolveStaticValidationTimeoutMs,
   resolveValidationRoot,
+  validatorIdentity,
   runStaticValidation,
 };

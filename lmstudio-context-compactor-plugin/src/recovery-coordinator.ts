@@ -114,6 +114,11 @@ export function recoveryFallbackInstruction(messages: readonly ChatMessage[]): s
     const value = toolMemory.decodeToolResultRecord(result.content).value as Record<string, any> | null;
     if (value?.kind === "historical_evidence_index" && value.ok === true && Array.isArray(value.entries) && value.entries.length === 0)
       return "The archive catalog is empty. Do not repeat it. Use a source path already provided in the task or a registered source search; if none is available, report the missing scope. This is the single alternative attempt.";
+    const retry = value?.retryArgs;
+    if (value?.errorCode === "body_view_unavailable" && value.currentFile === false && value.grantsMutation === false
+      && retry?.action === "read" && retry.view === "envelope" && /^ev_[a-f0-9]{64}$/u.test(retry.evidenceId)
+      && /^[a-f0-9]{64}$/u.test(retry.version) && retry.evidenceId === value.evidenceId && retry.version === value.version)
+      return "Read the historical envelope once using the returned retryArgs. This record has no source body or mutation authority.";
     if (["read_handle_unavailable", "version_mismatch", "path_ambiguous"].includes(String(value?.errorCode))
       && (Array.isArray(value?.validHandles) && value.validHandles.length > 0 || typeof value?.readHandle === "string"))
       return "The archive locator was rejected. Use an exact validHandle/readHandle returned by that response once; never guess or reuse the rejected locator. This is the single alternative attempt.";

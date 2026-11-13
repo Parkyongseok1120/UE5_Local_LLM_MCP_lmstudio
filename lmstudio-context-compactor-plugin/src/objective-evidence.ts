@@ -8,6 +8,7 @@ const { decodeToolResultRecord } = require("./compaction-tool-memory.js");
  * after the last change. Neither proves the requested behavior works. */
 export type ObjectiveEvidence = {
   level: "none" | "applied" | "built";
+  buildIdentity?: TaskObjective["requestedBuild"];
   edits: number;
   functionalEdits: number;
   commentOnlyPaths: string[];
@@ -39,29 +40,54 @@ export function objectiveEvidence(history: Chat): ObjectiveEvidence {
   const messages = history.getMessagesArray(), index = exchangeIndex(history);
   const start = messages.reduce((last, message, i) => message.isUserMessage() ? i : last, -1);
   const byPath = new Map<string, boolean>();
+  let buildIdentity: ObjectiveEvidence["buildIdentity"];
+  const editProjects = new Set<string>();
   let edits = 0, functionalEdits = 0, build: ObjectiveEvidence["buildAfterLastEdit"] = "none";
   for (let mi = Math.max(0, start); mi < messages.length; mi++) {
     for (const [ri, result] of messages[mi].getToolCallResults().entries()) {
       const request = index.matches.get(`${mi}:${ri}`), value = decodeToolResultRecord(result.content).value;
       if (!request) continue;
-      if (request.name === "build_unreal_project") { build = value?.ok === true ? "succeeded" : value?.buildSkipped ? build : "failed"; continue; }
+      if (request.name === "build_unreal_project") {
+        build = value?.ok === true ? "succeeded" : "failed";
+        const p = value?.project;
+        buildIdentity = p ? { project: p.projectPath || p.projectFile, target: p.target, configuration: p.configuration, platform: p.platform } : undefined;
+        for (const project of editProjects) {
+          if (!sameProject(project, buildIdentity?.project)) build = "none";
+        }
+        continue;
+      }
       if (!EDIT_TOOLS.has(request.name) || value?.ok !== true) continue;
       const args = (request.arguments || {}) as Record<string, unknown>;
       const commentOnly = commentOnlyEdit(request.name, args);
-      edits++; build = "none";
+      edits++; build = "none"; buildIdentity = undefined;
+      const project = value.canonicalProject || value.projectPath || value.project?.projectPath || args.project;
+      if (typeof project === "string" && project) editProjects.add(project);
+      if (Array.isArray(value.files)) for (const file of value.files)
+        if (typeof file?.canonicalProject === "string") editProjects.add(file.canonicalProject);
       if (!commentOnly) functionalEdits++;
       const target = String(args.path || "").replace(/^project:\/\//u, "");
       if (target) byPath.set(target, (byPath.get(target) ?? true) && commentOnly);
     }
   }
-  return { level: build === "succeeded" && functionalEdits ? "built" : functionalEdits ? "applied" : "none", edits, functionalEdits,
+  return { ...(buildIdentity ? { buildIdentity } : {}), level: build === "succeeded" && functionalEdits ? "built" : functionalEdits ? "applied" : "none", edits, functionalEdits,
     commentOnlyPaths: [...byPath].filter(([, only]) => only).map(([target]) => target).slice(0, 8), buildAfterLastEdit: build };
+}
+
+function sameProject(selector: string, actual?: string): boolean {
+  const clean = (s: string) => s.replace(/\\/gu, "/").toLowerCase().replace(/\.uproject$/u, "");
+  const name = clean(selector), observed = clean(actual || "");
+  return name.includes("/") ? observed === name : observed.split("/").pop() === name;
 }
 
 /** True only where the evidence settles the objective: a build request whose
  * last build, after the last change, succeeded. Otherwise unknown (null). */
 export function objectiveSatisfiedBy(objective: TaskObjective, evidence: ObjectiveEvidence): boolean | null {
-  return objective.kind === "build" && evidence.buildAfterLastEdit === "succeeded" ? true : null;
+  if (objective.kind !== "build" || objective.buildAloneSufficient === false || evidence.buildAfterLastEdit !== "succeeded") return null;
+  const expected = objective.requestedBuild, actual = evidence.buildIdentity;
+  if (expected?.project && !sameProject(expected.project, actual?.project)) return null;
+  for (const key of ["target", "platform", "configuration"] as const)
+    if (expected?.[key] && expected[key]?.toLowerCase() !== actual?.[key]?.toLowerCase()) return null;
+  return true;
 }
 
 /** End of a change or build turn: record what the tool results show on the
@@ -81,6 +107,10 @@ export function objectiveEvidenceNotice(objective: TaskObjective, evidence: Obje
   const claims = answer.split(/\r?\n/u).filter(line => COMPLETION_CLAIM.test(line));
   if (objective.kind === "mutate" && FILE_CHANGE_CLAIM.test(answer) && !evidence.edits)
     lines.push("- 이번 턴에 적용된 파일 수정이 없습니다. 완료로 확인되지 않았습니다.");
+  if (objective.buildAloneSufficient === false && evidence.buildAfterLastEdit === "succeeded"
+    && claims.some(line => /(?:모든|전체|전부|모두|\bP[0-3](?!-\d)\b|\ball\b)/iu.test(line)
+      && !/(?:미확인|보류|남았|아직|부분|not |pending|unverified)/iu.test(line)))
+    lines.push("- 마지막 빌드는 성공했습니다. 요청한 변경 전체의 동작을 확인한 근거는 별도로 필요합니다.");
   for (const target of evidence.commentOnlyPaths) {
     const stem = target.split("/").pop()!.replace(/\.[^.]+$/u, "");
     if (claims.some(line => line.includes(stem)) || claims.length && evidence.functionalEdits === 0)

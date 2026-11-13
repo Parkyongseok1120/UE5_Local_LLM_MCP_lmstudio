@@ -8,6 +8,10 @@ type JsonSchema = {
   maxLength?: unknown;
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema;
+  const?: unknown;
+  anyOf?: JsonSchema[];
+  oneOf?: JsonSchema[];
+  required?: string[];
 };
 type ToolWithSchema = { name: string; parametersJsonSchema?: unknown };
 
@@ -62,7 +66,20 @@ export function describeArgumentLengthRejection(
   const tool = tools.find(candidate => (candidate as ToolWithSchema)?.name === request.name) as ToolWithSchema | undefined;
   const schema = tool?.parametersJsonSchema as JsonSchema | undefined;
   const violations = lengthViolations(schema, request.arguments);
-  if (!violations.length) return undefined;
+  if (!violations.length) {
+    const args = request.arguments;
+    if (!isRecord(args)) return undefined;
+    const branches = schema?.anyOf ?? schema?.oneOf;
+    if (!Array.isArray(branches)) return undefined;
+    const compatible = branches.filter(branch => Object.entries(branch.properties || {}).every(([key, child]) =>
+      !("const" in child) || !(key in args) || args[key] === child.const));
+    const missing = compatible.map(branch => (branch.required || []).filter(key => !(key in args)));
+    if (!missing.length || missing.some(keys => keys.length === 0)) return undefined;
+    const choices = missing.map(keys => keys.join(" + "));
+    return request.name + " was not run. Supply one of the missing selector alternatives: " +
+      [...new Set(choices)].join(" or ") + ". " + (request.name === "evidence_first_read_context" ? "Use an identifier and version from the same catalog entry. " : "") +
+      String(error.message || "").slice(0, 200);
+  }
   const first = violations[0];
   const parts = [`${request.name} was not run: ${violations.map(v => `${v.field} is ${v.actual} characters; the tool schema allows ${v.max}`).join("; ")}.`];
   const { oldText, newText } = first.parent;

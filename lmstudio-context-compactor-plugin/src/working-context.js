@@ -905,7 +905,7 @@ class WorkingContext {
 
   tool() {
     return rawFunctionTool({ name: "evidence_first_read_context",
-      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Prefer a returned readHandle with view=body for source content, or path alone to page the newest archived version of that file from its start, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content; a remainder of 1024 chars or less comes with the page that reaches it. No write/build authority.`,
+      description: `Read historical evidence, not current files. Discover records with action=catalog,catalogVersion=2 and continue using nextContinuation as continuation. Use the readHandle with its returned view (body for source, envelope for metadata), or path alone to page the newest archived version of that file from its start, or exact evidenceId/version for the original envelope. maxChars up to ${ARCHIVE_READ_CONTRACT.maximumEnvelopeChars} returns most archived source bodies in one call; the runtime lowers it to the input room left. For part of a source body, pass startLine/endLine (source-file line numbers) or symbol (a sourceOutline name) instead of startOffset. Keep maxChars fixed across pages and use nextOffset or nextStartLine; maxChars limits the ENTIRE JSON RESPONSE, not remaining content; a remainder of 1024 chars or less comes with the page that reaches it. No write/build authority.`,
       parametersJsonSchema: { type: "object", additionalProperties: false,
         properties: { action: { type: "string", enum: ["read", "catalog"] },
           catalogVersion: { type: "integer", enum: [1, 2], description: "Use 2 for stable snapshot continuation; omitted preserves legacy offset paging." }, path: { type: "string" },
@@ -944,7 +944,7 @@ class WorkingContext {
       : args.startLine !== undefined ? { startLine: args.startLine, endLine: args.endLine } : null;
     const maxChars = args.maxChars ?? ARCHIVE_READ_CONTRACT.defaultEnvelopeChars;
     const result = args.readHandle ? this.archive.readByHandle(args.readHandle,
-      args.startOffset ?? 0, maxChars, args.view ?? "body", lines, args.path)
+      args.startOffset ?? 0, maxChars, args.view, lines, args.path)
       : args.evidenceId === undefined && args.version === undefined && typeof args.path === "string"
         ? this.archive.readByPath(args.path, args.startOffset ?? 0, maxChars, args.view ?? "body", lines)
         : this.archive.read(args.evidenceId, args.version, args.startOffset ?? 0, maxChars,
